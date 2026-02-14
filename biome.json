@@ -11,5 +11,12 @@
     "lineWidth": 120,
     "indentStyle": "tab",
     "indentWidth": 2
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["**/worker-configuration.d.ts", "**/dist/**", "**/.wrangler/**", "**/.next/**", "**/.turbo/**", "**/node_modules/**"],
+      "linter": { "enabled": false },
+      "formatter": { "enabled": false }
+    }
+  ]
 }

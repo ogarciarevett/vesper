@@ -1,0 +1,26 @@
+name = "engine-api"
+main = "src/index.ts"
+compatibility_date = "2026-02-14"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+[[durable_objects.bindings]]
+name = "BOT_INSTANCE"
+class_name = "BotInstance"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom", "BotInstance"]
+
+[[r2_buckets]]
+binding = "OPENCLAW_DATA"
+bucket_name = "openclaw-village-data"
+
+[ai]
+binding = "AI"

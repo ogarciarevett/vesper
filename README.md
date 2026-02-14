@@ -1,135 +1,159 @@
-# Turborepo starter
+# OpenClaw Village
 
-This Turborepo starter is maintained by the Turborepo core team.
+Welcome to OpenClaw Village, an autonomous agent application running on Cloudflare Workers (Durable Objects).
 
-## Using this example
+## ⚠️ Security Warning
 
-Run the following command:
+**Before running or deploying, please read [OpenClaw Security Docs](https://docs.openclaw.ai/gateway/security).**
 
-```sh
-npx create-turbo@latest
+This application handles private keys (Hyperliquid) and AI API keys.
+- **NEVER** commit `.dev.vars` or `.env` files.
+- **NEVER** expose the `engine-api` worker to the public internet without authentication (Cloudflare Access or a shared secret).
+- **Audit** your `task.md` and code for any hardcoded secrets.
+
+## Prerequisites
+
+- [Bun](https://bun.sh) (v1.2+)
+- [Wrangler](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (v3.50+)
+- Cloudflare Account (Workers Paid plan required for Durable Objects)
+
+## Setup
+
+1.  **Install Dependencies**:
+    ```bash
+    bun install
+    ```
+
+2.  **Configure Secrets (Local Development)**:
+    Copy the example vars file:
+    ```bash
+    cp .dev.vars.example .dev.vars
+    ```
+    Edit `.dev.vars` and add your secrets.
+    > **Note**: `.dev.vars` is gitignored. Do not remove it from `.gitignore`.
+
+3.  **Configure Secrets (Production)**:
+    Use `wrangler secret put` to set secrets for the deployed worker:
+    ```bash
+    cd apps/engine-api
+    bunx wrangler secret put CLOUDFLARE_AI_GATEWAY_API_KEY
+    bunx wrangler secret put HL_PRIVATE_KEY
+    # ... repeat for all required vars
+    ```
+
+## Local Development
+
+To run the `engine-api` locally:
+
+```bash
+# From root
+bun run dev --filter engine-api
+
+# Or directly in apps/engine-api
+cd apps/engine-api
+bun run dev
 ```
 
-## What's inside?
+This starts the worker on `http://localhost:8787`.
+- **Note**: Durable Objects persist data locally in `.wrangler/state/v3`. To reset, delete this folder or run `wrangler dev --persist-to=memory`.
 
-This Turborepo includes the following packages/apps:
+## Deployment
 
-### Apps and Packages
+### 1. Prerequisites (Cloudflare)
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/biome-config`: `biome` configurations
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+*   **Paid Workers Plan**: Required for Durable Objects.
+*   **R2 Enabled**: You must have R2 enabled on your account.
+*   **AI Gateway**: Ensure you have an AI Gateway created (id: `openclaw-core`).
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+### 2. Infrastructure Setup (One-time)
 
-### Utilities
+Create the R2 bucket and set production secrets:
 
-This Turborepo has some additional tools already setup for you:
+```bash
+# Create R2 Bucket
+bunx wrangler r2 bucket create openclaw-village-data
 
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [Biome](https://biomejs.dev/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build
-yarn dlx turbo build
-pnpm exec turbo build
+# Set backend secrets (you'll be prompted for each value)
+cd apps/engine-api
+bunx wrangler secret put CLOUDFLARE_AI_GATEWAY_API_KEY
+bunx wrangler secret put CF_AI_GATEWAY_ACCOUNT_ID
+bunx wrangler secret put CF_AI_GATEWAY_GATEWAY_ID
+bunx wrangler secret put HL_PRIVATE_KEY
+bunx wrangler secret put HL_WALLET_ADDRESS
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+### 3. Deploy Everything
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo build --filter=docs
+Deploy from root (builds first, then deploys all apps):
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo build --filter=docs
-yarn exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
+```bash
+bun run deploy
 ```
 
-### Develop
+Or deploy each app individually:
 
-To develop all apps and packages, run the following command:
+```bash
+# Backend (Cloudflare Workers + Durable Objects)
+cd apps/engine-api
+bun run deploy
 
-```
-cd my-turborepo
-
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev
-yarn exec turbo dev
-pnpm exec turbo dev
+# Frontend (Cloudflare Pages)
+cd apps/mission-control
+bun run deploy
 ```
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+> **First Deploy**: The first `engine-api` deployment creates the Durable Object classes and R2 bindings automatically.
 
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo dev --filter=web
+### 4. Post-Deployment Configuration
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo dev --filter=web
-yarn exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
+1.  **CORS**: Update `apps/engine-api/src/index.ts` with your Pages URL:
+    ```ts
+    origin: ["http://localhost:5173", "https://openclaw-mission-control.pages.dev"],
+    ```
+2.  **Frontend API URL**: Set via Cloudflare Pages environment variable or `.env.production`:
+    ```
+    VITE_API_URL=https://engine-api.<your-subdomain>.workers.dev
+    ```
 
-### Remote Caching
+### 5. CI/CD (Automatic Deploys)
 
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) is configured to automatically build and deploy on every push to `main`.
 
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
+**Required GitHub Secrets:**
 
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
+| Secret | Description |
+|--------|-------------|
+| `CLOUDFLARE_API_TOKEN` | API Token with Workers/Pages deploy permissions |
+| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare Account ID |
 
-```
-cd my-turborepo
+To create the API token:
+1. Go to [Cloudflare Dashboard → API Tokens](https://dash.cloudflare.com/profile/api-tokens)
+2. Create a token with **Edit Cloudflare Workers** permissions
+3. Add the token as `CLOUDFLARE_API_TOKEN` in your GitHub repo Settings → Secrets
 
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo login
+## Testing
 
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo login
-yarn exec turbo login
-pnpm exec turbo login
-```
+Run the test suite (Linting + Typecheck):
 
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-```
-# With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended)
-turbo link
-
-# Without [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation), use your package manager
-npx turbo link
-yarn exec turbo link
-pnpm exec turbo link
+```bash
+bun run test
 ```
 
-## Useful Links
+## Architecture & Security
 
-Learn more about the power of Turborepo:
+### Core Components
+- **`apps/engine-api`**: The Core Worker.
+    - `GameRoom`: Manages WebSocket sessions.
+    - `BotInstance`: Autonomous agent loop (Moltworker logic).
+    - `StorageAdapter`: Handles persistence with `ctx.waitUntil` for reliability.
+- **`packages/hyperliquid-sdk`**: Type-safe SDK for trading.
 
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+### Persistence Strategy
+- **Layer 1**: Durable Object Storage (Fast, atomic, consistent).
+- **Layer 2**: R2 Bucket (Async backup, durable, queryable).
+- **Reliability**: All background writes use `ctx.waitUntil` to prevent data loss on DO eviction.
+
+### Security
+- **AI Gateway**: All LLM calls are routed through Cloudflare AI Gateway for observability and rate limiting.
+- **Secrets**: Managed via `wrangler secret`. No keys in code.
+- **Environment**: Explicit `HYPERLIQUID_TESTNET` flag to prevent accidental mainnet trading.
