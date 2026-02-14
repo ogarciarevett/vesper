@@ -10,4 +10,10 @@ HL_WALLET_ADDRESS="your-wallet-address"
 # HYPERLIQUID_TESTNET="true"
 
 # OpenClaw Security
-# OPENCLAW_GATEWAY_PASSWORD="your-local-gateway-password"
+OPENCLAW_GATEWAY_PASSWORD="your-local-gateway-password"
+
+# Optional CCXT fallback (Binance Futures)
+# ENABLE_CCXT_FALLBACK="true"
+# CCXT_BINANCE_API_KEY="your-binance-api-key"
+# CCXT_BINANCE_API_SECRET="your-binance-api-secret"
+# CCXT_BINANCE_TESTNET="true"

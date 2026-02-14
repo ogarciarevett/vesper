@@ -25,11 +25,12 @@ This application handles private keys (Hyperliquid) and AI API keys.
     ```
 
 2.  **Configure Secrets (Local Development)**:
-    Copy the example vars file:
+    Copy the example vars file for the worker:
     ```bash
-    cp .dev.vars.example .dev.vars
+    cp apps/engine-api/.dev.vars.example apps/engine-api/.dev.vars
     ```
-    Edit `.dev.vars` and add your secrets.
+    Edit `apps/engine-api/.dev.vars` and add your secrets.
+    `OPENCLAW_GATEWAY_PASSWORD` is required because all `/api/*` and WS upgrade routes enforce shared-secret auth.
     > **Note**: `.dev.vars` is gitignored. Do not remove it from `.gitignore`.
 
 3.  **Configure Secrets (Production)**:
@@ -80,6 +81,11 @@ bunx wrangler secret put CF_AI_GATEWAY_ACCOUNT_ID
 bunx wrangler secret put CF_AI_GATEWAY_GATEWAY_ID
 bunx wrangler secret put HL_PRIVATE_KEY
 bunx wrangler secret put HL_WALLET_ADDRESS
+bunx wrangler secret put OPENCLAW_GATEWAY_PASSWORD
+# Optional fallback
+bunx wrangler secret put ENABLE_CCXT_FALLBACK
+bunx wrangler secret put CCXT_BINANCE_API_KEY
+bunx wrangler secret put CCXT_BINANCE_API_SECRET
 ```
 
 ### 3. Deploy Everything
@@ -98,7 +104,7 @@ cd apps/engine-api
 bun run deploy
 
 # Frontend (Cloudflare Pages)
-cd apps/mission-control
+cd apps/agent-dashboard
 bun run deploy
 ```
 
@@ -108,11 +114,13 @@ bun run deploy
 
 1.  **CORS**: Update `apps/engine-api/src/index.ts` with your Pages URL:
     ```ts
-    origin: ["http://localhost:5173", "https://openclaw-mission-control.pages.dev"],
+    origin: ["http://localhost:5173", "https://openclaw-agent-dashboard.pages.dev"],
     ```
 2.  **Frontend API URL**: Set via Cloudflare Pages environment variable or `.env.production`:
     ```
     VITE_API_URL=https://engine-api.<your-subdomain>.workers.dev
+    VITE_GATEWAY_PASSWORD=<same-shared-password>
+    VITE_ROOM_ID=main
     ```
 
 ### 5. CI/CD (Automatic Deploys)
@@ -133,18 +141,23 @@ To create the API token:
 
 ## Testing
 
-Run the test suite (Linting + Typecheck):
+Run the test suite:
 
 ```bash
 bun run test
 ```
 
+Integration tests for WS + emergency-stop are opt-in and run when:
+
+- `OPENCLAW_INTEGRATION_BASE_URL` is set (example: `http://localhost:8787`)
+- `OPENCLAW_GATEWAY_PASSWORD` is set
+
 ## Architecture & Security
 
 ### Core Components
 - **`apps/engine-api`**: The Core Worker.
-    - `GameRoom`: Manages WebSocket sessions.
-    - `BotInstance`: Autonomous agent loop (Moltworker logic).
+    - `TradingRoom`: Manages WebSocket sessions and bot coordination.
+    - `BotInstance`: Autonomous agent loop with AI-driven trading decisions.
     - `StorageAdapter`: Handles persistence with `ctx.waitUntil` for reliability.
 - **`packages/hyperliquid-sdk`**: Type-safe SDK for trading.
 

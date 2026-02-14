@@ -7,8 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 enabled = true
 
 [[durable_objects.bindings]]
-name = "GAME_ROOM"
-class_name = "GameRoom"
+name = "TRADING_ROOM"
+class_name = "TradingRoom"
 
 [[durable_objects.bindings]]
 name = "BOT_INSTANCE"
@@ -17,6 +17,10 @@ class_name = "BotInstance"
 [[migrations]]
 tag = "v1"
 new_classes = ["GameRoom", "BotInstance"]
+
+[[migrations]]
+tag = "v2"
+renamed_classes = [{from = "GameRoom", to = "TradingRoom"}]
 
 [[r2_buckets]]
 binding = "OPENCLAW_DATA"

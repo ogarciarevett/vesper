@@ -2,6 +2,11 @@ type Env = CloudflareBindings & {
   CLOUDFLARE_AI_GATEWAY_API_KEY: string;
   CF_AI_GATEWAY_ACCOUNT_ID: string;
   CF_AI_GATEWAY_GATEWAY_ID: string;
-  HL_PRIVATE_KEY?: string; // Optional for read-only bots
+  OPENCLAW_GATEWAY_PASSWORD: string;
+  HL_PRIVATE_KEY?: string;
   HYPERLIQUID_TESTNET?: string;
+  ENABLE_CCXT_FALLBACK?: string;
+  CCXT_BINANCE_API_KEY?: string;
+  CCXT_BINANCE_API_SECRET?: string;
+  CCXT_BINANCE_TESTNET?: string;
 };

@@ -1,27 +1,63 @@
-import type { HyperliquidClient } from "@repo/hyperliquid-sdk";
-import type { StrategyDecision, TradingStrategy } from "../TradingStrategy";
+import type { StrategyType } from "@repo/types";
+import type { MarketData, Candle, Position, Signal } from "@repo/types";
+import type { TradingStrategy } from "../TradingStrategy";
 
+/**
+ * SimpleStrategy is a placeholder/demo strategy that generates
+ * random BUY/HOLD signals. It exists to validate the pipeline
+ * and will be replaced by real strategies.
+ */
 export class SimpleStrategy implements TradingStrategy {
   name = "SimpleMarketWatcher";
+  type: StrategyType = "MOMENTUM_SCALPER";
+  defaultParams: Record<string, unknown> = {
+    buyProbability: 0.2,
+  };
 
-  async analyze(client: HyperliquidClient): Promise<StrategyDecision> {
-    // 1. Get Price
-    // const ticker = await client.getTicker("ETH"); // Use ETH for now
-    // const price = ticker.midPrice;
-    const price = 2000; // Mock for now until SDK types align
+  private params: Record<string, unknown>;
 
-    // 2. Logic
-    if (Math.random() > 0.8) {
-        return {
-            action: "BUY",
-            reason: `Price ${price} looks good (Random)`,
-            price: price * 0.99
-        };
+  constructor() {
+    this.params = { ...this.defaultParams };
+  }
+
+  initialize(params: Record<string, unknown>): void {
+    this.params = { ...this.defaultParams, ...params };
+  }
+
+  async analyze(
+    marketData: MarketData,
+    _candles: Candle[],
+    _positions: Position[],
+  ): Promise<Signal> {
+    const buyProbability = (this.params.buyProbability as number) ?? 0.2;
+
+    if (Math.random() > 1 - buyProbability) {
+      return {
+        skillName: this.name,
+        action: "OPEN_LONG",
+        pair: marketData.pair,
+        confidence: 30 + Math.floor(Math.random() * 30), // 30-60, low confidence for random
+        metadata: {
+          reason: `Price ${marketData.price} looks good (Random)`,
+          price: marketData.price,
+        },
+        timestamp: new Date().toISOString(),
+      };
     }
 
     return {
-        action: "HOLD",
-        reason: "Waiting for signal"
+      skillName: this.name,
+      action: "HOLD",
+      pair: marketData.pair,
+      confidence: 10,
+      metadata: {
+        reason: "Waiting for signal",
+      },
+      timestamp: new Date().toISOString(),
     };
+  }
+
+  getState(): Record<string, unknown> {
+    return { ...this.params };
   }
 }

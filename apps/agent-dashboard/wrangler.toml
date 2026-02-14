@@ -1,0 +1,5 @@
+name = "openclaw-agent-dashboard"
+compatibility_date = "2026-02-14"
+
+# Cloudflare Pages configuration
+pages_build_output_dir = "dist"

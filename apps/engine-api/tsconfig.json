@@ -16,7 +16,9 @@
     "types": ["@cloudflare/workers-types"],
     "paths": {
       "@repo/hyperliquid-sdk": ["../../packages/hyperliquid-sdk/src/index.ts"],
-      "@repo/hyperliquid-sdk/*": ["../../packages/hyperliquid-sdk/src/*"]
+      "@repo/hyperliquid-sdk/*": ["../../packages/hyperliquid-sdk/src/*"],
+      "@repo/types": ["../../packages/types/src/index.ts"],
+      "@repo/types/*": ["../../packages/types/src/*"]
     }
   },
   "include": ["src/**/*", "worker-configuration.d.ts"]

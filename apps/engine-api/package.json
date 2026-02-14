@@ -2,15 +2,18 @@
   "name": "engine-api",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local",
+    "dev": "wrangler dev --local --port 8787",
     "deploy": "wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "check-types": "tsc --noEmit",
+    "test": "bun test tests",
     "lint": "biome lint .",
     "lint:fix": "biome check --write ."
   },
   "dependencies": {
     "hono": "^4.11.9",
-    "@repo/hyperliquid-sdk": "workspace:*"
+    "@repo/hyperliquid-sdk": "workspace:*",
+    "@repo/types": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260214.0",

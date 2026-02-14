@@ -4,12 +4,12 @@
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/index");
-		durableNamespaces: "GameRoom" | "BotInstance";
+		durableNamespaces: "TradingRoom" | "BotInstance";
 	}
 	interface Env {
 		OPENCLAW_DATA: R2Bucket;
 		AI: Ai;
-		GAME_ROOM: DurableObjectNamespace<import("./src/index").GameRoom>;
+		TRADING_ROOM: DurableObjectNamespace<import("./src/index").TradingRoom>;
 		BOT_INSTANCE: DurableObjectNamespace<import("./src/index").BotInstance>;
 	}
 }

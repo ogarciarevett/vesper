@@ -6,7 +6,9 @@ export type ServerMessage =
 	| StateDeltaMessage
 	| FullStateMessage
 	| ErrorMessage
-	| PongMessage;
+	| PongMessage
+	| RoomStateMessage
+	| TradeEventMessage;
 
 /** WebSocket message types from client to server */
 export type ClientMessage =
@@ -45,6 +47,28 @@ export interface PongMessage {
 	timestamp: string;
 }
 
+/** Aggregated room-level metrics */
+export interface RoomStateMessage {
+	type: "ROOM_STATE";
+	roomId: string;
+	timestamp: string;
+	botCount: number;
+	activeBotCount: number;
+	totalPnl: number;
+	totalPnlToday: number;
+	totalExposure: number;
+	riskStatus: "NORMAL" | "WARNING" | "BREACHED";
+}
+
+/** Trade lifecycle event emitted by a bot */
+export interface TradeEventMessage {
+	type: "TRADE_EVENT";
+	agentId: string;
+	timestamp: string;
+	event: string;
+	data: Record<string, unknown>;
+}
+
 /** Subscribe to agent updates */
 export interface SubscribeMessage {
 	type: "SUBSCRIBE";
@@ -65,6 +89,7 @@ export interface PingMessage {
 /** Real-time agent state synced via WebSocket */
 export interface AgentRealtimeState {
 	agentId: string;
+	doId?: string;
 	state: AgentState;
 	activity: AgentActivity;
 	currentThought: string | null;
