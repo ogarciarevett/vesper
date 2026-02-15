@@ -18,6 +18,7 @@ import type {
   Candle,
   MarketData,
   Position,
+  ReasoningConfig,
   RiskConfig,
   Signal,
   StrategyType,
@@ -46,6 +47,7 @@ interface BotState {
   strategyParams: Record<string, unknown>;
   tradingConfig: TradingConfig;
   riskConfig: RiskConfig;
+  reasoningConfig: ReasoningConfig;
   positions: Position[];
   pnlTotal: number;
   pnlToday: number;
@@ -71,6 +73,12 @@ const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxSingleTradeLossUsd: 100,
   stopLossRequired: true,
   forceStopOnDrawdown: true,
+};
+const DEFAULT_REASONING_CONFIG: ReasoningConfig = {
+  model: "anthropic/claude-opus-4-6",
+  intervalSeconds: DEFAULT_TICK_INTERVAL_MS / 1000,
+  temperature: 0.2,
+  maxTokens: 1024,
 };
 const TRADING_SYSTEM_PROMPT = `You are an autonomous trading agent analyzing perpetual futures markets on Hyperliquid.
 
@@ -136,6 +144,7 @@ export class BotInstance extends DurableObject {
       strategyParams: {},
       tradingConfig: { ...DEFAULT_TRADING_CONFIG },
       riskConfig: { ...DEFAULT_RISK_CONFIG },
+      reasoningConfig: { ...DEFAULT_REASONING_CONFIG },
       positions: [],
       pnlTotal: 0,
       pnlToday: 0,
@@ -220,16 +229,41 @@ export class BotInstance extends DurableObject {
         this.botState.tickIntervalMs,
         1000,
       );
+      this.botState.reasoningConfig.intervalSeconds =
+        this.botState.tickIntervalMs / 1000;
     }
 
     if (payload.reasoning && typeof payload.reasoning === "object") {
       const reasoning = payload.reasoning as Record<string, unknown>;
+      const current = this.botState.reasoningConfig;
       if (reasoning.intervalSeconds !== undefined) {
-        this.botState.tickIntervalMs = this.toNumber(
+        const intervalSeconds = this.toNumber(
           reasoning.intervalSeconds,
           this.botState.tickIntervalMs / 1000,
           1,
-        ) * 1000;
+        );
+        this.botState.tickIntervalMs = intervalSeconds * 1000;
+        this.botState.reasoningConfig.intervalSeconds = intervalSeconds;
+      }
+      if (typeof reasoning.model === "string" && reasoning.model.trim().length > 0) {
+        this.botState.reasoningConfig.model = reasoning.model.trim();
+      }
+      if (reasoning.temperature !== undefined) {
+        this.botState.reasoningConfig.temperature = this.toNumber(
+          reasoning.temperature,
+          current.temperature,
+          0,
+          2,
+        );
+      }
+      if (reasoning.maxTokens !== undefined) {
+        this.botState.reasoningConfig.maxTokens = Math.floor(
+          this.toNumber(reasoning.maxTokens, current.maxTokens, 1),
+        );
+      }
+      if (typeof reasoning.byokAlias === "string") {
+        const alias = reasoning.byokAlias.trim();
+        this.botState.reasoningConfig.byokAlias = alias.length > 0 ? alias : undefined;
       }
     }
 
@@ -322,11 +356,28 @@ export class BotInstance extends DurableObject {
   }
 
   private async loadState(): Promise<void> {
-    const saved = await this.ctx.storage.get<BotState>("botState");
+    const saved = await this.ctx.storage.get<Partial<BotState>>("botState");
     if (saved) {
       this.botState = { ...this.defaultBotState(), ...saved };
+      if (!saved.reasoningConfig) {
+        this.botState.reasoningConfig.intervalSeconds = Math.max(
+          1,
+          this.botState.tickIntervalMs / 1000,
+        );
+      }
     }
     this.botState.doId = this.ctx.id.toString();
+    this.botState.reasoningConfig.intervalSeconds = Math.max(
+      1,
+      this.toNumber(
+        this.botState.reasoningConfig.intervalSeconds,
+        this.botState.tickIntervalMs / 1000,
+        1,
+      ),
+    );
+    this.botState.tickIntervalMs = Math.floor(
+      this.botState.reasoningConfig.intervalSeconds * 1000,
+    );
     this.setStrategy(this.botState.strategyType, this.botState.strategyParams);
   }
 
@@ -846,7 +897,12 @@ ${positions.length > 0 ? positions.map((p) => `- ${p.pair}: ${p.side} ${p.size} 
 
 Based on this data, provide your trading decision as a JSON object.`;
 
-    const response = await ai.generate(prompt, TRADING_SYSTEM_PROMPT);
+    const response = await ai.generate(prompt, TRADING_SYSTEM_PROMPT, {
+      model: this.botState.reasoningConfig.model,
+      maxTokens: this.botState.reasoningConfig.maxTokens,
+      temperature: this.botState.reasoningConfig.temperature,
+      byokAlias: this.botState.reasoningConfig.byokAlias,
+    });
 
     try {
       const jsonMatch = response.match(/\{[\s\S]*\}/);

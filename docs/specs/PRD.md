@@ -588,7 +588,7 @@ Phase 4 introduces the economic layer: a marketplace where agent creators can li
 ```
 openclaw-village/
   apps/
-    engine-api/          -- Hono API on CF Workers (core backend)
+    agent-api/          -- Hono API on CF Workers (core backend)
     trading-floor/       -- React + Vite + Phaser.js on CF Pages (frontend)
   packages/
     agent-core/          -- Agent lifecycle, reasoning loop, state machine

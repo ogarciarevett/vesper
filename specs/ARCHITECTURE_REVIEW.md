@@ -2,7 +2,7 @@
 
 **Reviewed:** 2026-02-14
 **Reviewer:** Technical Lead / Architecture Review Agent
-**Scope:** Full codebase audit of apps/engine-api, apps/agent-dashboard, packages/hyperliquid-sdk, packages/types
+**Scope:** Full codebase audit of apps/agent-api, apps/agent-dashboard, packages/hyperliquid-sdk, packages/types
 
 ---
 
@@ -49,7 +49,7 @@ OpenClaw Village is an early-stage but well-structured monorepo for AI-powered p
 ```
 openclaw-village/
   apps/
-    engine-api/          # Cloudflare Worker + Durable Objects (Hono)
+    agent-api/          # Cloudflare Worker + Durable Objects (Hono)
     agent-dashboard/     # React 19 + Vite + Canvas 2D frontend
   packages/
     hyperliquid-sdk/     # Hyperliquid perps SDK (viem-based)
@@ -66,14 +66,14 @@ openclaw-village/
 
 **Minor Issues:**
 - `packages/ui` is listed in workspaces but appears unused (only `package.json` modified per git status)
-- No `@repo/types` dependency in engine-api's `package.json` (types from that package are not imported in the backend)
+- No `@repo/types` dependency in agent-api's `package.json` (types from that package are not imported in the backend)
 - turbo.json references `database:generate` and `database:push` tasks -- holdover from a template, no database in this project
 
 ---
 
 ## Code Quality Assessment
 
-### apps/engine-api
+### apps/agent-api
 
 **File: `src/index.ts` (Hono Router)**
 - Clean, idiomatic Hono usage
@@ -139,7 +139,7 @@ Positives:
 - SDK uses `as const` assertions and proper generic constraints
 
 Negatives:
-- `engine-api` uses `any` extensively: `BotState.lastDecision: any`, `StorageAdapter` methods accept `any`, `recentLogs` is `any[]`
+- `agent-api` uses `any` extensively: `BotState.lastDecision: any`, `StorageAdapter` methods accept `any`, `recentLogs` is `any[]`
 - `agent-dashboard` uses `any` for API responses, bot status, log entries
 - The excellent types in `packages/types` are NOT IMPORTED by either the backend or frontend
 - `GameRoom.sessions: Map<WebSocket, any>` -- session metadata is untyped
@@ -322,7 +322,7 @@ Hardcoded to 5000ms. Should be configurable per bot and per strategy:
 **YES.** Wrangler supports Durable Objects in local development mode.
 
 ```bash
-cd apps/engine-api
+cd apps/agent-api
 wrangler dev --local
 ```
 
@@ -341,8 +341,8 @@ This uses `miniflare` under the hood, which includes a full Durable Object runti
 
 **To test locally:**
 ```bash
-# Terminal 1: Start engine-api
-cd apps/engine-api
+# Terminal 1: Start agent-api
+cd apps/agent-api
 echo "HL_PRIVATE_KEY=<your-testnet-key>" > .dev.vars
 echo "HYPERLIQUID_TESTNET=true" >> .dev.vars
 wrangler dev --local
@@ -471,8 +471,8 @@ The type definitions are thorough, well-organized, and reflect deep understandin
 
 | Type | Defined In | Used By |
 |------|-----------|---------|
-| `AgentState` | `packages/types/agent.ts` | Not imported anywhere in engine-api |
-| `TradeDecision` | `packages/types/trading.ts` | Not imported anywhere in engine-api |
+| `AgentState` | `packages/types/agent.ts` | Not imported anywhere in agent-api |
+| `TradeDecision` | `packages/types/trading.ts` | Not imported anywhere in agent-api |
 | `ServerMessage` / `ClientMessage` | `packages/types/realtime.ts` | Not imported anywhere |
 | `LogEntry` | `packages/types/logs.ts` | Not imported anywhere |
 | `AgentConfig` | `packages/types/agent.ts` | Not imported anywhere |
@@ -490,7 +490,7 @@ The type definitions are thorough, well-organized, and reflect deep understandin
 
 ### Recommendations
 
-1. Add `@repo/types` as a dependency to `engine-api/package.json`
+1. Add `@repo/types` as a dependency to `agent-api/package.json`
 2. Replace local `BotState` with types from `packages/types/agent.ts`
 3. Replace local `StrategyDecision` with `TradeDecision` from `packages/types/trading.ts`
 4. Implement the WebSocket protocol using `ServerMessage`/`ClientMessage` from `packages/types/realtime.ts`
@@ -643,7 +643,7 @@ However:
 
 ### Confirmed: Full Local Development Works
 
-The `apps/engine-api/package.json` already has the correct dev script:
+The `apps/agent-api/package.json` already has the correct dev script:
 ```json
 "dev": "wrangler dev --local"
 ```
@@ -656,13 +656,14 @@ The `apps/engine-api/package.json` already has the correct dev script:
 
 ### Setup Steps
 
-1. Create `.dev.vars` in `apps/engine-api/`:
+1. Create `.dev.vars` in `apps/agent-api/`:
 ```
 HL_PRIVATE_KEY=<hyperliquid-testnet-private-key>
 HYPERLIQUID_TESTNET=true
-CLOUDFLARE_AI_GATEWAY_API_KEY=<optional-for-ai>
 CF_AI_GATEWAY_ACCOUNT_ID=<optional-for-ai>
-CF_AI_GATEWAY_GATEWAY_ID=<optional-for-ai>
+CF_AI_GATEWAY_ID=<optional-for-ai>
+CF_AIG_AUTH_TOKEN=<optional-for-authenticated-gateway>
+CF_AI_DEFAULT_MODEL=<optional-default-model>
 ```
 
 2. Run both services:
@@ -671,7 +672,7 @@ CF_AI_GATEWAY_GATEWAY_ID=<optional-for-ai>
 bun dev
 
 # Or individually:
-cd apps/engine-api && bun dev      # Port 8787
+cd apps/agent-api && bun dev      # Port 8787
 cd apps/agent-dashboard && bun dev  # Port 5173
 ```
 
@@ -711,7 +712,7 @@ cd apps/agent-dashboard && bun dev  # Port 5173
 ### P1 - High Priority
 
 4. **Align types across packages**
-   - Import `@repo/types` in engine-api and agent-dashboard
+   - Import `@repo/types` in agent-api and agent-dashboard
    - Replace all local interface duplicates with shared types
    - Remove `any` usage in BotInstance, StorageAdapter, and frontend hooks
 

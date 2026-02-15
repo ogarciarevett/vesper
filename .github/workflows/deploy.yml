@@ -29,8 +29,8 @@ jobs:
       - name: Build all packages
         run: bun run build
 
-      - name: Deploy Engine API (Workers)
-        working-directory: apps/engine-api
+      - name: Deploy Agent API (Workers)
+        working-directory: apps/agent-api
         run: bun run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

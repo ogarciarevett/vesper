@@ -1,7 +1,6 @@
 import type { Position, PnlSummary } from "@repo/types";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8787";
-const GATEWAY_PASSWORD = import.meta.env.VITE_GATEWAY_PASSWORD || "";
+const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 interface StatusResponse {
   status: string;
@@ -102,18 +101,43 @@ interface EmergencyStopResponse {
   }>;
 }
 
-function withAuthHeaders(headers?: HeadersInit): Headers {
-  const next = new Headers(headers);
-  if (GATEWAY_PASSWORD) {
-    next.set("x-openclaw-gateway-password", GATEWAY_PASSWORD);
-  }
-  return next;
+export interface AiGatewayModelOption {
+  id: string;
+  label: string;
+  model: string;
+  provider: string;
+  byokAlias?: string;
+  isDefault: boolean;
+  configured: boolean;
+  status: "ready" | "missing_key" | "gateway_auth" | "invalid_model" | "error";
+  message?: string;
+}
+
+export interface AiGatewayModelCatalog {
+  ok: true;
+  source: "env" | "gateway" | "default";
+  checkedAt: string;
+  models: AiGatewayModelOption[];
+}
+
+export interface MarketPairsCatalog {
+  ok: true;
+  source: "hyperliquid" | "fallback";
+  testnet: boolean;
+  updatedAt: string;
+  pairs: string[];
+  message?: string;
+}
+
+function buildUrl(path: string): string {
+  if (API_URL) return `${API_URL}${path}`;
+  return path;
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(buildUrl(path), {
     ...init,
-    headers: withAuthHeaders(init.headers),
+    headers: init.headers,
   });
 
   if (!response.ok) {
@@ -138,6 +162,16 @@ export const api = {
 
   async getStatus(): Promise<StatusResponse> {
     return requestJson<StatusResponse>("/api/status");
+  },
+
+  async getAiModels(refresh = false): Promise<AiGatewayModelCatalog> {
+    const suffix = refresh ? "?refresh=1" : "";
+    return requestJson<AiGatewayModelCatalog>(`/api/ai/models${suffix}`);
+  },
+
+  async getMarketPairs(refresh = false): Promise<MarketPairsCatalog> {
+    const suffix = refresh ? "?refresh=1" : "";
+    return requestJson<MarketPairsCatalog>(`/api/market/pairs${suffix}`);
   },
 
   // --- Room Management ---

@@ -16,7 +16,7 @@
 
 ## 2. Test Summary
 
-`engine-api` tests executed via `bun test tests`:
+`agent-api` tests executed via `bun test tests`:
 
 - `tests/indicators.test.ts` (unit) -- PASS
 - `tests/risk-manager.test.ts` (unit) -- PASS
@@ -72,8 +72,8 @@ Without those env vars, the test suite keeps a deterministic skip-style pass bra
 
 `bun run lint` reports warnings primarily in pre-existing code (e.g. explicit `any`, non-null assertions) across:
 
-- `apps/engine-api/src/ai/AiService.ts`
-- `apps/engine-api/src/skills/indicators/*`
+- `apps/agent-api/src/ai/AiService.ts`
+- `apps/agent-api/src/skills/indicators/*`
 - `packages/hyperliquid-sdk/src/positions.ts`
 
 No lint errors blocked CI commands in this iteration.

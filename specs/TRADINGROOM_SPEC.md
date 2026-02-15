@@ -155,7 +155,7 @@ Each connector provides:
                          WebSocket + REST
                                  |
                      +-----------v------------+
-                     |     engine-api          |
+                     |     agent-api          |
                      |     (Hono on CF Workers)|
                      +-----------+------------+
                                  |
@@ -210,12 +210,12 @@ TradingRoom DO                         BotInstance DOs
 
 | Concept | Current Code | Target |
 |---|---|---|
-| TradingRoom DO | `GameRoom` (`apps/engine-api/src/durable-objects/GameRoom.ts`) | Rename to `TradingRoom`, add bot registry, state aggregation, protocol parsing |
-| BotInstance DO | `BotInstance` (`apps/engine-api/src/durable-objects/BotInstance.ts`) | Add strategy switching, AI integration, risk checks, state reporting |
-| Strategy Skills | `SimpleStrategy` (`apps/engine-api/src/skills/strategies/SimpleStrategy.ts`) | Replace with real strategies (see Section 7) |
+| TradingRoom DO | `GameRoom` (`apps/agent-api/src/durable-objects/GameRoom.ts`) | Rename to `TradingRoom`, add bot registry, state aggregation, protocol parsing |
+| BotInstance DO | `BotInstance` (`apps/agent-api/src/durable-objects/BotInstance.ts`) | Add strategy switching, AI integration, risk checks, state reporting |
+| Strategy Skills | `SimpleStrategy` (`apps/agent-api/src/skills/strategies/SimpleStrategy.ts`) | Replace with real strategies (see Section 7) |
 | Market Connector | `HyperliquidClient` (`packages/hyperliquid-sdk/src/client.ts`) | Already functional; add CCXT adapter alongside |
-| AI Reasoning | `AiService` (`apps/engine-api/src/ai/AiService.ts`) | Integrate into bot decision loop, add structured prompts |
-| State Persistence | `StorageAdapter` (`apps/engine-api/src/storage/StorageAdapter.ts`) | Already functional; add typed state interfaces |
+| AI Reasoning | `AiService` (`apps/agent-api/src/ai/AiService.ts`) | Integrate into bot decision loop, add structured prompts |
+| State Persistence | `StorageAdapter` (`apps/agent-api/src/storage/StorageAdapter.ts`) | Already functional; add typed state interfaces |
 | WebSocket Hook | `useTradingSocket` (`apps/agent-dashboard/src/hooks/useTradingSocket.ts`) | Handle typed protocol (`FULL_STATE`, `STATE_DELTA`, `ROOM_STATE`, `TRADE_EVENT`, `PONG`) |
 | API Client | `api` (`apps/agent-dashboard/src/lib/api.ts`) | Extend with room management, strategy configuration |
 | Types | `packages/types/src/` | Already well-defined; extend as needed |
@@ -603,7 +603,7 @@ alarm() {
 
 ## 7. Strategy Skills
 
-Each Strategy Skill implements the `TradingStrategy` interface (defined in `apps/engine-api/src/skills/TradingStrategy.ts`). The current `SimpleStrategy` (random BUY/HOLD) must be replaced with production strategies.
+Each Strategy Skill implements the `TradingStrategy` interface (defined in `apps/agent-api/src/skills/TradingStrategy.ts`). The current `SimpleStrategy` (random BUY/HOLD) must be replaced with production strategies.
 
 ### Strategy Interface
 
@@ -944,7 +944,7 @@ For the initial implementation, each bot executes on its own connector. Cross-ve
 
 ## 11. API Endpoints
 
-The Hono API (`apps/engine-api/src/index.ts`) exposes REST endpoints for management and a WebSocket endpoint for real-time updates.
+The Hono API (`apps/agent-api/src/index.ts`) exposes REST endpoints for management and a WebSocket endpoint for real-time updates.
 
 ### System
 
@@ -1111,7 +1111,7 @@ openclaw-village-data/
 2. If `ctx.storage` is empty (DO was evicted or migrated), fall back to R2.
 3. R2 backup is written asynchronously via `ctx.waitUntil()` after each state change.
 
-This is already implemented in `StorageAdapter` (`apps/engine-api/src/storage/StorageAdapter.ts`).
+This is already implemented in `StorageAdapter` (`apps/agent-api/src/storage/StorageAdapter.ts`).
 
 ---
 
@@ -1319,9 +1319,10 @@ renamed_classes = [{from = "GameRoom", to = "TradingRoom"}]
 
 ```
 # Cloudflare AI Gateway
-CLOUDFLARE_AI_GATEWAY_API_KEY    # API key for Claude access
 CF_AI_GATEWAY_ACCOUNT_ID         # Cloudflare account ID
-CF_AI_GATEWAY_GATEWAY_ID         # AI Gateway ID
+CF_AI_GATEWAY_ID         # AI Gateway ID
+CF_AIG_AUTH_TOKEN                # Authenticated Gateway token (recommended)
+CF_AI_DEFAULT_MODEL              # Optional default model (e.g. anthropic/claude-opus-4-6)
 
 # Hyperliquid
 HL_PRIVATE_KEY                   # Wallet private key (secret)

@@ -1,5 +1,5 @@
 {
-  "name": "engine-api",
+  "name": "agent-api",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --port 8787",
@@ -11,9 +11,11 @@
     "lint:fix": "biome check --write ."
   },
   "dependencies": {
-    "hono": "^4.11.9",
     "@repo/hyperliquid-sdk": "workspace:*",
-    "@repo/types": "workspace:*"
+    "@repo/types": "workspace:*",
+    "ai": "^6.0.0",
+    "ai-gateway-provider": "latest",
+    "hono": "^4.11.9"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260214.0",

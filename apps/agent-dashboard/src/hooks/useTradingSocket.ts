@@ -5,8 +5,8 @@ import type {
   ClientMessage,
 } from "@repo/types";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8787";
-const GATEWAY_PASSWORD = import.meta.env.VITE_GATEWAY_PASSWORD || "";
+const API_URL = import.meta.env.VITE_API_URL || "";
+const API_BASE = API_URL.replace(/\/$/, "");
 
 /** Room-level aggregated state from ROOM_STATE messages */
 export interface RoomState {
@@ -31,12 +31,12 @@ const PING_INTERVAL_MS = 30_000;
 const RECONNECT_DELAY_MS = 3_000;
 
 function buildWsUrl(roomId: string): string {
-  const base = new URL(API_URL);
+  const base = API_BASE
+    ? new URL(API_BASE, window.location.origin)
+    : new URL(window.location.href);
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = `/api/room/${roomId}/ws`;
-  if (GATEWAY_PASSWORD) {
-    base.searchParams.set("gateway_password", GATEWAY_PASSWORD);
-  }
+  base.search = "";
   return base.toString();
 }
 

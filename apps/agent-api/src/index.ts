@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { TradingRoom } from "./durable-objects/TradingRoom";
 import { BotInstance } from "./durable-objects/BotInstance";
 import { cors } from "hono/cors";
+import { getAiModelCatalog } from "./ai/modelCatalog";
+import { HyperliquidClient, SUPPORTED_PAIRS } from "@repo/hyperliquid-sdk";
 
 // Export DO classes so Cloudflare can find them
 export { TradingRoom, BotInstance };
@@ -11,10 +13,187 @@ const GATEWAY_PASSWORD_HEADER = "x-openclaw-gateway-password";
 
 interface RoomRegistryEntry {
   agentId: string;
+  pair?: string;
 }
 
 interface RoomInfoResponse {
   bots?: RoomRegistryEntry[];
+}
+
+interface BotStatusResponse {
+  isRunning?: boolean;
+  agentState?: string;
+  pair?: string;
+}
+
+interface MarketPairsResponse {
+  ok: true;
+  source: "hyperliquid" | "fallback";
+  testnet: boolean;
+  updatedAt: string;
+  pairs: string[];
+  message?: string;
+}
+
+type MarketPairsCache = {
+  key: string;
+  expiresAt: number;
+  data: MarketPairsResponse;
+};
+
+const MARKET_PAIRS_TTL_MS = 60_000;
+let marketPairsCache: MarketPairsCache | null = null;
+
+function normalizePair(value: string | null | undefined): string {
+  if (!value) return "";
+  return value.trim().toUpperCase();
+}
+
+function isRunningStatus(status: BotStatusResponse | null): boolean {
+  if (!status) return false;
+  return status.isRunning === true || status.agentState === "RUNNING";
+}
+
+async function loadRoomInfo(env: Env, roomId: string): Promise<RoomInfoResponse | null> {
+  try {
+    const roomDoId = env.TRADING_ROOM.idFromName(roomId);
+    const roomStub = env.TRADING_ROOM.get(roomDoId);
+    const response = await roomStub.fetch(
+      new Request("https://internal/info", { method: "GET" }),
+    );
+    if (!response.ok) return null;
+    return await response.json<RoomInfoResponse>();
+  } catch {
+    return null;
+  }
+}
+
+async function loadBotStatus(env: Env, botId: string): Promise<BotStatusResponse | null> {
+  try {
+    const doId = env.BOT_INSTANCE.idFromName(botId);
+    const stub = env.BOT_INSTANCE.get(doId);
+    const response = await stub.fetch(
+      new Request(`https://internal/api/bot/${encodeURIComponent(botId)}/status`, {
+        method: "GET",
+      }),
+    );
+    if (!response.ok) return null;
+    return await response.json<BotStatusResponse>();
+  } catch {
+    return null;
+  }
+}
+
+async function findRunningBotByPair(
+  env: Env,
+  roomId: string,
+  pair: string,
+  excludeAgentId?: string,
+): Promise<{ agentId: string; pair: string } | null> {
+  const targetPair = normalizePair(pair);
+  if (!targetPair) return null;
+
+  const roomInfo = await loadRoomInfo(env, roomId);
+  const bots = roomInfo?.bots ?? [];
+
+  for (const bot of bots) {
+    if (excludeAgentId && bot.agentId === excludeAgentId) {
+      continue;
+    }
+
+    const status = await loadBotStatus(env, bot.agentId);
+    if (!isRunningStatus(status)) {
+      continue;
+    }
+
+    const statusPair = normalizePair(status?.pair || bot.pair);
+    if (statusPair && statusPair === targetPair) {
+      return { agentId: bot.agentId, pair: statusPair };
+    }
+  }
+
+  return null;
+}
+
+function extractRequestedPairFromStartBody(body: Record<string, unknown>): string | null {
+  if (typeof body.pair === "string" && body.pair.trim().length > 0) {
+    return normalizePair(body.pair);
+  }
+
+  const config =
+    body.config && typeof body.config === "object"
+      ? (body.config as Record<string, unknown>)
+      : null;
+
+  if (config && typeof config.pair === "string" && config.pair.trim().length > 0) {
+    return normalizePair(config.pair);
+  }
+
+  const trading =
+    config?.trading && typeof config.trading === "object"
+      ? (config.trading as Record<string, unknown>)
+      : null;
+  const pairs = Array.isArray(trading?.pairs) ? trading?.pairs : [];
+  const firstPair = typeof pairs?.[0] === "string" ? normalizePair(pairs[0]) : "";
+  if (firstPair) return firstPair;
+
+  return null;
+}
+
+async function getMarketPairs(
+  env: Env,
+  options?: { refresh?: boolean },
+): Promise<MarketPairsResponse> {
+  const refresh = options?.refresh === true;
+  const testnet = env.HYPERLIQUID_TESTNET === "true";
+  const key = testnet ? "testnet" : "mainnet";
+  const now = Date.now();
+  if (
+    !refresh &&
+    marketPairsCache &&
+    marketPairsCache.key === key &&
+    marketPairsCache.expiresAt > now
+  ) {
+    return marketPairsCache.data;
+  }
+
+  let data: MarketPairsResponse;
+  try {
+    const client = new HyperliquidClient({ testnet });
+    const meta = await client.getMeta();
+    const pairs = meta.universe
+      .map((asset) => normalizePair(asset.name))
+      .filter((pair): pair is string => pair.length > 0)
+      .sort((a, b) => a.localeCompare(b));
+
+    if (pairs.length === 0) {
+      throw new Error("Hyperliquid returned an empty universe");
+    }
+
+    data = {
+      ok: true,
+      source: "hyperliquid",
+      testnet,
+      updatedAt: new Date().toISOString(),
+      pairs,
+    };
+  } catch (error) {
+    data = {
+      ok: true,
+      source: "fallback",
+      testnet,
+      updatedAt: new Date().toISOString(),
+      pairs: [...SUPPORTED_PAIRS],
+      message: `Using fallback pair list: ${String(error)}`,
+    };
+  }
+
+  marketPairsCache = {
+    key,
+    expiresAt: now + MARKET_PAIRS_TTL_MS,
+    data,
+  };
+  return data;
 }
 
 function extractGatewayPassword(request: Request): string | null {
@@ -88,14 +267,8 @@ async function resolveBotIdForRoom(
   botIdOrAlias: string,
 ): Promise<string> {
   try {
-    const roomDoId = env.TRADING_ROOM.idFromName(roomId);
-    const roomStub = env.TRADING_ROOM.get(roomDoId);
-    const response = await roomStub.fetch(
-      new Request("https://internal/info", { method: "GET" }),
-    );
-    if (!response.ok) return botIdOrAlias;
-
-    const roomInfo = await response.json<RoomInfoResponse>();
+    const roomInfo = await loadRoomInfo(env, roomId);
+    if (!roomInfo) return botIdOrAlias;
     const bots = roomInfo.bots ?? [];
     if (bots.length === 0) return botIdOrAlias;
 
@@ -150,7 +323,7 @@ app.use("/api/*", async (c, next) => {
 });
 
 app.get("/", (c) => {
-  return c.json({ status: "ok", service: "OpenClaw Village Engine API" });
+  return c.json({ status: "ok", service: "OpenClaw Village Agent API" });
 });
 
 // === Status API ===
@@ -160,6 +333,22 @@ app.get("/api/status", async (c) => {
     timestamp: Date.now(),
     version: "0.2.0",
   });
+});
+
+app.get("/api/ai/models", async (c) => {
+  const refresh = c.req.query("refresh");
+  const response = await getAiModelCatalog(c.env, {
+    refresh: refresh === "1" || refresh === "true",
+  });
+  return c.json(response);
+});
+
+app.get("/api/market/pairs", async (c) => {
+  const refresh = c.req.query("refresh");
+  const response = await getMarketPairs(c.env, {
+    refresh: refresh === "1" || refresh === "true",
+  });
+  return c.json(response);
 });
 
 // === Room Management ===
@@ -258,7 +447,13 @@ app.post("/api/room/:roomId/bot", async (c) => {
       strategy?: { type?: string; params?: Record<string, unknown> };
       trading?: { pairs?: string[] };
       risk?: Record<string, unknown>;
-      reasoning?: { intervalSeconds?: number };
+      reasoning?: {
+        model?: string;
+        byokAlias?: string;
+        intervalSeconds?: number;
+        temperature?: number;
+        maxTokens?: number;
+      };
     };
   }>();
 
@@ -269,6 +464,54 @@ app.post("/api/room/:roomId/bot", async (c) => {
 
   // Create the bot DO
   const botDoId = c.env.BOT_INSTANCE.idFromName(botName);
+  const botStub = c.env.BOT_INSTANCE.get(botDoId);
+  const initialPair = normalizePair(body.config?.trading?.pairs?.[0] ?? "ETH");
+
+  const activePairConflict = await findRunningBotByPair(c.env, roomId, initialPair);
+  if (activePairConflict) {
+    return c.json({
+      ok: false,
+      error: "PAIR_ALREADY_ACTIVE",
+      message:
+        `Pair ${activePairConflict.pair} is already active in bot ` +
+        `"${activePairConflict.agentId}". Stop it before creating another bot on this pair.`,
+    }, 409);
+  }
+
+  const initialConfig: Record<string, unknown> = {
+    roomId,
+    pair: initialPair,
+  };
+  if (body.config) {
+    Object.assign(initialConfig, body.config);
+  }
+  initialConfig.pair = initialPair;
+  if (initialConfig.trading && typeof initialConfig.trading === "object") {
+    const trading = {
+      ...(initialConfig.trading as Record<string, unknown>),
+      pairs: [initialPair],
+    };
+    initialConfig.trading = trading;
+  }
+
+  const configUrl = new URL(c.req.url);
+  configUrl.pathname = `/api/bot/${botName}/config`;
+  const configResponse = await botStub.fetch(
+    new Request(configUrl.toString(), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: initialConfig }),
+    }),
+  );
+
+  if (!configResponse.ok) {
+    const detail = await configResponse.text().catch(() => "");
+    return c.json({
+      ok: false,
+      error: "BOT_CONFIG_FAILED",
+      message: detail || "Failed to configure bot before room registration",
+    }, 502);
+  }
 
   // Register bot in the room
   const roomDoId = c.env.TRADING_ROOM.idFromName(roomId);
@@ -281,7 +524,7 @@ app.post("/api/room/:roomId/bot", async (c) => {
       body: JSON.stringify({
         agentId: botName,
         name: body.name,
-        pair: body.config?.trading?.pairs?.[0] ?? "ETH",
+        pair: initialPair,
         doId: botDoId.toString(),
       }),
     }),
@@ -310,11 +553,50 @@ app.post("/api/room/:roomId/bot/:id/start", async (c) => {
     return normalized.response;
   }
 
+  let requestedPair = extractRequestedPairFromStartBody(normalized.body);
+  if (!requestedPair) {
+    const status = await loadBotStatus(c.env, botId);
+    requestedPair = normalizePair(status?.pair ?? "ETH");
+  }
+
+  const activePairConflict = await findRunningBotByPair(
+    c.env,
+    roomId,
+    requestedPair,
+    botId,
+  );
+  if (activePairConflict) {
+    return c.json({
+      ok: false,
+      error: "PAIR_ALREADY_ACTIVE",
+      message:
+        `Pair ${activePairConflict.pair} is already active in bot ` +
+        `"${activePairConflict.agentId}". Stop it before starting another bot on this pair.`,
+    }, 409);
+  }
+
+  const forwardBody: Record<string, unknown> = {
+    ...normalized.body,
+  };
+  const config =
+    forwardBody.config && typeof forwardBody.config === "object"
+      ? { ...(forwardBody.config as Record<string, unknown>) }
+      : {};
+  config.pair = requestedPair;
+  if (config.trading && typeof config.trading === "object") {
+    config.trading = {
+      ...(config.trading as Record<string, unknown>),
+      pairs: [requestedPair],
+    };
+  }
+  forwardBody.config = config;
+  forwardBody.pair = requestedPair;
+
   return stub.fetch(
     new Request(url.toString(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(normalized.body),
+      body: JSON.stringify(forwardBody),
     }),
   );
 });

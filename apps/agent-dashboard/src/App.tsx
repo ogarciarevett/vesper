@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RefreshCw,
   Flame,
@@ -15,16 +15,19 @@ import {
   DollarSign,
   Shield,
   Pause,
+  ChevronDown,
+  Plus,
 } from "lucide-react";
 import type { AgentActivity, AgentRealtimeState, AgentState } from "@repo/types";
 import { useTradingSocket, type TradeEvent } from "./hooks/useTradingSocket";
 import { useApiStatus } from "./hooks/useApiStatus";
 import { useBotStatus } from "./hooks/useBotStatus";
 import { OfficeView, type BotAgent } from "./views/OfficeView";
-import { api } from "./lib/api";
+import { api, type AiGatewayModelOption } from "./lib/api";
 
 const ROOM_ID = import.meta.env.VITE_ROOM_ID || "main";
 const BOT_COLORS = [0x22d3ee, 0xa78bfa, 0xfbbf24, 0x34d399, 0xf97316, 0xfb7185];
+const ALLOWED_AI_MODEL_PATTERNS = [/gpt-5\.3-codex/i, /claude-opus-4-6/i, /gemini-3-pro/i];
 const BOT_POSITIONS = [
   { x: 0.25, y: 0.45 },
   { x: 0.5, y: 0.55 },
@@ -49,6 +52,7 @@ interface FallbackState {
   tickCount: number;
   thought: string | null;
   strategy: string;
+  pair: string;
   agentState: AgentState;
   activity: AgentActivity;
   pnlToday: number;
@@ -118,6 +122,14 @@ function toPublicBotId(agentId: string): string {
     return suffix;
   }
   return agentId;
+}
+
+function filterAllowedAiModels(models: AiGatewayModelOption[]): AiGatewayModelOption[] {
+  return models.filter((model) =>
+    ALLOWED_AI_MODEL_PATTERNS.some((pattern) =>
+      pattern.test(`${model.model} ${model.label} ${model.id}`),
+    ),
+  );
 }
 
 // --- Sidebar ---
@@ -273,6 +285,113 @@ function BotCard({
   );
 }
 
+function modelStatusDotClass(model: AiGatewayModelOption | null): string {
+  if (!model) return "bg-white/30";
+  if (model.configured) return "bg-green-400";
+  return "bg-red-400";
+}
+
+function modelStatusText(model: AiGatewayModelOption | null): string {
+  if (!model) return "No model selected";
+  if (model.configured) return "Configured";
+  if (model.status === "missing_key") return "Missing provider key";
+  if (model.status === "gateway_auth") return "Gateway auth missing";
+  if (model.status === "invalid_model") return "Model unavailable";
+  return "Gateway check failed";
+}
+
+function ModelDropdown({
+  models,
+  selectedId,
+  onSelect,
+  disabled,
+}: {
+  models: AiGatewayModelOption[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const selectedModel = useMemo(() => {
+    return models.find((model) => model.id === selectedId) ?? models[0] ?? null;
+  }, [models, selectedId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!target || !(target instanceof Node)) return;
+      if (!containerRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        disabled={disabled || models.length === 0}
+        onClick={() => setOpen((current) => !current)}
+        className="w-full flex items-center justify-between gap-2 rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-left text-xs text-white/90 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${modelStatusDotClass(selectedModel)}`} />
+            <span className="truncate">{selectedModel?.label ?? "No models available"}</span>
+          </div>
+          {selectedModel && (
+            <div className="text-[10px] text-white/40 font-mono truncate mt-0.5">
+              {selectedModel.model}
+            </div>
+          )}
+        </div>
+        <ChevronDown className="h-3.5 w-3.5 text-white/50 shrink-0" />
+      </button>
+
+      {open && models.length > 0 && (
+        <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-white/10 bg-[#141419] shadow-xl">
+          {models.map((model) => (
+            <button
+              key={model.id}
+              type="button"
+              onClick={() => {
+                onSelect(model.id);
+                setOpen(false);
+              }}
+              className={`w-full text-left px-3 py-2 border-b border-white/5 last:border-b-0 hover:bg-white/5 transition-colors ${
+                model.id === selectedModel?.id ? "bg-white/5" : ""
+              }`}
+            >
+              <div className="flex items-center gap-2 text-xs text-white/90">
+                <span className={`w-2 h-2 rounded-full ${modelStatusDotClass(model)}`} />
+                <span className="truncate">{model.label}</span>
+                {model.isDefault && (
+                  <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300">
+                    default
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-white/35 font-mono truncate mt-0.5">
+                {model.model}
+              </div>
+              {!model.configured && (
+                <div className="text-[10px] text-red-300/80 truncate mt-0.5">
+                  {model.message || modelStatusText(model)}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Activity Feed Item ---
 function ActivityFeedItem({ event, botName }: { event: TradeEvent; botName: string }) {
   const eventColors: Record<string, string> = {
@@ -314,6 +433,21 @@ function App() {
   const [fallbackStates, setFallbackStates] = useState<Map<string, FallbackState>>(
     new Map(),
   );
+  const [aiModels, setAiModels] = useState<AiGatewayModelOption[]>([]);
+  const [modelCatalogSource, setModelCatalogSource] = useState<
+    "env" | "gateway" | "default" | ""
+  >("");
+  const [modelCatalogError, setModelCatalogError] = useState<string | null>(null);
+  const [marketPairs, setMarketPairs] = useState<string[]>([]);
+  const [marketPairsSource, setMarketPairsSource] = useState<"hyperliquid" | "fallback" | "">(
+    "",
+  );
+  const [marketPairsError, setMarketPairsError] = useState<string | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string>("");
+  const [newBotName, setNewBotName] = useState<string>("");
+  const [newBotPair, setNewBotPair] = useState<string>("ETH");
+  const [createBotError, setCreateBotError] = useState<string | null>(null);
+  const [isCreatingBot, setIsCreatingBot] = useState(false);
 
   const loadRoomBots = useCallback(async () => {
     try {
@@ -326,15 +460,15 @@ function App() {
         setRoomBindingError(null);
       }
 
-        const next: RoomBot[] = (info.bots ?? []).map((bot, index) => {
-          const visual = getBotVisual(index);
-          return {
-            id: bot.agentId,
-            publicId: toPublicBotId(bot.agentId),
-            name: bot.name || toDisplayName(bot.agentId),
-            pair: bot.pair || "ETH",
-            color: visual.color,
-            x: visual.x,
+      const next: RoomBot[] = (info.bots ?? []).map((bot, index) => {
+        const visual = getBotVisual(index);
+        return {
+          id: bot.agentId,
+          publicId: toPublicBotId(bot.agentId),
+          name: bot.name || toDisplayName(bot.agentId),
+          pair: bot.pair || "ETH",
+          color: visual.color,
+          x: visual.x,
           y: visual.y,
         };
       });
@@ -346,9 +480,58 @@ function App() {
     }
   }, []);
 
+  const loadAiModels = useCallback(async (refresh = false) => {
+    try {
+      const catalog = await api.getAiModels(refresh);
+      const filteredModels = filterAllowedAiModels(catalog.models ?? []);
+      setAiModels(filteredModels);
+      setModelCatalogSource(catalog.source ?? "");
+      setModelCatalogError(null);
+      setSelectedModelId((current) => {
+        if (current && filteredModels.some((model) => model.id === current)) {
+          return current;
+        }
+        return (
+          filteredModels.find((model) => model.isDefault)?.id ??
+          filteredModels.find((model) => model.configured)?.id ??
+          filteredModels[0]?.id ??
+          ""
+        );
+      });
+    } catch (error) {
+      setAiModels([]);
+      setModelCatalogSource("");
+      setModelCatalogError(String(error));
+    }
+  }, []);
+
+  const loadMarketPairs = useCallback(async (refresh = false) => {
+    try {
+      const catalog = await api.getMarketPairs(refresh);
+      const pairs = Array.from(
+        new Set((catalog.pairs ?? []).map((pair) => pair.toUpperCase()).filter(Boolean)),
+      );
+      setMarketPairs(pairs);
+      setMarketPairsSource(catalog.source ?? "");
+      setMarketPairsError(null);
+      setNewBotPair((current) => {
+        const normalizedCurrent = current.trim().toUpperCase();
+        if (normalizedCurrent && pairs.includes(normalizedCurrent)) {
+          return normalizedCurrent;
+        }
+        if (pairs.includes("ETH")) return "ETH";
+        return pairs[0] ?? "";
+      });
+    } catch (error) {
+      setMarketPairs([]);
+      setMarketPairsSource("");
+      setMarketPairsError(String(error));
+    }
+  }, []);
+
   useEffect(() => {
-    void loadRoomBots();
-  }, [loadRoomBots]);
+    void Promise.allSettled([loadRoomBots(), loadAiModels(), loadMarketPairs()]);
+  }, [loadRoomBots, loadAiModels, loadMarketPairs]);
 
   useEffect(() => {
     if (roomState && roomState.roomId !== ROOM_ID) {
@@ -359,8 +542,89 @@ function App() {
   }, [roomState]);
 
   const refreshAll = useCallback(async () => {
-    await Promise.allSettled([refreshApi(), loadRoomBots()]);
-  }, [refreshApi, loadRoomBots]);
+    await Promise.allSettled([
+      refreshApi(),
+      loadRoomBots(),
+      loadAiModels(true),
+      loadMarketPairs(true),
+    ]);
+  }, [refreshApi, loadRoomBots, loadAiModels, loadMarketPairs]);
+
+  const selectedModel = useMemo(() => {
+    return aiModels.find((model) => model.id === selectedModelId) ?? null;
+  }, [aiModels, selectedModelId]);
+
+  const createBot = useCallback(async () => {
+    const botName = newBotName.trim();
+    if (!botName) {
+      setCreateBotError("Bot name is required");
+      return;
+    }
+    if (!selectedModel) {
+      setCreateBotError("Select an AI model first");
+      return;
+    }
+    if (!selectedModel.configured) {
+      setCreateBotError("Selected model is not configured. Pick a green model.");
+      return;
+    }
+
+    const pair = (newBotPair.trim() || "ETH").toUpperCase();
+    if (!pair) {
+      setCreateBotError("Select a pair first");
+      return;
+    }
+    if (!marketPairs.includes(pair)) {
+      setCreateBotError(`Pair ${pair} is not available in the Hyperliquid catalog`);
+      return;
+    }
+
+    const activePairOwner = roomBots.find((bot) => {
+      const ws = botStates.get(bot.id);
+      const fb = fallbackStates.get(bot.id);
+      const botPair = (fb?.pair || bot.pair || "").toUpperCase();
+      const isRunning = (ws?.state || fb?.agentState) === "RUNNING";
+      return isRunning && botPair === pair;
+    });
+    if (activePairOwner) {
+      setCreateBotError(
+        `Pair ${pair} is already active in ${activePairOwner.name}. Stop it first.`,
+      );
+      return;
+    }
+    const reasoning: Record<string, unknown> = {
+      model: selectedModel.model,
+    };
+    if (selectedModel.byokAlias) {
+      reasoning.byokAlias = selectedModel.byokAlias;
+    }
+
+    try {
+      setIsCreatingBot(true);
+      setCreateBotError(null);
+      await api.createBotInRoom(ROOM_ID, botName, {
+        trading: { pairs: [pair] },
+        reasoning,
+      });
+      setNewBotName("");
+      await Promise.allSettled([loadRoomBots(), loadAiModels(true), loadMarketPairs(true)]);
+    } catch (error) {
+      setCreateBotError(String(error));
+    } finally {
+      setIsCreatingBot(false);
+    }
+  }, [
+    newBotName,
+    selectedModel,
+    newBotPair,
+    marketPairs,
+    roomBots,
+    botStates,
+    fallbackStates,
+    loadRoomBots,
+    loadAiModels,
+    loadMarketPairs,
+  ]);
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -405,6 +669,7 @@ function App() {
             tickCount: status?.tickCount ?? 0,
             thought,
             strategy: status?.strategy ?? "",
+            pair: status?.pair ?? bot.pair,
             agentState: (status?.agentState as AgentState) ?? "CREATED",
             activity: (status?.activity as AgentActivity) ?? "IDLE",
             pnlToday: status?.pnlToday ?? 0,
@@ -461,6 +726,21 @@ function App() {
   const runningCount = botAgents.filter((b) => b.isRunning).length;
   const idleCount = Math.max(roomBots.length - runningCount, 0);
   const botNameMap = useMemo(() => new Map(roomBots.map((b) => [b.id, b.name])), [roomBots]);
+  const activePairOwners = useMemo(() => {
+    const owners = new Map<string, string>();
+    for (const bot of roomBots) {
+      const ws = botStates.get(bot.id);
+      const fb = fallbackStates.get(bot.id);
+      const isRunning = (ws?.state || fb?.agentState) === "RUNNING";
+      if (!isRunning) continue;
+      const pair = (fb?.pair || bot.pair || "").toUpperCase();
+      if (!pair || owners.has(pair)) continue;
+      owners.set(pair, bot.name);
+    }
+    return owners;
+  }, [roomBots, botStates, fallbackStates]);
+  const selectedPairLockedBy =
+    newBotPair.trim().length > 0 ? activePairOwners.get(newBotPair.toUpperCase()) : undefined;
 
   const wsStatusClass =
     connectionState === "connected"
@@ -488,6 +768,14 @@ function App() {
         : connectionState === "connecting"
           ? "WS CONNECTING"
           : "WS ERROR";
+  const canCreateBot =
+    !isCreatingBot &&
+    newBotName.trim().length > 0 &&
+    newBotPair.trim().length > 0 &&
+    marketPairs.length > 0 &&
+    !selectedPairLockedBy &&
+    !!selectedModel &&
+    selectedModel.configured;
 
   return (
     <div className="min-h-screen w-full bg-[#111114] text-white font-sans">
@@ -588,6 +876,104 @@ function App() {
             </div>
 
             <div className="col-span-4 space-y-3">
+              <div className="rounded-xl bg-black/30 border border-white/10 p-3 space-y-2.5">
+                <h3 className="text-xs font-semibold text-white/70 uppercase tracking-wider flex items-center gap-1.5">
+                  <Plus className="h-3 w-3" />
+                  Create Agent
+                </h3>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-white/45 uppercase tracking-wider">Bot Name</label>
+                  <input
+                    value={newBotName}
+                    onChange={(event) => {
+                      setNewBotName(event.target.value);
+                      setCreateBotError(null);
+                    }}
+                    placeholder="bot-gamma"
+                    className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/60"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] text-white/45 uppercase tracking-wider">Pair</label>
+                    <span className="text-[10px] text-white/30">
+                      source: <span className="text-white/55">{marketPairsSource || "--"}</span>
+                    </span>
+                  </div>
+                  <select
+                    value={newBotPair}
+                    onChange={(event) => {
+                      setNewBotPair(event.target.value.toUpperCase());
+                      setCreateBotError(null);
+                    }}
+                    disabled={isCreatingBot || marketPairs.length === 0}
+                    className="w-full rounded-lg bg-black/30 border border-white/10 px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-400/60 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {marketPairs.length === 0 && <option value="">No pairs available</option>}
+                    {marketPairs.map((pair) => {
+                      const lockedBy = activePairOwners.get(pair);
+                      const isCurrent = pair === newBotPair;
+                      return (
+                        <option
+                          key={pair}
+                          value={pair}
+                          disabled={Boolean(lockedBy) && !isCurrent}
+                        >
+                          {lockedBy ? `${pair} (active: ${lockedBy})` : pair}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  {selectedPairLockedBy && (
+                    <div className="text-[10px] text-yellow-300/90">
+                      Pair {newBotPair} is active in {selectedPairLockedBy}. Stop it first.
+                    </div>
+                  )}
+                  {marketPairsError && (
+                    <p className="text-[10px] text-red-300/85">{marketPairsError}</p>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] text-white/45 uppercase tracking-wider">AI Model</label>
+                    <span className="text-[10px] text-white/30">
+                      source: <span className="text-white/55">{modelCatalogSource || "--"}</span>
+                    </span>
+                  </div>
+                  <ModelDropdown
+                    models={aiModels}
+                    selectedId={selectedModelId}
+                    onSelect={(id) => {
+                      setSelectedModelId(id);
+                      setCreateBotError(null);
+                    }}
+                    disabled={isCreatingBot}
+                  />
+                  {selectedModel && (
+                    <div className="text-[10px] text-white/45 flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${modelStatusDotClass(selectedModel)}`} />
+                      {modelStatusText(selectedModel)}
+                    </div>
+                  )}
+                </div>
+
+                {modelCatalogError && (
+                  <p className="text-[10px] text-red-300/85">{modelCatalogError}</p>
+                )}
+                {createBotError && <p className="text-[10px] text-red-300/85">{createBotError}</p>}
+
+                <button
+                  onClick={() => void createBot()}
+                  disabled={!canCreateBot}
+                  className="w-full rounded-lg px-3 py-2 text-xs font-medium bg-green-500/15 border border-green-500/30 text-green-300 hover:bg-green-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isCreatingBot ? "Creating..." : "Create Bot in Room"}
+                </button>
+              </div>
+
               <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider flex items-center gap-1.5">
                 <Bot className="h-3 w-3" />
                 Agents

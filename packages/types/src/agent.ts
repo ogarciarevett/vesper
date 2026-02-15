@@ -60,6 +60,7 @@ export interface RiskConfig {
 
 export interface ReasoningConfig {
 	model: string;
+	byokAlias?: string;
 	intervalSeconds: number;
 	temperature: number;
 	maxTokens: number;
