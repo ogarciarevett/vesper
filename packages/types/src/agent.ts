@@ -24,7 +24,21 @@ export type StrategyType =
 	| "SENTIMENT_ANALYZER"
 	| "MEAN_REVERSION"
 	| "BREAKOUT_HUNTER"
-	| "GRID_TRADER";
+	| "GRID_TRADER"
+	| "POLYMARKET_SCRAPER"
+	| "POLYMARKET_TWITTER"
+	| "POLYMARKET_EXECUTOR"
+	| "POLYMARKET_REVIEWER";
+
+/** Room types for different verticals */
+export type RoomType = "TRADING" | "PREDICTION_MARKET";
+
+/** Agent appearance configuration for visualization */
+export interface AgentAppearance {
+	spriteId: string;
+	accentColor: string;
+	voiceId: string;
+}
 
 /** Agent configuration */
 export interface AgentConfig {
@@ -35,6 +49,7 @@ export interface AgentConfig {
 	trading: TradingConfig;
 	risk: RiskConfig;
 	reasoning: ReasoningConfig;
+	appearance?: AgentAppearance;
 }
 
 export interface StrategyConfig {

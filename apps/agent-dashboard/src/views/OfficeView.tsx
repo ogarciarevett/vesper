@@ -20,6 +20,7 @@ export interface BotAgent {
 interface OfficeViewProps {
   bots: BotAgent[];
   agentMessages?: AgentMessage[];
+  speakingAgentId?: string | null;
 }
 
 /** Map AgentActivity to office zone positions (normalized 0-1) */
@@ -166,13 +167,14 @@ function detectOpaqueBounds(img: HTMLImageElement): SpriteBounds | null {
   };
 }
 
-export function OfficeView({ bots, agentMessages }: OfficeViewProps) {
+export function OfficeView({ bots, agentMessages, speakingAgentId }: OfficeViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgRef = useRef<HTMLImageElement | null>(null);
   const botSpriteRef = useRef<HTMLImageElement | null>(null);
   const botSpriteBoundsRef = useRef<SpriteBounds | null>(null);
   const charsRef = useRef<Map<string, CharState>>(new Map());
   const animRef = useRef<number>(0);
+  const speakingRef = useRef<string | null>(null);
   const prevTimeRef = useRef<number>(0);
 
   // Initialize / update character state from bot data
@@ -242,6 +244,11 @@ export function OfficeView({ bots, agentMessages }: OfficeViewProps) {
     }
   }, [agentMessages]);
 
+  // Sync speaking agent ID
+  useEffect(() => {
+    speakingRef.current = speakingAgentId ?? null;
+  }, [speakingAgentId]);
+
   // Load background image
   useEffect(() => {
     const img = new Image();
@@ -299,7 +306,28 @@ export function OfficeView({ bots, agentMessages }: OfficeViewProps) {
 
         // Draw characters
         const chars = charsRef.current;
-        for (const char of chars.values()) {
+        // Count agents at conference table for meeting detection
+        let agentsAtConference = 0;
+        for (const c of chars.values()) {
+          if (c.isRunning && c.activity === "DECIDING") agentsAtConference++;
+        }
+        const meetingInProgress = agentsAtConference >= 2;
+
+        // Draw meeting glow at conference table if meeting is in progress
+        if (meetingInProgress) {
+          const confPos = ZONE_POSITIONS.CONFERENCE_TABLE;
+          const confX = bx + confPos.x * bw;
+          const confY = by + confPos.y * bh;
+          ctx.save();
+          ctx.globalAlpha = 0.08 + Math.sin(time * 0.003) * 0.04;
+          ctx.fillStyle = "#fbbf24";
+          ctx.beginPath();
+          ctx.ellipse(confX, confY, 60 * scale, 35 * scale, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        for (const [charId, char] of chars.entries()) {
           // Smoothly move toward target position
           const lerpSpeed = 0.003 * dt;
           char.x += (char.targetX - char.x) * Math.min(lerpSpeed, 1);
@@ -391,6 +419,28 @@ export function OfficeView({ bots, agentMessages }: OfficeViewProps) {
             ctx.arc(cx, spriteY - 6 * scale, 4 * scale, 0, Math.PI * 2);
             ctx.stroke();
             ctx.globalAlpha = 1;
+          }
+
+          // Speaking indicator (Phase 2: voice)
+          if (speakingRef.current === charId) {
+            ctx.save();
+            const waveAlpha = 0.5 + Math.sin(time * 0.008) * 0.3;
+            ctx.globalAlpha = waveAlpha;
+            ctx.strokeStyle = "#22c55e";
+            ctx.lineWidth = 1.5;
+            // Draw sound wave arcs
+            for (let i = 1; i <= 3; i++) {
+              ctx.beginPath();
+              ctx.arc(
+                cx + spriteWidth / 2 + 4 * scale,
+                spriteY + spriteHeight * 0.3,
+                (i * 3) * scale,
+                -Math.PI / 4,
+                Math.PI / 4,
+              );
+              ctx.stroke();
+            }
+            ctx.restore();
           }
 
           // Name tag + activity

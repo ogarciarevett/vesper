@@ -12,4 +12,6 @@ type Env = CloudflareBindings & {
   CCXT_BINANCE_API_KEY?: string;
   CCXT_BINANCE_API_SECRET?: string;
   CCXT_BINANCE_TESTNET?: string;
+  ELEVENLABS_API_KEY?: string;
+  ELEVENLABS_ENABLED?: string;
 };

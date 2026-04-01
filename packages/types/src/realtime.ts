@@ -1,4 +1,4 @@
-import type { AgentActivity, AgentState } from "./agent";
+import type { AgentActivity, AgentState, RoomType } from "./agent";
 import type { Position } from "./trading";
 
 /** Agent conversation message types */
@@ -20,6 +20,29 @@ export interface AgentMessagePayload {
 	messageType: AgentMessageType;
 	replyToMessageId: string | null;
 	timestamp: string;
+	/** R2 URL for synthesized voice audio (Phase 2) */
+	audioUrl?: string;
+}
+
+/** Proposal payload for inter-agent consensus (Phase 3) */
+export interface ProposalPayload {
+	proposalId: string;
+	action: string;
+	pair: string;
+	rationale: string;
+	confidence: number;
+	data: Record<string, unknown>;
+}
+
+/** Proposal state tracked by room for consensus */
+export interface ProposalState {
+	proposal: ProposalPayload;
+	fromAgentId: string;
+	approvals: string[];
+	rejections: string[];
+	status: "PENDING" | "APPROVED" | "REJECTED" | "EXECUTED";
+	createdAt: string;
+	resolvedAt: string | null;
 }
 
 /** Server -> Client: agent conversation message */
@@ -80,6 +103,7 @@ export interface PongMessage {
 export interface RoomStateMessage {
 	type: "ROOM_STATE";
 	roomId: string;
+	roomType?: RoomType;
 	timestamp: string;
 	botCount: number;
 	activeBotCount: number;
@@ -87,6 +111,10 @@ export interface RoomStateMessage {
 	totalPnlToday: number;
 	totalExposure: number;
 	riskStatus: "NORMAL" | "WARNING" | "BREACHED";
+	/** Active proposals awaiting consensus (Phase 3) */
+	pendingProposals?: number;
+	/** Voice enabled for this room (Phase 2) */
+	voiceEnabled?: boolean;
 }
 
 /** Trade lifecycle event emitted by a bot */

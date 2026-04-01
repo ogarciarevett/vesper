@@ -23,6 +23,8 @@ import { useTradingSocket, type TradeEvent } from "./hooks/useTradingSocket";
 import { useApiStatus } from "./hooks/useApiStatus";
 import { useBotStatus } from "./hooks/useBotStatus";
 import { OfficeView, type BotAgent } from "./views/OfficeView";
+import { ConversationPanel } from "./views/ConversationPanel";
+import { useVoiceQueue } from "./hooks/useVoiceQueue";
 import { api, type AiGatewayModelOption } from "./lib/api";
 
 const ROOM_ID = import.meta.env.VITE_ROOM_ID || "main";
@@ -426,6 +428,7 @@ function App() {
     agentMessages,
     lastError,
   } = useTradingSocket(ROOM_ID);
+  const voiceQueue = useVoiceQueue(agentMessages);
   const { online: apiOnline, lastUpdate, refresh: refreshApi } = useApiStatus();
 
   const [roomBots, setRoomBots] = useState<RoomBot[]>([]);
@@ -873,7 +876,13 @@ function App() {
         <div className="px-6 pb-6">
           <div className="grid grid-cols-12 gap-4">
             <div className="col-span-8">
-              <OfficeView bots={botAgents} agentMessages={agentMessages} />
+              <OfficeView bots={botAgents} agentMessages={agentMessages} speakingAgentId={voiceQueue.speakingAgentId} />
+              <ConversationPanel
+                messages={agentMessages}
+                voiceState={voiceQueue}
+                onToggleVoice={voiceQueue.toggleEnabled}
+                onVolumeChange={voiceQueue.setVolume}
+              />
             </div>
 
             <div className="col-span-4 space-y-3">
