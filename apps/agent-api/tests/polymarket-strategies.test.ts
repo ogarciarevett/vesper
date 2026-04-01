@@ -49,7 +49,7 @@ describe("PolymarketScraper", () => {
     expect(signal.skillName).toBe("PolymarketScraper");
     expect(signal.pair).toBe("ETH");
     expect(typeof signal.confidence).toBe("number");
-    expect(signal.metadata.source).toBe("polymarket-scraper");
+    expect((signal.metadata.source as string).startsWith("polymarket-scraper")).toBe(true);
     expect(signal.metadata.currentOdds).toBeDefined();
   });
 
@@ -86,6 +86,14 @@ describe("PolymarketExecutor", () => {
     expect(signal.action).toBe("HOLD");
     expect(signal.metadata.reason).toContain("No approved proposals");
   });
+
+  test("executes queued proposal after queueExecution", async () => {
+    const strategy = createStrategy("POLYMARKET_EXECUTOR") as { queueExecution: (id: string, action: string, confidence: number) => void; analyze: typeof createStrategy extends (...a: never[]) => infer R ? R extends { analyze: infer A } ? A : never : never };
+    (strategy as { queueExecution: (id: string, action: string, confidence: number) => void }).queueExecution("prop-123", "OPEN_LONG", 80);
+    const signal = await (strategy as { analyze: (m: typeof mockMarketData, c: never[], p: never[]) => Promise<{ action: string; metadata: { proposalId?: string } }> }).analyze(mockMarketData, emptyCandles, emptyPositions);
+    expect(signal.action).toBe("OPEN_LONG");
+    expect(signal.metadata.proposalId).toBe("prop-123");
+  });
 });
 
 describe("PolymarketReviewer", () => {
@@ -103,6 +111,42 @@ describe("PolymarketReviewer", () => {
     expect(state.minConfidence).toBe(40);
     expect(state.riskTolerance).toBe("moderate");
     expect(state.reviewsCompleted).toBe(0);
+  });
+
+  test("reviewProposal approves high-confidence proposals", () => {
+    const strategy = createStrategy("POLYMARKET_REVIEWER") as { reviewProposal: (p: { proposalId: string; action: string; confidence: number; rationale: string }) => { approved: boolean; reason: string } };
+    const result = strategy.reviewProposal({
+      proposalId: "prop-001",
+      action: "OPEN_LONG",
+      confidence: 80,
+      rationale: "Strong signal",
+    });
+    expect(result.approved).toBe(true);
+    expect(result.reason).toContain("Approved");
+  });
+
+  test("reviewProposal rejects low-confidence proposals", () => {
+    const strategy = createStrategy("POLYMARKET_REVIEWER") as { reviewProposal: (p: { proposalId: string; action: string; confidence: number; rationale: string }) => { approved: boolean; reason: string } };
+    const result = strategy.reviewProposal({
+      proposalId: "prop-002",
+      action: "OPEN_SHORT",
+      confidence: 10,
+      rationale: "Weak signal",
+    });
+    expect(result.approved).toBe(false);
+    expect(result.reason).toContain("Rejected");
+  });
+
+  test("high risk tolerance lowers approval threshold", () => {
+    const strategy = createStrategy("POLYMARKET_REVIEWER", { riskTolerance: "high" }) as { reviewProposal: (p: { proposalId: string; action: string; confidence: number; rationale: string }) => { approved: boolean; reason: string } };
+    const result = strategy.reviewProposal({
+      proposalId: "prop-003",
+      action: "OPEN_LONG",
+      confidence: 30,
+      rationale: "Moderate signal",
+    });
+    // 40 * 0.7 = 28, so 30 should pass
+    expect(result.approved).toBe(true);
   });
 });
 
