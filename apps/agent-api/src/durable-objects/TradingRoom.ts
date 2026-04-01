@@ -1,6 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
   AgentRealtimeState,
+  AgentConversationMessage,
+  AgentMessagePayload,
+  AgentMessageType,
   ServerMessage,
   ClientMessage,
   FullStateMessage,
@@ -57,6 +60,8 @@ interface EmergencyStopResult {
   message: string;
 }
 
+const MAX_RECENT_MESSAGES = 100;
+
 export class TradingRoom extends DurableObject {
   private readonly _env: Env;
   sessions: Map<WebSocket, SessionMeta>;
@@ -64,6 +69,8 @@ export class TradingRoom extends DurableObject {
   seqCounters: Map<string, number>;
   /** Cached bot states for FULL_STATE on connect/subscribe */
   botStates: Map<string, AgentRealtimeState>;
+  /** In-memory cache of recent agent conversation messages */
+  recentMessages: AgentMessagePayload[];
   private emergencyInProgress = false;
 
   constructor(state: DurableObjectState, env: Env) {
@@ -72,6 +79,15 @@ export class TradingRoom extends DurableObject {
     this.sessions = new Map();
     this.seqCounters = new Map();
     this.botStates = new Map();
+    this.recentMessages = [];
+
+    // Hydrate recent messages from storage on first load
+    this.ctx.blockConcurrencyWhile(async () => {
+      const stored = await this.ctx.storage.get<AgentMessagePayload[]>("recentMessages");
+      if (stored) {
+        this.recentMessages = stored;
+      }
+    });
   }
 
   private defaultRoomConfig(roomId = this.ctx.id.toString()): RoomConfig {
@@ -274,6 +290,16 @@ export class TradingRoom extends DurableObject {
     // GET /info - room info
     if (request.method === "GET" && path.endsWith("/info")) {
       return this.handleGetInfo(roomIdHint ?? undefined);
+    }
+
+    // POST /message - agent conversation message
+    if (request.method === "POST" && path.endsWith("/message")) {
+      return this.handleAgentMessage(request);
+    }
+
+    // GET /messages - retrieve recent conversation history
+    if (request.method === "GET" && path.endsWith("/messages")) {
+      return this.handleGetMessages(url);
     }
 
     // POST /emergency-stop - emergency shutdown
@@ -580,6 +606,77 @@ export class TradingRoom extends DurableObject {
       };
     } finally {
       this.emergencyInProgress = false;
+    }
+  }
+
+  private async handleAgentMessage(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      fromAgentId: string;
+      toAgentId?: string | null;
+      content: string;
+      messageType: AgentMessageType;
+      replyToMessageId?: string | null;
+    };
+
+    if (!body.fromAgentId || !body.content) {
+      return Response.json(
+        { ok: false, message: "fromAgentId and content are required" },
+        { status: 400 },
+      );
+    }
+
+    const payload: AgentMessagePayload = {
+      messageId: crypto.randomUUID(),
+      fromAgentId: body.fromAgentId,
+      toAgentId: body.toAgentId ?? null,
+      content: body.content,
+      messageType: body.messageType ?? "THOUGHT",
+      replyToMessageId: body.replyToMessageId ?? null,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Store in ring buffer
+    this.recentMessages.push(payload);
+    if (this.recentMessages.length > MAX_RECENT_MESSAGES) {
+      this.recentMessages = this.recentMessages.slice(-MAX_RECENT_MESSAGES);
+    }
+
+    // Persist to DO storage
+    this.ctx.waitUntil(
+      this.ctx.storage.put("recentMessages", this.recentMessages),
+    );
+
+    // Update bot's lastMessage in cached state
+    const botState = this.botStates.get(body.fromAgentId);
+    if (botState) {
+      botState.lastMessage = payload;
+      this.botStates.set(body.fromAgentId, botState);
+    }
+
+    // Broadcast to all WebSocket sessions
+    this.broadcastAgentMessage(payload);
+
+    return Response.json({ ok: true, messageId: payload.messageId });
+  }
+
+  private handleGetMessages(url: URL): Response {
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Math.min(Math.max(Number.parseInt(limitParam, 10) || 50, 1), MAX_RECENT_MESSAGES) : 50;
+    const messages = this.recentMessages.slice(-limit);
+    return Response.json({ ok: true, messages });
+  }
+
+  private broadcastAgentMessage(payload: AgentMessagePayload): void {
+    const roomId = this.ctx.id.toString();
+
+    const msg: AgentConversationMessage = {
+      type: "AGENT_MESSAGE",
+      roomId,
+      payload,
+    };
+
+    for (const [ws] of this.sessions) {
+      this.sendToWs(ws, msg);
     }
   }
 

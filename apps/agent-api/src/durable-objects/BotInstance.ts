@@ -13,6 +13,7 @@ import {
 } from "../connectors/index.js";
 import type {
   AgentActivity,
+  AgentMessageType,
   AgentRealtimeState,
   AgentState,
   Candle,
@@ -629,10 +630,18 @@ export class BotInstance extends DurableObject {
           this.botState.positions,
         );
         this.botState.currentThought = decision.rationale;
+        await this.emitAgentMessage(
+          `[${this.botState.pair}] ${decision.rationale}`,
+          "ANALYSIS",
+        );
       } catch (aiErr) {
         console.error("AI reasoning failed, falling back to HOLD:", aiErr);
         this.botState.currentThought =
           "AI reasoning unavailable, holding position";
+        await this.emitAgentMessage(
+          "AI reasoning unavailable, holding position",
+          "STATUS_UPDATE",
+        );
         decision = null;
       }
 
@@ -694,6 +703,10 @@ export class BotInstance extends DurableObject {
       if (decision && decision.action !== "HOLD") {
         this.botState.activity = "EXECUTING";
         this.botState.currentThought = `Executing ${decision.action} ${decision.pair}...`;
+        await this.emitAgentMessage(
+          `Executing ${decision.action} on ${decision.pair} (confidence: ${decision.confidence}%)`,
+          "STATUS_UPDATE",
+        );
 
         try {
           const execution = await this.executeDecision(
@@ -1081,6 +1094,7 @@ Based on this data, provide your trading decision as a JSON object.`;
       pnlToday: this.botState.pnlToday,
       tradeCountToday: this.botState.tradeCountToday,
       lastTradeAt: this.botState.lastTradeAt,
+      lastMessage: null,
       visualPosition: {
         x: 0,
         y: 0,
@@ -1089,6 +1103,35 @@ Based on this data, provide your trading decision as a JSON object.`;
         animation: this.botState.activity === "IDLE" ? "idle" : "working",
       },
     };
+  }
+
+  /** Send a conversation message to the room for visualization */
+  private async emitAgentMessage(
+    content: string,
+    messageType: AgentMessageType,
+    toAgentId?: string,
+    replyToMessageId?: string,
+  ): Promise<void> {
+    if (!this.botState.roomId) return;
+    try {
+      const roomDoId = this._env.TRADING_ROOM.idFromName(this.botState.roomId);
+      const roomStub = this._env.TRADING_ROOM.get(roomDoId);
+      await roomStub.fetch(
+        new Request("https://internal/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromAgentId: this.botState.agentId,
+            toAgentId: toAgentId ?? null,
+            content,
+            messageType,
+            replyToMessageId: replyToMessageId ?? null,
+          }),
+        }),
+      );
+    } catch {
+      // Non-critical; don't crash the trading loop
+    }
   }
 
   private async reportTradeEventToRoom(

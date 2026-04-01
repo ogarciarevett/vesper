@@ -1,6 +1,34 @@
 import type { AgentActivity, AgentState } from "./agent";
 import type { Position } from "./trading";
 
+/** Agent conversation message types */
+export type AgentMessageType =
+	| "THOUGHT"
+	| "ANALYSIS"
+	| "PROPOSAL"
+	| "REVIEW"
+	| "AGREEMENT"
+	| "DISAGREEMENT"
+	| "STATUS_UPDATE";
+
+/** A message sent from one agent to another (or broadcast to room) */
+export interface AgentMessagePayload {
+	messageId: string;
+	fromAgentId: string;
+	toAgentId: string | null;
+	content: string;
+	messageType: AgentMessageType;
+	replyToMessageId: string | null;
+	timestamp: string;
+}
+
+/** Server -> Client: agent conversation message */
+export interface AgentConversationMessage {
+	type: "AGENT_MESSAGE";
+	roomId: string;
+	payload: AgentMessagePayload;
+}
+
 /** WebSocket message types from server to client */
 export type ServerMessage =
 	| StateDeltaMessage
@@ -8,7 +36,8 @@ export type ServerMessage =
 	| ErrorMessage
 	| PongMessage
 	| RoomStateMessage
-	| TradeEventMessage;
+	| TradeEventMessage
+	| AgentConversationMessage;
 
 /** WebSocket message types from client to server */
 export type ClientMessage =
@@ -98,6 +127,8 @@ export interface AgentRealtimeState {
 	pnlToday: number;
 	tradeCountToday: number;
 	lastTradeAt: string | null;
+	/** Recent conversation message (displayed as chat bubble) */
+	lastMessage: AgentMessagePayload | null;
 	/** Position in the virtual office (Phaser coordinates) */
 	visualPosition: {
 		x: number;

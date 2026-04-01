@@ -423,6 +423,7 @@ function App() {
     botStates,
     roomState,
     tradeEvents,
+    agentMessages,
     lastError,
   } = useTradingSocket(ROOM_ID);
   const { online: apiOnline, lastUpdate, refresh: refreshApi } = useApiStatus();
@@ -872,7 +873,7 @@ function App() {
         <div className="px-6 pb-6">
           <div className="grid grid-cols-12 gap-4">
             <div className="col-span-8">
-              <OfficeView bots={botAgents} />
+              <OfficeView bots={botAgents} agentMessages={agentMessages} />
             </div>
 
             <div className="col-span-4 space-y-3">

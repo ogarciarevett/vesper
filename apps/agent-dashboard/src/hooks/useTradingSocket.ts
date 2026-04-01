@@ -27,6 +27,17 @@ export interface TradeEvent {
   data: Record<string, unknown>;
 }
 
+/** Agent conversation message from AGENT_MESSAGE */
+export interface AgentMessage {
+  messageId: string;
+  fromAgentId: string;
+  toAgentId: string | null;
+  content: string;
+  messageType: string;
+  replyToMessageId: string | null;
+  timestamp: string;
+}
+
 const PING_INTERVAL_MS = 30_000;
 const RECONNECT_DELAY_MS = 3_000;
 
@@ -51,6 +62,7 @@ export function useTradingSocket(roomId: string) {
   );
   const [roomState, setRoomState] = useState<RoomState | null>(null);
   const [tradeEvents, setTradeEvents] = useState<TradeEvent[]>([]);
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -130,6 +142,19 @@ export function useTradingSocket(roomId: string) {
             ...prev,
           ];
           if (next.length > 50) next.length = 50;
+          return next;
+        });
+        break;
+      }
+
+      case "AGENT_MESSAGE": {
+        const agentMsg = msg as unknown as {
+          type: "AGENT_MESSAGE";
+          payload: AgentMessage;
+        };
+        setAgentMessages((prev) => {
+          const next = [agentMsg.payload, ...prev];
+          if (next.length > 100) next.length = 100;
           return next;
         });
         break;
@@ -254,6 +279,7 @@ export function useTradingSocket(roomId: string) {
     botStates,
     roomState,
     tradeEvents,
+    agentMessages,
     lastError,
     subscribe,
     unsubscribe,

@@ -426,6 +426,37 @@ app.post("/api/room/:id/emergency-stop", async (c) => {
   return c.json(data);
 });
 
+/** Post a conversation message to a room */
+app.post("/api/room/:id/message", async (c) => {
+  const roomId = c.req.param("id");
+  const id = c.env.TRADING_ROOM.idFromName(roomId);
+  const stub = c.env.TRADING_ROOM.get(id);
+
+  const resp = await stub.fetch(
+    new Request("https://internal/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: await c.req.text(),
+    }),
+  );
+  return c.json(await resp.json());
+});
+
+/** Get recent conversation messages for a room */
+app.get("/api/room/:id/messages", async (c) => {
+  const roomId = c.req.param("id");
+  const id = c.env.TRADING_ROOM.idFromName(roomId);
+  const stub = c.env.TRADING_ROOM.get(id);
+
+  const limit = c.req.query("limit") ?? "50";
+  const resp = await stub.fetch(
+    new Request(`https://internal/messages?limit=${limit}`, {
+      method: "GET",
+    }),
+  );
+  return c.json(await resp.json());
+});
+
 /** WebSocket upgrade for a room */
 app.get("/api/room/:id/ws", async (c) => {
   const roomId = c.req.param("id");
