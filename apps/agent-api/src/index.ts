@@ -426,6 +426,68 @@ app.post("/api/room/:id/emergency-stop", async (c) => {
   return c.json(data);
 });
 
+/** Post a conversation message to a room */
+app.post("/api/room/:id/message", async (c) => {
+  const roomId = c.req.param("id");
+  const id = c.env.TRADING_ROOM.idFromName(roomId);
+  const stub = c.env.TRADING_ROOM.get(id);
+
+  const resp = await stub.fetch(
+    new Request("https://internal/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: await c.req.text(),
+    }),
+  );
+  return c.json(await resp.json());
+});
+
+/** Get recent conversation messages for a room */
+app.get("/api/room/:id/messages", async (c) => {
+  const roomId = c.req.param("id");
+  const id = c.env.TRADING_ROOM.idFromName(roomId);
+  const stub = c.env.TRADING_ROOM.get(id);
+
+  const limit = c.req.query("limit") ?? "50";
+  const resp = await stub.fetch(
+    new Request(`https://internal/messages?limit=${limit}`, {
+      method: "GET",
+    }),
+  );
+  return c.json(await resp.json());
+});
+
+/** Get proposals for a room (Phase 3) */
+app.get("/api/room/:id/proposals", async (c) => {
+  const roomId = c.req.param("id");
+  const id = c.env.TRADING_ROOM.idFromName(roomId);
+  const stub = c.env.TRADING_ROOM.get(id);
+
+  const status = c.req.query("status") ?? "PENDING";
+  const resp = await stub.fetch(
+    new Request(`https://internal/proposals?status=${status}`, {
+      method: "GET",
+    }),
+  );
+  return c.json(await resp.json());
+});
+
+/** Serve voice audio files from R2 (Phase 2) */
+app.get("/api/voice/:file", async (c) => {
+  const file = c.req.param("file");
+  const key = `voice/${file}`;
+  const object = await c.env.OPENCLAW_DATA.get(key);
+
+  if (!object) {
+    return c.text("Not found", 404);
+  }
+
+  const headers = new Headers();
+  headers.set("Content-Type", "audio/mpeg");
+  headers.set("Cache-Control", "public, max-age=3600");
+  return new Response(object.body, { headers });
+});
+
 /** WebSocket upgrade for a room */
 app.get("/api/room/:id/ws", async (c) => {
   const roomId = c.req.param("id");

@@ -13,11 +13,15 @@ import {
 } from "../connectors/index.js";
 import type {
   AgentActivity,
+  AgentMessagePayload,
+  AgentMessageType,
   AgentRealtimeState,
   AgentState,
   Candle,
   MarketData,
   Position,
+  ProposalPayload,
+  ProposalState,
   ReasoningConfig,
   RiskConfig,
   Signal,
@@ -53,6 +57,22 @@ interface BotState {
   pnlToday: number;
   tradeCountToday: number;
   lastTradeAt: string | null;
+  /** Prior AI reasoning for context persistence (last 10) */
+  reasoningHistory: Array<{
+    timestamp: string;
+    action: string;
+    rationale: string;
+    confidence: number;
+  }>;
+  /** Proposal IDs already executed (prevent double-execution) */
+  executedProposalIds: string[];
+}
+
+/** Room context fetched before each tick */
+interface RoomContext {
+  messages: AgentMessagePayload[];
+  pendingProposals: ProposalState[];
+  approvedProposals: ProposalState[];
 }
 
 type StrategySelection = StrategyType | "FUNDING_RATE_ARB";
@@ -150,6 +170,8 @@ export class BotInstance extends DurableObject {
       pnlToday: 0,
       tradeCountToday: 0,
       lastTradeAt: null,
+      reasoningHistory: [],
+      executedProposalIds: [],
     };
   }
 
@@ -209,6 +231,12 @@ export class BotInstance extends DurableObject {
   ): void {
     this.botState.strategyType = strategyType;
     this.botState.strategyParams = params;
+
+    // Inject API keys for strategies that need external services
+    if (strategyType === "POLYMARKET_SCRAPER" && this._env.FIRECRAWL_API_KEY) {
+      params.firecrawlApiKey = this._env.FIRECRAWL_API_KEY;
+    }
+
     this.strategy = createStrategy(
       strategyType,
       params,
@@ -571,6 +599,9 @@ export class BotInstance extends DurableObject {
         aggregator.addConnector(fallbackConnector);
       }
 
+      // Fetch room conversation context for debate loop
+      const roomContext = await this.fetchRoomContext();
+
       this.botState.activity = "ANALYZING";
       this.botState.currentThought = `Fetching market data for ${this.botState.pair}...`;
       await this.saveState();
@@ -596,6 +627,9 @@ export class BotInstance extends DurableObject {
       console.log(
         `[Bot:${this.botState.agentId}] Signal: ${signal.action} (confidence: ${signal.confidence})`,
       );
+
+      // Inter-agent debate: emit proposals, auto-review, queue executions
+      await this.handleDebateReactions(signal, roomContext);
 
       if (signal.action === "HOLD") {
         this.botState.activity = "COOLDOWN";
@@ -627,12 +661,33 @@ export class BotInstance extends DurableObject {
           signal,
           marketData,
           this.botState.positions,
+          roomContext.messages,
         );
         this.botState.currentThought = decision.rationale;
+
+        // Store reasoning for context persistence
+        this.botState.reasoningHistory.push({
+          timestamp: new Date().toISOString(),
+          action: decision.action,
+          rationale: decision.rationale,
+          confidence: decision.confidence,
+        });
+        if (this.botState.reasoningHistory.length > 10) {
+          this.botState.reasoningHistory = this.botState.reasoningHistory.slice(-10);
+        }
+
+        await this.emitAgentMessage(
+          `[${this.botState.pair}] ${decision.rationale}`,
+          "ANALYSIS",
+        );
       } catch (aiErr) {
         console.error("AI reasoning failed, falling back to HOLD:", aiErr);
         this.botState.currentThought =
           "AI reasoning unavailable, holding position";
+        await this.emitAgentMessage(
+          "AI reasoning unavailable, holding position",
+          "STATUS_UPDATE",
+        );
         decision = null;
       }
 
@@ -694,6 +749,10 @@ export class BotInstance extends DurableObject {
       if (decision && decision.action !== "HOLD") {
         this.botState.activity = "EXECUTING";
         this.botState.currentThought = `Executing ${decision.action} ${decision.pair}...`;
+        await this.emitAgentMessage(
+          `Executing ${decision.action} on ${decision.pair} (confidence: ${decision.confidence}%)`,
+          "STATUS_UPDATE",
+        );
 
         try {
           const execution = await this.executeDecision(
@@ -874,7 +933,18 @@ export class BotInstance extends DurableObject {
     signal: Signal,
     marketData: MarketData,
     positions: Position[],
+    roomMessages?: AgentMessagePayload[],
   ): Promise<TradeDecision> {
+    // Build prior decisions context
+    const historySection = this.botState.reasoningHistory.length > 0
+      ? `\n## Prior Decisions (last ${this.botState.reasoningHistory.length})\n${this.botState.reasoningHistory.map((h) => `[${h.timestamp}] ${h.action} (${h.confidence}%): ${h.rationale}`).join("\n")}\n`
+      : "";
+
+    // Build agent conversation context
+    const conversationSection = roomMessages && roomMessages.length > 0
+      ? `\n## Recent Agent Conversation\n${roomMessages.slice(-10).map((m) => `[${m.fromAgentId}] (${m.messageType}): ${m.content}`).join("\n")}\n`
+      : "";
+
     const prompt = `## Market Data
 - Pair: ${marketData.pair}
 - Current Price: $${marketData.price}
@@ -894,8 +964,8 @@ Asks: ${marketData.orderBook.asks.slice(0, 5).map(([p, s]) => `$${p} x ${s}`).jo
 
 ## Current Positions
 ${positions.length > 0 ? positions.map((p) => `- ${p.pair}: ${p.side} ${p.size} @ $${p.entryPrice} (PnL: $${p.unrealizedPnl})`).join("\n") : "None"}
-
-Based on this data, provide your trading decision as a JSON object.`;
+${historySection}${conversationSection}
+Based on this data and context, provide your trading decision as a JSON object.`;
 
     const response = await ai.generate(prompt, TRADING_SYSTEM_PROMPT, {
       model: this.botState.reasoningConfig.model,
@@ -1081,6 +1151,7 @@ Based on this data, provide your trading decision as a JSON object.`;
       pnlToday: this.botState.pnlToday,
       tradeCountToday: this.botState.tradeCountToday,
       lastTradeAt: this.botState.lastTradeAt,
+      lastMessage: null,
       visualPosition: {
         x: 0,
         y: 0,
@@ -1089,6 +1160,160 @@ Based on this data, provide your trading decision as a JSON object.`;
         animation: this.botState.activity === "IDLE" ? "idle" : "working",
       },
     };
+  }
+
+  /** Send a conversation message to the room for visualization. Returns the message ID. */
+  private async emitAgentMessage(
+    content: string,
+    messageType: AgentMessageType,
+    toAgentId?: string,
+    replyToMessageId?: string,
+    proposal?: ProposalPayload,
+  ): Promise<string | null> {
+    if (!this.botState.roomId) return null;
+    try {
+      const roomDoId = this._env.TRADING_ROOM.idFromName(this.botState.roomId);
+      const roomStub = this._env.TRADING_ROOM.get(roomDoId);
+      const resp = await roomStub.fetch(
+        new Request("https://internal/message", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromAgentId: this.botState.agentId,
+            toAgentId: toAgentId ?? null,
+            content,
+            messageType,
+            replyToMessageId: replyToMessageId ?? null,
+            proposal: proposal ?? undefined,
+          }),
+        }),
+      );
+      const result = (await resp.json().catch(() => ({}))) as { messageId?: string };
+      return result.messageId ?? null;
+    } catch {
+      // Non-critical; don't crash the trading loop
+      return null;
+    }
+  }
+
+  /** Fetch recent room context: messages + pending/approved proposals */
+  private async fetchRoomContext(): Promise<RoomContext> {
+    const empty: RoomContext = { messages: [], pendingProposals: [], approvedProposals: [] };
+    if (!this.botState.roomId) return empty;
+    try {
+      const roomDoId = this._env.TRADING_ROOM.idFromName(this.botState.roomId);
+      const roomStub = this._env.TRADING_ROOM.get(roomDoId);
+
+      const [messagesResp, pendingResp, approvedResp] = await Promise.all([
+        roomStub.fetch(new Request("https://internal/messages?limit=20", { method: "GET" })),
+        roomStub.fetch(new Request("https://internal/proposals?status=PENDING", { method: "GET" })),
+        roomStub.fetch(new Request("https://internal/proposals?status=APPROVED", { method: "GET" })),
+      ]);
+
+      const messagesData = (await messagesResp.json().catch(() => ({}))) as { messages?: AgentMessagePayload[] };
+      const pendingData = (await pendingResp.json().catch(() => ({}))) as { proposals?: ProposalState[] };
+      const approvedData = (await approvedResp.json().catch(() => ({}))) as { proposals?: ProposalState[] };
+
+      return {
+        messages: messagesData.messages ?? [],
+        pendingProposals: pendingData.proposals ?? [],
+        approvedProposals: approvedData.proposals ?? [],
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  /** Handle strategy-specific debate reactions (proposals, reviews, executions) */
+  private async handleDebateReactions(
+    signal: Signal,
+    roomContext: RoomContext,
+  ): Promise<void> {
+    const strategyType = this.botState.strategyType;
+
+    // Scraper/Twitter: emit PROPOSAL when signal confidence is high
+    if (
+      (strategyType === "POLYMARKET_SCRAPER" || strategyType === "POLYMARKET_TWITTER") &&
+      signal.action !== "HOLD" &&
+      signal.confidence >= 50
+    ) {
+      const proposalPayload: ProposalPayload = {
+        proposalId: crypto.randomUUID(),
+        action: signal.action,
+        pair: signal.pair,
+        rationale: signal.metadata.reason as string ?? "High-confidence signal",
+        confidence: signal.confidence,
+        data: signal.metadata,
+      };
+      await this.emitAgentMessage(
+        `[PROPOSAL] ${signal.action} on ${signal.pair} — ${proposalPayload.rationale} (confidence: ${signal.confidence}%)`,
+        "PROPOSAL",
+        undefined,
+        undefined,
+        proposalPayload,
+      );
+    }
+
+    // Reviewer: auto-review pending proposals this bot hasn't voted on
+    if (strategyType === "POLYMARKET_REVIEWER") {
+      for (const proposalState of roomContext.pendingProposals) {
+        const alreadyVoted =
+          proposalState.approvals.includes(this.botState.agentId) ||
+          proposalState.rejections.includes(this.botState.agentId);
+        if (alreadyVoted || proposalState.fromAgentId === this.botState.agentId) continue;
+
+        // Find the original proposal message to reply to
+        const proposalMsg = roomContext.messages.find(
+          (m) => m.messageType === "PROPOSAL" && m.fromAgentId === proposalState.fromAgentId,
+        );
+
+        const { reviewProposal } = this.strategy as { reviewProposal?: (p: { proposalId: string; action: string; confidence: number; rationale: string }) => { approved: boolean; reason: string } };
+        if (!reviewProposal) continue;
+
+        const review = reviewProposal.call(this.strategy, {
+          proposalId: proposalState.proposal.proposalId,
+          action: proposalState.proposal.action,
+          confidence: proposalState.proposal.confidence,
+          rationale: proposalState.proposal.rationale,
+        });
+
+        await this.emitAgentMessage(
+          `[${review.approved ? "APPROVE" : "REJECT"}] ${review.reason}`,
+          review.approved ? "AGREEMENT" : "DISAGREEMENT",
+          proposalState.fromAgentId,
+          proposalMsg?.messageId,
+        );
+      }
+    }
+
+    // Executor: queue approved proposals for execution
+    if (strategyType === "POLYMARKET_EXECUTOR") {
+      for (const proposalState of roomContext.approvedProposals) {
+        const proposalId = proposalState.proposal.proposalId;
+        if (this.botState.executedProposalIds.includes(proposalId)) continue;
+
+        const { queueExecution } = this.strategy as { queueExecution?: (id: string, action: string, confidence: number) => void };
+        if (!queueExecution) continue;
+
+        queueExecution.call(
+          this.strategy,
+          proposalId,
+          proposalState.proposal.action,
+          proposalState.proposal.confidence,
+        );
+
+        this.botState.executedProposalIds.push(proposalId);
+        // Keep last 50
+        if (this.botState.executedProposalIds.length > 50) {
+          this.botState.executedProposalIds = this.botState.executedProposalIds.slice(-50);
+        }
+
+        await this.emitAgentMessage(
+          `Queuing execution for approved proposal: ${proposalState.proposal.action} ${proposalState.proposal.pair}`,
+          "STATUS_UPDATE",
+        );
+      }
+    }
   }
 
   private async reportTradeEventToRoom(

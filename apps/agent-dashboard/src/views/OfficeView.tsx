@@ -1,5 +1,6 @@
 import { useRef, useEffect } from "react";
 import type { AgentState, AgentActivity, VisualZone } from "@repo/types";
+import type { AgentMessage } from "../hooks/useTradingSocket";
 
 export interface BotAgent {
   id: string;
@@ -18,6 +19,8 @@ export interface BotAgent {
 
 interface OfficeViewProps {
   bots: BotAgent[];
+  agentMessages?: AgentMessage[];
+  speakingAgentId?: string | null;
 }
 
 /** Map AgentActivity to office zone positions (normalized 0-1) */
@@ -55,6 +58,42 @@ interface CharState {
   name: string;
   color: string;
   pnlToday: number;
+  // Conversation message fields
+  messageContent: string | null;
+  messageType: string | null;
+  messageAge: number;
+}
+
+/** Border color based on conversation message type */
+function messageBorderColor(messageType: string | null): string {
+  switch (messageType) {
+    case "ANALYSIS":
+    case "PROPOSAL":
+      return "#3b82f6"; // blue
+    case "REVIEW":
+    case "AGREEMENT":
+      return "#22c55e"; // green
+    case "DISAGREEMENT":
+      return "#ef4444"; // red
+    case "STATUS_UPDATE":
+      return "#6b7280"; // gray
+    case "THOUGHT":
+    default:
+      return "#a78bfa"; // purple
+  }
+}
+
+/** Short label prefix for message types */
+function messageTypeLabel(messageType: string | null): string {
+  switch (messageType) {
+    case "ANALYSIS": return "[ANALYSIS]";
+    case "PROPOSAL": return "[PROPOSAL]";
+    case "REVIEW": return "[REVIEW]";
+    case "AGREEMENT": return "[AGREE]";
+    case "DISAGREEMENT": return "[DISAGREE]";
+    case "STATUS_UPDATE": return "[STATUS]";
+    default: return "";
+  }
 }
 
 interface SpriteBounds {
@@ -128,13 +167,14 @@ function detectOpaqueBounds(img: HTMLImageElement): SpriteBounds | null {
   };
 }
 
-export function OfficeView({ bots }: OfficeViewProps) {
+export function OfficeView({ bots, agentMessages, speakingAgentId }: OfficeViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgRef = useRef<HTMLImageElement | null>(null);
   const botSpriteRef = useRef<HTMLImageElement | null>(null);
   const botSpriteBoundsRef = useRef<SpriteBounds | null>(null);
   const charsRef = useRef<Map<string, CharState>>(new Map());
   const animRef = useRef<number>(0);
+  const speakingRef = useRef<string | null>(null);
   const prevTimeRef = useRef<number>(0);
 
   // Initialize / update character state from bot data
@@ -178,10 +218,36 @@ export function OfficeView({ bots }: OfficeViewProps) {
           name: bot.name,
           color: hexColor(bot.color),
           pnlToday: bot.pnlToday,
+          messageContent: null,
+          messageType: null,
+          messageAge: 9999,
         });
       }
     }
   }, [bots]);
+
+  // Sync agent conversation messages to character state
+  useEffect(() => {
+    if (!agentMessages?.length) return;
+    const chars = charsRef.current;
+    // Only process the most recent message per agent
+    const seen = new Set<string>();
+    for (const msg of agentMessages) {
+      if (seen.has(msg.fromAgentId)) continue;
+      seen.add(msg.fromAgentId);
+      const char = chars.get(msg.fromAgentId);
+      if (char && char.messageContent !== msg.content) {
+        char.messageContent = msg.content;
+        char.messageType = msg.messageType;
+        char.messageAge = 0;
+      }
+    }
+  }, [agentMessages]);
+
+  // Sync speaking agent ID
+  useEffect(() => {
+    speakingRef.current = speakingAgentId ?? null;
+  }, [speakingAgentId]);
 
   // Load background image
   useEffect(() => {
@@ -240,7 +306,28 @@ export function OfficeView({ bots }: OfficeViewProps) {
 
         // Draw characters
         const chars = charsRef.current;
-        for (const char of chars.values()) {
+        // Count agents at conference table for meeting detection
+        let agentsAtConference = 0;
+        for (const c of chars.values()) {
+          if (c.isRunning && c.activity === "DECIDING") agentsAtConference++;
+        }
+        const meetingInProgress = agentsAtConference >= 2;
+
+        // Draw meeting glow at conference table if meeting is in progress
+        if (meetingInProgress) {
+          const confPos = ZONE_POSITIONS.CONFERENCE_TABLE;
+          const confX = bx + confPos.x * bw;
+          const confY = by + confPos.y * bh;
+          ctx.save();
+          ctx.globalAlpha = 0.08 + Math.sin(time * 0.003) * 0.04;
+          ctx.fillStyle = "#fbbf24";
+          ctx.beginPath();
+          ctx.ellipse(confX, confY, 60 * scale, 35 * scale, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        for (const [charId, char] of chars.entries()) {
           // Smoothly move toward target position
           const lerpSpeed = 0.003 * dt;
           char.x += (char.targetX - char.x) * Math.min(lerpSpeed, 1);
@@ -334,6 +421,28 @@ export function OfficeView({ bots }: OfficeViewProps) {
             ctx.globalAlpha = 1;
           }
 
+          // Speaking indicator (Phase 2: voice)
+          if (speakingRef.current === charId) {
+            ctx.save();
+            const waveAlpha = 0.5 + Math.sin(time * 0.008) * 0.3;
+            ctx.globalAlpha = waveAlpha;
+            ctx.strokeStyle = "#22c55e";
+            ctx.lineWidth = 1.5;
+            // Draw sound wave arcs
+            for (let i = 1; i <= 3; i++) {
+              ctx.beginPath();
+              ctx.arc(
+                cx + spriteWidth / 2 + 4 * scale,
+                spriteY + spriteHeight * 0.3,
+                (i * 3) * scale,
+                -Math.PI / 4,
+                Math.PI / 4,
+              );
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+
           // Name tag + activity
           ctx.font = `${Math.max(7, 7 * scale)}px "Courier New", monospace`;
           ctx.textAlign = "center";
@@ -361,10 +470,21 @@ export function OfficeView({ bots }: OfficeViewProps) {
             ctx.fillText(pnlText, cx, spriteY + spriteHeight + 30 * scale);
           }
 
-          // Speech bubble
-          if (char.thought && char.bubbleAge < 5000) {
-            char.bubbleAge += dt;
-            const opacity = char.bubbleAge > 3500 ? 1 - (char.bubbleAge - 3500) / 1500 : 1;
+          // Determine which bubble to show: conversation message takes priority
+          const hasMessage = char.messageContent && char.messageAge < 8000;
+          const hasThought = char.thought && char.bubbleAge < 5000;
+          const bubbleText = hasMessage ? char.messageContent : hasThought ? char.thought : null;
+          const isConversation = hasMessage;
+
+          if (hasMessage) char.messageAge += dt;
+          if (hasThought) char.bubbleAge += dt;
+
+          if (bubbleText) {
+            const age = isConversation ? char.messageAge : char.bubbleAge;
+            const maxAge = isConversation ? 8000 : 5000;
+            const fadeStart = isConversation ? 6000 : 3500;
+            const opacity = age > fadeStart ? 1 - (age - fadeStart) / (maxAge - fadeStart) : 1;
+            const borderColor = isConversation ? messageBorderColor(char.messageType) : char.color;
 
             ctx.save();
             ctx.globalAlpha = Math.max(0, opacity);
@@ -372,13 +492,18 @@ export function OfficeView({ bots }: OfficeViewProps) {
             const fontSize = Math.max(8, 8 * scale);
             ctx.font = `${fontSize}px "Courier New", monospace`;
 
+            // Prepend message type label for conversation messages
+            const displayText = isConversation
+              ? `${messageTypeLabel(char.messageType)} ${bubbleText}`
+              : bubbleText;
+
             // Word wrap
             const maxW = 160 * scale;
-            const words = char.thought.split(" ");
+            const words = displayText.split(" ");
             const lines: string[] = [];
             let currentLine = "";
             for (const word of words) {
-              const testLine = currentLine ? currentLine + " " + word : word;
+              const testLine = currentLine ? `${currentLine} ${word}` : word;
               if (ctx.measureText(testLine).width > maxW) {
                 lines.push(currentLine);
                 currentLine = word;
@@ -396,9 +521,11 @@ export function OfficeView({ bots }: OfficeViewProps) {
             const bubbleY = spriteY - 10 * scale - bubbleH;
 
             // Bubble background
-            ctx.fillStyle = "rgba(26, 26, 46, 0.92)";
-            ctx.strokeStyle = char.color;
-            ctx.lineWidth = 1.5;
+            ctx.fillStyle = isConversation
+              ? "rgba(20, 25, 50, 0.95)"
+              : "rgba(26, 26, 46, 0.92)";
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = isConversation ? 2 : 1.5;
             roundRect(ctx, bubbleX, bubbleY, bubbleW, bubbleH, 4 * scale);
             ctx.fill();
             ctx.stroke();
@@ -409,14 +536,27 @@ export function OfficeView({ bots }: OfficeViewProps) {
             ctx.lineTo(cx, bubbleY + bubbleH + 6 * scale);
             ctx.lineTo(cx + 5 * scale, bubbleY + bubbleH);
             ctx.closePath();
-            ctx.fillStyle = "rgba(26, 26, 46, 0.92)";
+            ctx.fillStyle = isConversation
+              ? "rgba(20, 25, 50, 0.95)"
+              : "rgba(26, 26, 46, 0.92)";
             ctx.fill();
 
             // Text
             ctx.fillStyle = "#fff";
             ctx.textAlign = "left";
             for (let i = 0; i < lines.length; i++) {
-              ctx.fillText(lines[i], bubbleX + padding, bubbleY + padding + (i + 1) * lineHeight - 2);
+              // Color the type label differently
+              if (isConversation && i === 0) {
+                const label = messageTypeLabel(char.messageType);
+                const labelWidth = ctx.measureText(label).width;
+                ctx.fillStyle = borderColor;
+                ctx.fillText(label, bubbleX + padding, bubbleY + padding + lineHeight - 2);
+                ctx.fillStyle = "#fff";
+                const rest = lines[0].slice(label.length);
+                ctx.fillText(rest, bubbleX + padding + labelWidth, bubbleY + padding + lineHeight - 2);
+              } else {
+                ctx.fillText(lines[i], bubbleX + padding, bubbleY + padding + (i + 1) * lineHeight - 2);
+              }
             }
 
             ctx.restore();

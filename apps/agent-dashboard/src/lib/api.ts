@@ -178,12 +178,12 @@ export const api = {
 
   async createRoom(
     name: string,
-    risk?: { maxTotalExposureUsd?: number; maxDailyRoomLossUsd?: number },
+    options?: { risk?: { maxTotalExposureUsd?: number; maxDailyRoomLossUsd?: number }; roomType?: string },
   ): Promise<CreateRoomResponse> {
     return requestJson<CreateRoomResponse>("/api/room", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, risk }),
+      body: JSON.stringify({ name, risk: options?.risk, roomType: options?.roomType }),
     });
   },
 

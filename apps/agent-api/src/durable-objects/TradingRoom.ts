@@ -1,6 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
   AgentRealtimeState,
+  AgentConversationMessage,
+  AgentMessagePayload,
+  AgentMessageType,
+  ProposalPayload,
+  ProposalState,
+  RoomType,
   ServerMessage,
   ClientMessage,
   FullStateMessage,
@@ -9,6 +15,7 @@ import type {
   RoomStateMessage,
   TradeEventMessage,
 } from "@repo/types";
+import { VoiceService } from "../voice/index.js";
 
 interface SessionMeta {
   id: string;
@@ -26,12 +33,16 @@ interface BotRegistryEntry {
 interface RoomConfig {
   roomId: string;
   name: string;
+  roomType: RoomType;
+  voiceEnabled: boolean;
   createdAt: string;
   updatedAt: string;
   risk: {
     maxTotalExposureUsd: number;
     maxDailyRoomLossUsd: number;
   };
+  /** Minimum approvals needed for proposal consensus (Phase 3) */
+  consensusThreshold: number;
 }
 
 interface RoomMetrics {
@@ -57,6 +68,8 @@ interface EmergencyStopResult {
   message: string;
 }
 
+const MAX_RECENT_MESSAGES = 100;
+
 export class TradingRoom extends DurableObject {
   private readonly _env: Env;
   sessions: Map<WebSocket, SessionMeta>;
@@ -64,6 +77,12 @@ export class TradingRoom extends DurableObject {
   seqCounters: Map<string, number>;
   /** Cached bot states for FULL_STATE on connect/subscribe */
   botStates: Map<string, AgentRealtimeState>;
+  /** In-memory cache of recent agent conversation messages */
+  recentMessages: AgentMessagePayload[];
+  /** Active proposals awaiting consensus (Phase 3) */
+  proposals: Map<string, ProposalState>;
+  /** Voice synthesis service (Phase 2) */
+  private voiceService: VoiceService | null = null;
   private emergencyInProgress = false;
 
   constructor(state: DurableObjectState, env: Env) {
@@ -72,6 +91,28 @@ export class TradingRoom extends DurableObject {
     this.sessions = new Map();
     this.seqCounters = new Map();
     this.botStates = new Map();
+    this.recentMessages = [];
+    this.proposals = new Map();
+
+    // Initialize voice service if API key is configured
+    if (env.ELEVENLABS_API_KEY) {
+      this.voiceService = new VoiceService({
+        apiKey: env.ELEVENLABS_API_KEY,
+        enabled: env.ELEVENLABS_ENABLED !== "false",
+      });
+    }
+
+    // Hydrate state from storage on first load
+    this.ctx.blockConcurrencyWhile(async () => {
+      const stored = await this.ctx.storage.get<AgentMessagePayload[]>("recentMessages");
+      if (stored) {
+        this.recentMessages = stored;
+      }
+      const storedProposals = await this.ctx.storage.get<[string, ProposalState][]>("proposals");
+      if (storedProposals) {
+        this.proposals = new Map(storedProposals);
+      }
+    });
   }
 
   private defaultRoomConfig(roomId = this.ctx.id.toString()): RoomConfig {
@@ -79,8 +120,11 @@ export class TradingRoom extends DurableObject {
     return {
       roomId,
       name: roomId,
+      roomType: "TRADING",
+      voiceEnabled: false,
       createdAt: now,
       updatedAt: now,
+      consensusThreshold: 2,
       risk: {
         maxTotalExposureUsd: 10000,
         maxDailyRoomLossUsd: 1000,
@@ -276,6 +320,21 @@ export class TradingRoom extends DurableObject {
       return this.handleGetInfo(roomIdHint ?? undefined);
     }
 
+    // POST /message - agent conversation message
+    if (request.method === "POST" && path.endsWith("/message")) {
+      return this.handleAgentMessage(request);
+    }
+
+    // GET /messages - retrieve recent conversation history
+    if (request.method === "GET" && path.endsWith("/messages")) {
+      return this.handleGetMessages(url);
+    }
+
+    // GET /proposals - get proposals with status filter
+    if (request.method === "GET" && path.endsWith("/proposals")) {
+      return this.handleGetProposals(url);
+    }
+
     // POST /emergency-stop - emergency shutdown
     if (request.method === "POST" && path.endsWith("/emergency-stop")) {
       return this.handleEmergencyStop();
@@ -416,6 +475,9 @@ export class TradingRoom extends DurableObject {
     const body = (await request.json()) as {
       roomId?: string;
       name?: string;
+      roomType?: RoomType;
+      voiceEnabled?: boolean;
+      consensusThreshold?: number;
       risk?: {
         maxTotalExposureUsd?: number;
         maxDailyRoomLossUsd?: number;
@@ -435,8 +497,14 @@ export class TradingRoom extends DurableObject {
     const next: RoomConfig = {
       roomId,
       name,
+      roomType: body.roomType ?? existing.roomType ?? "TRADING",
+      voiceEnabled: body.voiceEnabled ?? existing.voiceEnabled ?? false,
       createdAt: existing.createdAt,
       updatedAt: new Date().toISOString(),
+      consensusThreshold: this.toPositiveNumber(
+        body.consensusThreshold,
+        existing.consensusThreshold ?? 2,
+      ),
       risk: {
         maxTotalExposureUsd: this.toPositiveNumber(
           body.risk?.maxTotalExposureUsd,
@@ -580,6 +648,174 @@ export class TradingRoom extends DurableObject {
       };
     } finally {
       this.emergencyInProgress = false;
+    }
+  }
+
+  private async handleAgentMessage(request: Request): Promise<Response> {
+    const body = (await request.json()) as {
+      fromAgentId: string;
+      toAgentId?: string | null;
+      content: string;
+      messageType: AgentMessageType;
+      replyToMessageId?: string | null;
+      proposal?: ProposalPayload;
+      voiceId?: string;
+    };
+
+    if (!body.fromAgentId || !body.content) {
+      return Response.json(
+        { ok: false, message: "fromAgentId and content are required" },
+        { status: 400 },
+      );
+    }
+
+    const payload: AgentMessagePayload = {
+      messageId: crypto.randomUUID(),
+      fromAgentId: body.fromAgentId,
+      toAgentId: body.toAgentId ?? null,
+      content: body.content,
+      messageType: body.messageType ?? "THOUGHT",
+      replyToMessageId: body.replyToMessageId ?? null,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Phase 2: Voice synthesis (non-blocking)
+    const config = await this.loadRoomConfig();
+    if (config.voiceEnabled && this.voiceService?.shouldSynthesize(payload.messageType)) {
+      const voiceId = this.voiceService.getVoiceId(body.fromAgentId, body.voiceId);
+      this.ctx.waitUntil(
+        this.voiceService
+          .synthesizeAndStore(payload.content, voiceId, payload.messageId, this._env.OPENCLAW_DATA)
+          .then((result) => {
+            if (result) {
+              payload.audioUrl = result.audioUrl;
+              // Re-broadcast with audio URL
+              this.broadcastAgentMessage(payload);
+            }
+          })
+          .catch((err) => console.error("Voice synthesis failed:", err)),
+      );
+    }
+
+    // Phase 3: Proposal tracking
+    if (body.messageType === "PROPOSAL" && body.proposal) {
+      const proposalState: ProposalState = {
+        proposal: body.proposal,
+        fromAgentId: body.fromAgentId,
+        approvals: [],
+        rejections: [],
+        status: "PENDING",
+        createdAt: payload.timestamp,
+        resolvedAt: null,
+      };
+      this.proposals.set(body.proposal.proposalId, proposalState);
+      this.ctx.waitUntil(this.persistProposals());
+    }
+
+    // Phase 3: Handle review votes on proposals
+    if (
+      (body.messageType === "AGREEMENT" || body.messageType === "DISAGREEMENT") &&
+      body.replyToMessageId
+    ) {
+      this.processVote(body.fromAgentId, body.replyToMessageId, body.messageType === "AGREEMENT", config);
+    }
+
+    // Store in ring buffer
+    this.recentMessages.push(payload);
+    if (this.recentMessages.length > MAX_RECENT_MESSAGES) {
+      this.recentMessages = this.recentMessages.slice(-MAX_RECENT_MESSAGES);
+    }
+
+    // Persist to DO storage
+    this.ctx.waitUntil(
+      this.ctx.storage.put("recentMessages", this.recentMessages),
+    );
+
+    // Update bot's lastMessage in cached state
+    const botState = this.botStates.get(body.fromAgentId);
+    if (botState) {
+      botState.lastMessage = payload;
+      this.botStates.set(body.fromAgentId, botState);
+    }
+
+    // Broadcast to all WebSocket sessions
+    this.broadcastAgentMessage(payload);
+
+    return Response.json({ ok: true, messageId: payload.messageId });
+  }
+
+  /** Process a vote (approval/rejection) on a proposal */
+  private processVote(
+    voterId: string,
+    replyToMessageId: string,
+    isApproval: boolean,
+    config: RoomConfig,
+  ): void {
+    // Find proposal by matching the original message ID
+    const proposalMsg = this.recentMessages.find(
+      (m) => m.messageId === replyToMessageId && m.messageType === "PROPOSAL",
+    );
+    if (!proposalMsg) return;
+
+    // Find proposal state - look through all proposals for matching fromAgentId + timestamp
+    for (const [proposalId, state] of this.proposals) {
+      if (state.fromAgentId === proposalMsg.fromAgentId && state.status === "PENDING") {
+        if (isApproval && !state.approvals.includes(voterId)) {
+          state.approvals.push(voterId);
+        } else if (!isApproval && !state.rejections.includes(voterId)) {
+          state.rejections.push(voterId);
+        }
+
+        // Check consensus
+        if (state.approvals.length >= config.consensusThreshold) {
+          state.status = "APPROVED";
+          state.resolvedAt = new Date().toISOString();
+        } else if (state.rejections.length >= config.consensusThreshold) {
+          state.status = "REJECTED";
+          state.resolvedAt = new Date().toISOString();
+        }
+
+        this.proposals.set(proposalId, state);
+        this.ctx.waitUntil(this.persistProposals());
+        break;
+      }
+    }
+  }
+
+  private async persistProposals(): Promise<void> {
+    await this.ctx.storage.put("proposals", [...this.proposals.entries()]);
+  }
+
+  /** Get proposals by status */
+  private handleGetProposals(url: URL): Response {
+    const statusFilter = url.searchParams.get("status") ?? "PENDING";
+    const proposals: ProposalState[] = [];
+    for (const state of this.proposals.values()) {
+      if (state.status === statusFilter || statusFilter === "ALL") {
+        proposals.push(state);
+      }
+    }
+    return Response.json({ ok: true, proposals });
+  }
+
+  private handleGetMessages(url: URL): Response {
+    const limitParam = url.searchParams.get("limit");
+    const limit = limitParam ? Math.min(Math.max(Number.parseInt(limitParam, 10) || 50, 1), MAX_RECENT_MESSAGES) : 50;
+    const messages = this.recentMessages.slice(-limit);
+    return Response.json({ ok: true, messages });
+  }
+
+  private broadcastAgentMessage(payload: AgentMessagePayload): void {
+    const roomId = this.ctx.id.toString();
+
+    const msg: AgentConversationMessage = {
+      type: "AGENT_MESSAGE",
+      roomId,
+      payload,
+    };
+
+    for (const [ws] of this.sessions) {
+      this.sendToWs(ws, msg);
     }
   }
 

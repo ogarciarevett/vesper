@@ -23,9 +23,12 @@ import { useTradingSocket, type TradeEvent } from "./hooks/useTradingSocket";
 import { useApiStatus } from "./hooks/useApiStatus";
 import { useBotStatus } from "./hooks/useBotStatus";
 import { OfficeView, type BotAgent } from "./views/OfficeView";
+import { ConversationPanel } from "./views/ConversationPanel";
+import { useVoiceQueue } from "./hooks/useVoiceQueue";
+import { RoomSelector } from "./components/RoomSelector";
 import { api, type AiGatewayModelOption } from "./lib/api";
 
-const ROOM_ID = import.meta.env.VITE_ROOM_ID || "main";
+const DEFAULT_ROOM_ID = import.meta.env.VITE_ROOM_ID || "main";
 const BOT_COLORS = [0x22d3ee, 0xa78bfa, 0xfbbf24, 0x34d399, 0xf97316, 0xfb7185];
 const ALLOWED_AI_MODEL_PATTERNS = [/gpt-5\.3-codex/i, /claude-opus-4-6/i, /gemini-3-pro/i];
 const BOT_POSITIONS = [
@@ -133,7 +136,7 @@ function filterAllowedAiModels(models: AiGatewayModelOption[]): AiGatewayModelOp
 }
 
 // --- Sidebar ---
-function Sidebar() {
+function Sidebar({ currentRoomId, onRoomChange }: { currentRoomId: string; onRoomChange: (id: string) => void }) {
   return (
     <aside className="w-48 bg-[#1a1a1f] border-r border-white/5 flex flex-col h-screen fixed left-0 top-0 z-40">
       <div className="px-4 py-5 border-b border-white/5">
@@ -149,6 +152,10 @@ function Sidebar() {
           Office
           <Flame className="h-3 w-3 ml-auto" />
         </button>
+        <div className="mt-3 px-1">
+          <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5 px-2">Room</p>
+          <RoomSelector currentRoomId={currentRoomId} onRoomChange={onRoomChange} />
+        </div>
       </nav>
 
       <div className="border-t border-white/5 p-3 space-y-1">
@@ -416,6 +423,7 @@ function ActivityFeedItem({ event, botName }: { event: TradeEvent; botName: stri
 
 // --- Main App ---
 function App() {
+  const [currentRoomId, setCurrentRoomId] = useState(DEFAULT_ROOM_ID);
   const {
     isConnected,
     connectionState,
@@ -423,8 +431,10 @@ function App() {
     botStates,
     roomState,
     tradeEvents,
+    agentMessages,
     lastError,
-  } = useTradingSocket(ROOM_ID);
+  } = useTradingSocket(currentRoomId);
+  const voiceQueue = useVoiceQueue(agentMessages);
   const { online: apiOnline, lastUpdate, refresh: refreshApi } = useApiStatus();
 
   const [roomBots, setRoomBots] = useState<RoomBot[]>([]);
@@ -451,10 +461,10 @@ function App() {
 
   const loadRoomBots = useCallback(async () => {
     try {
-      const info = await api.getRoomInfo(ROOM_ID);
-      if (info.roomId && info.roomId !== ROOM_ID) {
+      const info = await api.getRoomInfo(currentRoomId);
+      if (info.roomId && info.roomId !== currentRoomId) {
         setRoomBindingError(
-          `Room binding mismatch: expected "${ROOM_ID}" but server reports "${info.roomId}"`,
+          `Room binding mismatch: expected "${currentRoomId}" but server reports "${info.roomId}"`,
         );
       } else {
         setRoomBindingError(null);
@@ -475,7 +485,7 @@ function App() {
 
       setRoomBots(next);
     } catch (error) {
-      setRoomBindingError(`Failed to load room "${ROOM_ID}": ${String(error)}`);
+      setRoomBindingError(`Failed to load room "${currentRoomId}": ${String(error)}`);
       setRoomBots([]);
     }
   }, []);
@@ -534,9 +544,9 @@ function App() {
   }, [loadRoomBots, loadAiModels, loadMarketPairs]);
 
   useEffect(() => {
-    if (roomState && roomState.roomId !== ROOM_ID) {
+    if (roomState && roomState.roomId !== currentRoomId) {
       setRoomBindingError(
-        `WS room mismatch: expected "${ROOM_ID}" but received "${roomState.roomId}"`,
+        `WS room mismatch: expected "${currentRoomId}" but received "${roomState.roomId}"`,
       );
     }
   }, [roomState]);
@@ -602,7 +612,7 @@ function App() {
     try {
       setIsCreatingBot(true);
       setCreateBotError(null);
-      await api.createBotInRoom(ROOM_ID, botName, {
+      await api.createBotInRoom(currentRoomId, botName, {
         trading: { pairs: [pair] },
         reasoning,
       });
@@ -636,10 +646,10 @@ function App() {
 
       try {
         const statuses = await Promise.allSettled(
-          roomBots.map((b) => api.getBotStatus(b.publicId, ROOM_ID)),
+          roomBots.map((b) => api.getBotStatus(b.publicId, currentRoomId)),
         );
         const allLogs = await Promise.allSettled(
-          roomBots.map((b) => api.getBotLogs(b.publicId, ROOM_ID)),
+          roomBots.map((b) => api.getBotLogs(b.publicId, currentRoomId)),
         );
 
         const newFallback = new Map<string, FallbackState>();
@@ -779,14 +789,14 @@ function App() {
 
   return (
     <div className="min-h-screen w-full bg-[#111114] text-white font-sans">
-      <Sidebar />
+      <Sidebar currentRoomId={currentRoomId} onRoomChange={setCurrentRoomId} />
 
       <div className="ml-48 min-h-screen">
         <header className="px-6 pt-6 pb-3">
           <div className="flex items-center justify-between mb-1">
             <h1 className="text-xl font-bold flex items-center gap-2">
               <Flame className="h-5 w-5 text-red-500" />
-              TradingRoom ({ROOM_ID})
+              TradingRoom ({currentRoomId})
             </h1>
             <button
               onClick={() => void refreshAll()}
@@ -872,7 +882,13 @@ function App() {
         <div className="px-6 pb-6">
           <div className="grid grid-cols-12 gap-4">
             <div className="col-span-8">
-              <OfficeView bots={botAgents} />
+              <OfficeView bots={botAgents} agentMessages={agentMessages} speakingAgentId={voiceQueue.speakingAgentId} />
+              <ConversationPanel
+                messages={agentMessages}
+                voiceState={voiceQueue}
+                onToggleVoice={voiceQueue.toggleEnabled}
+                onVolumeChange={voiceQueue.setVolume}
+              />
             </div>
 
             <div className="col-span-4 space-y-3">
@@ -980,7 +996,7 @@ function App() {
               </h3>
               {roomBots.length === 0 ? (
                 <div className="rounded-xl bg-black/30 border border-white/5 p-4 text-xs text-white/40">
-                  No bots registered in room <span className="font-mono text-white/70">{ROOM_ID}</span>.
+                  No bots registered in room <span className="font-mono text-white/70">{currentRoomId}</span>.
                 </div>
               ) : (
                 roomBots.map((bot) => (
@@ -989,7 +1005,7 @@ function App() {
                     botKey={bot.publicId}
                     name={bot.name}
                     pair={bot.pair}
-                    roomId={ROOM_ID}
+                    roomId={currentRoomId}
                     color={`#${bot.color.toString(16).padStart(6, "0")}`}
                     wsState={botStates.get(bot.id)}
                   />
