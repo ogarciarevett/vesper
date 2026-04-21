@@ -11,6 +11,7 @@
     "deploy": "wrangler pages deploy dist --project-name=openclaw-agent-dashboard"
   },
   "dependencies": {
+    "@repo/miniverse-core": "workspace:*",
     "@repo/types": "workspace:*",
     "clsx": "^2.1.1",
     "lucide-react": "^0.564.0",

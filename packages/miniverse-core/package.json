@@ -1,0 +1,26 @@
+{
+  "name": "@repo/miniverse-core",
+  "version": "0.1.0",
+  "description": "Miniverse rendering engine - forked from @miniverse/core for openclaw-village",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "lint": "echo 'skip - third-party fork'"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ianscott313/miniverse"
+  }
+}

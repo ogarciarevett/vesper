@@ -22,7 +22,8 @@ import type { AgentActivity, AgentRealtimeState, AgentState } from "@repo/types"
 import { useTradingSocket, type TradeEvent } from "./hooks/useTradingSocket";
 import { useApiStatus } from "./hooks/useApiStatus";
 import { useBotStatus } from "./hooks/useBotStatus";
-import { OfficeView, type BotAgent } from "./views/OfficeView";
+import { type BotAgent } from "./views/OfficeView";
+import { MiniverseView } from "./views/MiniverseView";
 import { ConversationPanel } from "./views/ConversationPanel";
 import { useVoiceQueue } from "./hooks/useVoiceQueue";
 import { RoomSelector } from "./components/RoomSelector";
@@ -882,7 +883,7 @@ function App() {
         <div className="px-6 pb-6">
           <div className="grid grid-cols-12 gap-4">
             <div className="col-span-8">
-              <OfficeView bots={botAgents} agentMessages={agentMessages} speakingAgentId={voiceQueue.speakingAgentId} />
+              <MiniverseView bots={botAgents} agentMessages={agentMessages} speakingAgentId={voiceQueue.speakingAgentId} />
               <ConversationPanel
                 messages={agentMessages}
                 voiceState={voiceQueue}
