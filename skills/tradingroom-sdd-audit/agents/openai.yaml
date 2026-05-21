@@ -1,4 +1,0 @@
-interface:
-  display_name: "TradingRoom SDD Audit"
-  short_description: "Audit TradingRoom spec-code parity and risks"
-  default_prompt: "Use $tradingroom-sdd-audit to review TradingRoom plan-vs-code parity and produce prioritized remediation."
