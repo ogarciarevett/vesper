@@ -1,6 +1,0 @@
-name = "agent-dashboard"
-compatibility_date = "2026-02-14"
-# account_id = "b10935ca17df0a45dabb08cab4a5f306"
-
-# Cloudflare Pages configuration
-pages_build_output_dir = "dist"
