@@ -44,7 +44,8 @@ describe("openStore", () => {
     const rows = db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all();
     db.close();
 
-    expect(rows).toHaveLength(1);
+    // The migration count grows as new migrations are added; check the v1 row is present.
+    expect(rows.length).toBeGreaterThanOrEqual(1);
     expect(rows[0]?.id).toBe("v1_initial_schema");
   });
 
@@ -59,10 +60,16 @@ describe("openStore", () => {
     db.close();
   });
 
-  test("migrate() called again is idempotent — schema_migrations still has exactly 1 row", () => {
+  test("migrate() called again is idempotent — schema_migrations row count stays stable", () => {
     const store = openStore(path);
     // Call migrate() a second and third time — should be no-ops.
     store.migrate();
+    const countAfterFirst = (() => {
+      const db = new Database(path, { readonly: true });
+      const rows = db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all();
+      db.close();
+      return rows.length;
+    })();
     store.migrate();
     store.close();
 
@@ -70,7 +77,7 @@ describe("openStore", () => {
     const rows = db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all();
     db.close();
 
-    expect(rows).toHaveLength(1);
+    expect(rows.length).toBe(countAfterFirst);
   });
 });
 
@@ -408,11 +415,15 @@ describe("SqliteStore (in-memory)", () => {
     const db = new Database(":memory:");
     const store = new SqliteStore(db);
     store.migrate();
+    const countAfterFirst = db
+      .query<{ id: string }, []>("SELECT id FROM schema_migrations")
+      .all().length;
     store.migrate();
     store.migrate();
 
     const rows = db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all();
-    expect(rows).toHaveLength(1);
+    // Count must not grow beyond what was applied on the first migrate() call.
+    expect(rows.length).toBe(countAfterFirst);
 
     store.close();
   });

@@ -12,5 +12,6 @@ export {
   type RunResult,
   runProcess,
 } from "./process/run.ts";
+export * from "./scheduler/index.ts";
 export * from "./storage/index.ts";
 export * from "./vault/index.ts";
