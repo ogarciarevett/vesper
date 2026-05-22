@@ -246,7 +246,9 @@ voice (Voice); Tauri UI (Desktop); Linux/Windows vault backends (later); CI + te
 7. **Test-first** for vault, storage, cli. (Skip TDD on CLI glue and config wiring.)
 8. **Bun-only** — no npm/yarn.
 9. **Conventional Commits** (`feat:`, `fix:`, `chore:`, `test:`, `docs:`, `refactor:`).
-10. **No CI in Foundation** — local `bun test` is the gate. CI lands in Launch.
+10. **CI gate (pulled forward 2026-05-22 by Omar; was originally deferred to Launch)** — GitHub
+    Actions (`.github/workflows/ci.yml`) runs `biome ci` + `bun test` on push to `main` and on
+    PRs. Local `bun run lint` + `bun test` remain the pre-commit gate.
 11. **No work without a Linear issue** (see Linear section). Halt + surface; never self-create.
 12. **No LLM provider SDKs, ever** (see bring-your-own-CLI). All LLM access via CLI shell-out.
 13. **Phase names are canonical** — Foundation/Scheduler/Desktop/Voice/Launch, never M1..M5.
