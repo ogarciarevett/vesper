@@ -54,4 +54,29 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: "003_scheduler_guardrails",
+    sql: `
+      ALTER TABLE scheduled_tasks ADD COLUMN max_runs_per_day INTEGER;
+      ALTER TABLE scheduled_tasks ADD COLUMN max_concurrent INTEGER;
+      ALTER TABLE scheduled_tasks ADD COLUMN max_duration_ms INTEGER;
+      ALTER TABLE scheduled_tasks ADD COLUMN runs_today INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE scheduled_tasks ADD COLUMN runs_today_date TEXT;
+      ALTER TABLE scheduled_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE scheduled_tasks ADD COLUMN next_attempt_at INTEGER;
+      CREATE TABLE IF NOT EXISTS failed_tasks (
+        id            TEXT    PRIMARY KEY NOT NULL,
+        task_id       TEXT    NOT NULL,
+        run_at        INTEGER NOT NULL,
+        error         TEXT    NOT NULL,
+        attempt_count INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    id: "004_capabilities",
+    sql: `
+      ALTER TABLE scheduled_tasks ADD COLUMN required_capabilities TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
 ];

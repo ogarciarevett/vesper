@@ -1,6 +1,7 @@
 // @vesper/core — host runtime public surface.
 // Modules are re-exported here as they land through the Foundation feature loop.
 
+export * from "./capabilities/index.ts";
 export * from "./cli/index.ts";
 export { VesperError } from "./errors.ts";
 export * from "./ipc/index.ts";
