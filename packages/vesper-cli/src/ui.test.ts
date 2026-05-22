@@ -1,8 +1,25 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { bold, colorEnabled, formatKeyValues, statusToken } from "./ui.ts";
 
-// `bun test` runs with stdout that is not a TTY, so color is disabled — output is plain.
-describe("ui (plain mode under non-TTY test output)", () => {
+// Color depends on NO_COLOR + stdout.isTTY, so `bun test` is plain when piped (CI)
+// but colored under an interactive TTY. Force NO_COLOR here to assert the plain-mode
+// branch deterministically, regardless of how the suite is launched.
+describe("ui (plain mode, NO_COLOR forced)", () => {
+  let priorNoColor: string | undefined;
+
+  beforeAll(() => {
+    priorNoColor = process.env.NO_COLOR;
+    process.env.NO_COLOR = "1";
+  });
+
+  afterAll(() => {
+    if (priorNoColor === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = priorNoColor;
+    }
+  });
+
   test("colorEnabled is false", () => {
     expect(colorEnabled()).toBe(false);
   });
