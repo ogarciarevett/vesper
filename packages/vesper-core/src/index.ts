@@ -1,4 +1,16 @@
 // @vesper/core — host runtime public surface.
-// Foundation modules (vault, storage, cli, capabilities, ipc) are exported here as they land
-// through the feature loop. Placeholder export keeps the package resolvable while scaffolding.
-export {};
+// Modules are re-exported here as they land through the Foundation feature loop.
+
+export * from "./cli/index.ts";
+export { VesperError } from "./errors.ts";
+export * from "./ipc/index.ts";
+export {
+  CommandNotFoundError,
+  type ProcessRunner,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+  runProcess,
+} from "./process/run.ts";
+export * from "./storage/index.ts";
+export * from "./vault/index.ts";
