@@ -92,3 +92,32 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
   isolates failures, run() propagates the original, events swallow. Added isolation/propagation tests.
 - Full suite 205 / 0; lint clean (67 files); barrel resolves. Holding at SHIP for the Scheduler PR.
 - Remaining: DEV-108 guardrails, DEV-109 capability enforcement, DEV-110 schedule CLI.
+
+## Scheduler — task guardrails (DEV-108)
+
+- Built via sub-agent on feat/scheduler-rest (stacked on feat/scheduler-core, since it builds on
+  the unmerged core). Migration 003 (caps/bookkeeping columns + failed_tasks). Run-count/duration
+  caps + exponential backoff + dead-letter; max_concurrent in-memory.
+- REVIEW caught the recurring mislabel: cap-blocked manual run() threw SchedulerError("unknown_task").
+  Fixed: added a "cap_exceeded" reason + a test. Core contract preserved.
+- Full suite 226 / 0; scheduler 100% lines; lint clean. Holding at SHIP (Scheduler-rest PR).
+- DEV-107 is PR #4 (open, awaiting review/merge). 108-110 stack on feat/scheduler-rest -> PR-B.
+
+## Scheduler — capability enforcement (DEV-109)
+
+- The capabilities module was never built (dropped from the approved Foundation 7-feature split),
+  so DEV-109 created it: Capability union (8 values per the kickoff), CapabilityError,
+  deny-by-default assertCapabilities/isGranted. Wired a pre-execution check into #invoke (after
+  caps, before handler): scheduled denial disables + records (no backoff — operator error); manual
+  throws CapabilityError. Migration 004 (required_capabilities). Wired into the core barrel.
+- Full suite 259 / 0; new files 100% lines; lint clean (74 files). Holding at SHIP (PR-B).
+
+## Scheduler — vesper schedule CLI + daemon wiring (DEV-110)
+
+- vesper-cli: `schedule` group (list/show/run/enable/disable) over the scheduler; daemon wires a
+  60s tick loop with clean shutdown. ANSI-aware aligned table; actionable errors; run surfaces
+  unregistered-handler ("handlers are provided by pipelines").
+- Full suite 270 / 0; lint clean (76 files). Scheduler phase functionally complete (handlers come
+  with pipelines later).
+- Minor future cleanup: expose the Store's db (or have Scheduler accept a Store) so the CLI/daemon
+  don't openStore().close()+new Database().
