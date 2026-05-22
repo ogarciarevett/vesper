@@ -40,4 +40,18 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    id: "002_scheduler",
+    sql: `
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id           TEXT    PRIMARY KEY NOT NULL,
+        kind         TEXT    NOT NULL,
+        schedule_expr TEXT   NOT NULL,
+        handler_id   TEXT    NOT NULL,
+        enabled      INTEGER NOT NULL,
+        last_run_at  INTEGER,
+        last_error   TEXT
+      );
+    `,
+  },
 ];
