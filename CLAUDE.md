@@ -255,12 +255,18 @@ voice (Voice); Tauri UI (Desktop); Linux/Windows vault backends (later); CI + te
 
 ## Where we are
 
-**Foundation in progress — no features shipped yet.** Bootstrap (this file, Bun workspace,
-package scaffold) underway under kickoff authorization. Next: Linear reconciliation (rewrite
-DEV-86 into a Foundation epic; rewrite DEV-87 storage + DEV-88 cli-adapters; create 5 new
-sub-issues for vault / vesper-cli scaffold / vesper hello / ipc stub / README) — all
-show-before-write to Omar. Then the Foundation feature loop in order:
-vault → storage → cli adapters → vesper-cli scaffold → vesper hello → ipc stub → README.
+**Foundation feature-complete — built and verified, holding at SHIP for commit approval.** All
+seven features are implemented and green: vault (DEV-102), storage (DEV-87), cli adapters
+(DEV-88), vesper-cli scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README
+(DEV-106). Full suite: 113 tests, 0 fail; 100% coverage on vesper-core vault/storage/cli; Biome
+clean; no provider SDKs in the lockfile. Live smoke confirmed `init` / `cli list` / `hello`
+(real claude shell-out) / `status` / `daemon`+`ping` -> {ok:true, version:"0.1.0"}.
+
+Per Omar's no-local-commits rule, **nothing is committed yet** beyond the two bootstrap commits
+(`c417396`, `8dff0b2`); the seven feature issues sit in Linear "In Review" awaiting a batched
+commit approval, after which they move to Done.
+
+Next phase: **Scheduler** (DEV-91 pipeline scheduler) — not started.
 
 Update this section after each `/ship`.
 
