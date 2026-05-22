@@ -255,18 +255,17 @@ voice (Voice); Tauri UI (Desktop); Linux/Windows vault backends (later); CI + te
 
 ## Where we are
 
-**Foundation feature-complete — built and verified, holding at SHIP for commit approval.** All
-seven features are implemented and green: vault (DEV-102), storage (DEV-87), cli adapters
-(DEV-88), vesper-cli scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README
-(DEV-106). Full suite: 113 tests, 0 fail; 100% coverage on vesper-core vault/storage/cli; Biome
-clean; no provider SDKs in the lockfile. Live smoke confirmed `init` / `cli list` / `hello`
-(real claude shell-out) / `status` / `daemon`+`ping` -> {ok:true, version:"0.1.0"}.
+**Foundation SHIPPED.** PR #3 merged to `main` (merge commit `3f85395`); all seven features and
+the epic DEV-86 are Done: vault (DEV-102), storage (DEV-87), cli adapters (DEV-88), vesper-cli
+scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README (DEV-106). 113 tests / 0
+fail; 100% coverage on vesper-core vault/storage/cli; Biome clean; no provider SDKs. Live smoke
+confirmed `init` / `cli list` / `hello` (real claude shell-out) / `status` / `daemon`+`ping` ->
+{ok:true, version:"0.1.0"}.
 
-Per Omar's no-local-commits rule, **nothing is committed yet** beyond the two bootstrap commits
-(`c417396`, `8dff0b2`); the seven feature issues sit in Linear "In Review" awaiting a batched
-commit approval, after which they move to Done.
-
-Next phase: **Scheduler** (DEV-91 pipeline scheduler) — not started.
+**Now: Scheduler phase (DEV-91 pipeline scheduler) — at the SPEC gate.** DEV-91 (and DEV-89
+daemon) still carry pre-pivot content (packages/daemon, croner dep, dollar budget caps tied to
+the old LLM router) and need reconciliation + several architecture decisions before BUILD — see
+specs/pipeline-scheduler.md. Awaiting Omar's architecture approval; not building yet.
 
 Update this section after each `/ship`.
 

@@ -79,3 +79,16 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
   Reusable lesson for Scheduler: this orchestration (leader owns Linear + integration + REVIEW;
   sub-agents own scoped BUILD) is the template for autonomous pipelines.
 - All 7 feature issues sit "In Review" — holding for one batched commit approval (no-local-commits).
+
+## Scheduler — scheduler core (DEV-107)
+
+- Foundation merged (PR #3, 3f85395). Entered Scheduler: DEV-91 reconciled to bring-your-own-CLI +
+  split into DEV-107..110; architecture approved (hand-rolled cron, in-process event bus, run-count
+  caps not USD, scheduler in vesper-core hosted by `vesper daemon`, not blocked on DEV-89).
+- DEV-107 built via sub-agent: scheduler/ (Scheduler, cron parser, event bus, handler registry,
+  persistence) + storage migration 002 (scheduled_tasks).
+- REVIEW caught a real bug: handler failures re-thrown as SchedulerError("unknown_task") and tick()
+  awaited per-task in a loop, so one failing task aborted the rest. Fixed: record last_error, tick()
+  isolates failures, run() propagates the original, events swallow. Added isolation/propagation tests.
+- Full suite 205 / 0; lint clean (67 files); barrel resolves. Holding at SHIP for the Scheduler PR.
+- Remaining: DEV-108 guardrails, DEV-109 capability enforcement, DEV-110 schedule CLI.
