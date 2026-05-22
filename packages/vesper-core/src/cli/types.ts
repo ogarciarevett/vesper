@@ -1,0 +1,53 @@
+/**
+ * The result of a single `CLIAdapter.complete` call. All fields are populated
+ * even on success so callers can log the raw output and timing without having
+ * to track them separately.
+ */
+export interface CompleteResult {
+  /** Trimmed stdout from the CLI process. */
+  readonly text: string;
+  /** Process exit code (0 on success). */
+  readonly exit_code: number;
+  /** Raw, untrimmed stdout. */
+  readonly raw_stdout: string;
+  /** Raw stderr (may be empty). */
+  readonly raw_stderr: string;
+  /** Wall-clock milliseconds from spawn to exit. */
+  readonly duration_ms: number;
+}
+
+/**
+ * A single CLI backend that Vesper can shell out to. Each implementation wraps
+ * one external binary (`claude`, `opencode`, `codex`, `gemini`). The interface
+ * is intentionally minimal: one completion call and a health probe. Streaming,
+ * tool-use, and cost tracking are out of scope for Foundation.
+ *
+ * Implementations MUST use an injectable {@link import("../process/run.ts").ProcessRunner}
+ * so tests can mock the shell-out — no real process is invoked in a unit suite.
+ */
+export interface CLIAdapter {
+  /** Machine-readable name of the underlying CLI (e.g. `"claude"`, `"gemini"`). */
+  readonly name: string;
+
+  /**
+   * Run the CLI with `prompt` as the final positional argument and return the
+   * result. Rejects with `CLIError` on failure.
+   */
+  complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult>;
+
+  /**
+   * Verify the CLI is installed and authenticated. Resolves on success, rejects
+   * with `CLIError` on any failure. Callers treat a rejection as a probe failure
+   * without further unwrapping.
+   */
+  probe(): Promise<void>;
+}
+
+/**
+ * Per-call options for {@link CLIAdapter.complete}. Foundation only exposes the
+ * timeout override; additional options (max_tokens, temperature) land later.
+ */
+export interface CompleteOptions {
+  /** Override the adapter's default timeout for this specific call (milliseconds). */
+  readonly timeoutMs?: number;
+}

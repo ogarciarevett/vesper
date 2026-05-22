@@ -1,0 +1,428 @@
+import { describe, expect, test } from "bun:test";
+import type { ProcessRunner, RunResult } from "../process/run.ts";
+import { CommandNotFoundError, ProcessTimeoutError } from "../process/run.ts";
+import { ClaudeCodeAdapter } from "./adapters/claude.ts";
+import { CodexAdapter } from "./adapters/codex.ts";
+import { GeminiCLIAdapter } from "./adapters/gemini.ts";
+import { OpenCodeAdapter } from "./adapters/opencode.ts";
+import { detectAvailableCLIs, selectDefault } from "./detect.ts";
+import { CLIError } from "./errors.ts";
+import { ADAPTER_REGISTRY, buildAdapter } from "./registry.ts";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function okResult(partial: Partial<RunResult> = {}): RunResult {
+  return { stdout: "hello\n", stderr: "", exitCode: 0, durationMs: 5, ...partial };
+}
+
+/** Returns a runner that always resolves with the given result. */
+function fixedRunner(result: RunResult): ProcessRunner {
+  return async () => result;
+}
+
+/** Returns a runner that always throws the given error. */
+function throwingRunner(err: unknown): ProcessRunner {
+  return async () => {
+    throw err;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CLIError
+// ---------------------------------------------------------------------------
+
+describe("CLIError", () => {
+  test("has code='cli' and the given reason", () => {
+    const err = new CLIError("not_installed", "claude: command not found");
+    expect(err.code).toBe("cli");
+    expect(err.reason).toBe("not_installed");
+    expect(err.name).toBe("CLIError");
+  });
+
+  test("carries cause when provided", () => {
+    const cause = new Error("original");
+    const err = new CLIError("timeout", "timed out", { cause });
+    expect(err.cause).toBe(cause);
+  });
+
+  test("all reason variants are valid", () => {
+    const reasons = ["not_installed", "not_authenticated", "timeout", "nonzero_exit"] as const;
+    for (const reason of reasons) {
+      const e = new CLIError(reason, "msg");
+      expect(e.reason).toBe(reason);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClaudeCodeAdapter — complete()
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeAdapter.complete", () => {
+  test("returns CompleteResult on success", async () => {
+    const adapter = new ClaudeCodeAdapter({ run: fixedRunner(okResult()) });
+    const result = await adapter.complete("say hello");
+    expect(result.text).toBe("hello");
+    expect(result.exit_code).toBe(0);
+    expect(result.raw_stdout).toBe("hello\n");
+    expect(result.raw_stderr).toBe("");
+    expect(typeof result.duration_ms).toBe("number");
+  });
+
+  test("text is trimmed stdout", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "  output with spaces  \n" })),
+    });
+    const result = await adapter.complete("test");
+    expect(result.text).toBe("output with spaces");
+  });
+
+  test("passes prompt as the last arg", async () => {
+    let capturedArgs: readonly string[] = [];
+    const run: ProcessRunner = async (_cmd, args) => {
+      capturedArgs = args;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("my prompt");
+    expect(capturedArgs).toEqual(["-p", "my prompt"]);
+  });
+
+  test("passes command correctly", async () => {
+    let capturedCmd = "";
+    const run: ProcessRunner = async (cmd) => {
+      capturedCmd = cmd;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("test");
+    expect(capturedCmd).toBe("claude");
+  });
+
+  test("CommandNotFoundError -> CLIError(not_installed)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new CommandNotFoundError("claude")),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_installed");
+    expect((err as CLIError).code).toBe("cli");
+  });
+
+  test("ProcessTimeoutError -> CLIError(timeout)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new ProcessTimeoutError("claude", 30000)),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("timeout");
+  });
+
+  test("nonzero exit with auth stderr -> CLIError(not_authenticated)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "not authenticated", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+
+  test("nonzero exit with 'login required' stderr -> CLIError(not_authenticated)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "please login to continue", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+
+  test("nonzero exit with 'unauthorized' stderr -> CLIError(not_authenticated)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "unauthorized access", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+
+  test("nonzero exit with 'api key' in stderr -> CLIError(not_authenticated)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "not a valid api key", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+
+  test("nonzero exit with plain stderr -> CLIError(nonzero_exit)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "some other error", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("nonzero_exit");
+  });
+
+  test("nonzero exit with empty stderr -> CLIError(nonzero_exit)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 2, stderr: "", stdout: "" })),
+    });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("nonzero_exit");
+  });
+
+  test("custom command override is used", async () => {
+    let capturedCmd = "";
+    const run: ProcessRunner = async (cmd) => {
+      capturedCmd = cmd;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run, command: "claude-custom" });
+    await adapter.complete("test");
+    expect(capturedCmd).toBe("claude-custom");
+  });
+
+  test("custom args override replaces defaults", async () => {
+    let capturedArgs: readonly string[] = [];
+    const run: ProcessRunner = async (_cmd, args) => {
+      capturedArgs = args;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run, args: ["--headless", "--json"] });
+    await adapter.complete("prompt");
+    expect(capturedArgs).toEqual(["--headless", "--json", "prompt"]);
+  });
+
+  test("unknown error is re-thrown as-is", async () => {
+    const unexpected = new TypeError("totally unexpected");
+    const adapter = new ClaudeCodeAdapter({ run: throwingRunner(unexpected) });
+    const err = await adapter.complete("test").catch((e: unknown) => e);
+    expect(err).toBe(unexpected);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// probe()
+// ---------------------------------------------------------------------------
+
+describe("CLIAdapter.probe", () => {
+  test("resolves when complete succeeds", async () => {
+    const adapter = new ClaudeCodeAdapter({ run: fixedRunner(okResult({ stdout: "OK\n" })) });
+    await expect(adapter.probe()).resolves.toBeUndefined();
+  });
+
+  test("throws CLIError(not_installed) on CommandNotFoundError", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new CommandNotFoundError("claude")),
+    });
+    const err = await adapter.probe().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_installed");
+  });
+
+  test("throws CLIError(timeout) on ProcessTimeoutError", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new ProcessTimeoutError("claude", 30000)),
+    });
+    const err = await adapter.probe().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("timeout");
+  });
+
+  test("throws CLIError(not_authenticated) on auth failure", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "not logged in", stdout: "" })),
+    });
+    const err = await adapter.probe().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// All four adapters — name + default invocation shape
+// ---------------------------------------------------------------------------
+
+describe("adapter names and default invocations", () => {
+  test("ClaudeCodeAdapter name='claude' args=['-p']", async () => {
+    let cmd = "";
+    let args: readonly string[] = [];
+    const run: ProcessRunner = async (c, a) => {
+      cmd = c;
+      args = a;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    expect(adapter.name).toBe("claude");
+    await adapter.complete("p");
+    expect(cmd).toBe("claude");
+    expect(args).toEqual(["-p", "p"]);
+  });
+
+  test("OpenCodeAdapter name='opencode' args=['run']", async () => {
+    let cmd = "";
+    let args: readonly string[] = [];
+    const run: ProcessRunner = async (c, a) => {
+      cmd = c;
+      args = a;
+      return okResult();
+    };
+    const adapter = new OpenCodeAdapter({ run });
+    expect(adapter.name).toBe("opencode");
+    await adapter.complete("p");
+    expect(cmd).toBe("opencode");
+    expect(args).toEqual(["run", "p"]);
+  });
+
+  test("CodexAdapter name='codex' args=['exec']", async () => {
+    let cmd = "";
+    let args: readonly string[] = [];
+    const run: ProcessRunner = async (c, a) => {
+      cmd = c;
+      args = a;
+      return okResult();
+    };
+    const adapter = new CodexAdapter({ run });
+    expect(adapter.name).toBe("codex");
+    await adapter.complete("p");
+    expect(cmd).toBe("codex");
+    expect(args).toEqual(["exec", "p"]);
+  });
+
+  test("GeminiCLIAdapter name='gemini' args=['-p']", async () => {
+    let cmd = "";
+    let args: readonly string[] = [];
+    const run: ProcessRunner = async (c, a) => {
+      cmd = c;
+      args = a;
+      return okResult();
+    };
+    const adapter = new GeminiCLIAdapter({ run });
+    expect(adapter.name).toBe("gemini");
+    await adapter.complete("p");
+    expect(cmd).toBe("gemini");
+    expect(args).toEqual(["-p", "p"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectAvailableCLIs
+// ---------------------------------------------------------------------------
+
+describe("detectAvailableCLIs", () => {
+  test("returns names of CLIs where which exits 0", async () => {
+    const run: ProcessRunner = async (_cmd, args) => {
+      const name = args[0];
+      if (name === "claude" || name === "codex") {
+        return okResult({ stdout: `/usr/local/bin/${name}\n` });
+      }
+      return okResult({ exitCode: 1, stdout: "" });
+    };
+    const result = await detectAvailableCLIs(run);
+    expect(result).toEqual(["claude", "codex"]);
+  });
+
+  test("returns empty array when all which calls fail", async () => {
+    const result = await detectAvailableCLIs(async () => okResult({ exitCode: 1, stdout: "" }));
+    expect(result).toEqual([]);
+  });
+
+  test("returns all names when all which calls succeed", async () => {
+    const result = await detectAvailableCLIs(async (_cmd, args) =>
+      okResult({ stdout: `/usr/bin/${args[0] ?? ""}\n` }),
+    );
+    expect(result).toEqual(["claude", "opencode", "codex", "gemini"]);
+  });
+
+  test("handles CommandNotFoundError on which itself gracefully", async () => {
+    const result = await detectAvailableCLIs(throwingRunner(new CommandNotFoundError("which")));
+    expect(result).toEqual([]);
+  });
+
+  test("handles unexpected runner errors gracefully", async () => {
+    const result = await detectAvailableCLIs(throwingRunner(new Error("random spawn error")));
+    expect(result).toEqual([]);
+  });
+
+  test("only probes the 'which' command (not the adapters directly)", async () => {
+    const probed: string[] = [];
+    const run: ProcessRunner = async (cmd, args) => {
+      probed.push(`${cmd} ${args.join(" ")}`);
+      return okResult({ exitCode: 1, stdout: "" });
+    };
+    await detectAvailableCLIs(run);
+    expect(probed.every((s) => s.startsWith("which "))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectDefault
+// ---------------------------------------------------------------------------
+
+describe("selectDefault", () => {
+  test("returns configuredDefault when installed", () => {
+    expect(selectDefault(["claude", "opencode"], "opencode")).toBe("opencode");
+  });
+
+  test("ignores configuredDefault when not installed, falls back to priority", () => {
+    expect(selectDefault(["opencode", "codex"], "gemini")).toBe("opencode");
+  });
+
+  test("priority order: claude > opencode > codex > gemini", () => {
+    expect(selectDefault(["gemini", "codex", "opencode", "claude"])).toBe("claude");
+    expect(selectDefault(["gemini", "codex", "opencode"])).toBe("opencode");
+    expect(selectDefault(["gemini", "codex"])).toBe("codex");
+    expect(selectDefault(["gemini"])).toBe("gemini");
+  });
+
+  test("returns undefined when nothing is installed", () => {
+    expect(selectDefault([])).toBeUndefined();
+    expect(selectDefault([], "opencode")).toBeUndefined();
+  });
+
+  test("returns configuredDefault that is also first in priority", () => {
+    expect(selectDefault(["claude", "opencode"], "claude")).toBe("claude");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+describe("ADAPTER_REGISTRY / buildAdapter", () => {
+  test("registry contains all four adapters", () => {
+    expect(Object.keys(ADAPTER_REGISTRY).sort()).toEqual(["claude", "codex", "gemini", "opencode"]);
+  });
+
+  test("buildAdapter returns correct adapter instance", () => {
+    const claude = buildAdapter("claude");
+    expect(claude?.name).toBe("claude");
+
+    const opencode = buildAdapter("opencode");
+    expect(opencode?.name).toBe("opencode");
+
+    const codex = buildAdapter("codex");
+    expect(codex?.name).toBe("codex");
+
+    const gemini = buildAdapter("gemini");
+    expect(gemini?.name).toBe("gemini");
+  });
+
+  test("buildAdapter returns undefined for unknown name", () => {
+    expect(buildAdapter("unknown-cli")).toBeUndefined();
+  });
+
+  test("buildAdapter passes options to the adapter", async () => {
+    let capturedCmd = "";
+    const run: ProcessRunner = async (cmd) => {
+      capturedCmd = cmd;
+      return okResult();
+    };
+    const adapter = buildAdapter("claude", { run, command: "claude-override" });
+    await adapter?.complete("hello");
+    expect(capturedCmd).toBe("claude-override");
+  });
+});
