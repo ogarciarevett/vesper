@@ -11,6 +11,7 @@ export { HandlerRegistry } from "./registry.ts";
 export type { SchedulerOptions } from "./scheduler.ts";
 export { Scheduler } from "./scheduler.ts";
 export type {
+  FailedTask,
   RegisterTaskInput,
   ScheduledTask,
   TaskContext,
