@@ -7,7 +7,18 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!**/.claude", "!**/dist", "!**/node_modules", "!**/.vesper"]
+    "includes": [
+      "**",
+      "!**/.claude",
+      "!**/.opencode",
+      "!**/.gemini",
+      "!**/.cursor",
+      "!**/.ai/generated",
+      "!**/.githooks",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/.vesper"
+    ]
   },
   "formatter": {
     "enabled": true,

@@ -10,7 +10,9 @@
   "scripts": {
     "test": "bun test",
     "lint": "biome check .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "sync:ai": "bun scripts/sync-ai-docs.ts",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "engines": {
     "bun": ">=1.1.0"

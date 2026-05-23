@@ -121,3 +121,39 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
   with pipelines later).
 - Minor future cleanup: expose the Store's db (or have Scheduler accept a Store) so the CLI/daemon
   don't openStore().close()+new Database().
+
+## CI — GitHub Actions gate (DEV-111)
+
+- Triggered by a flaky-test report: 3 `ui` tests failed only under an interactive TTY because
+  `colorEnabled()` reads `process.stdout.isTTY`, which is true in a terminal but undefined when
+  piped (CI / Bash tool). Fix: force `NO_COLOR` for that describe block (save/restore) so the
+  plain-mode assertions are environment-independent. Lesson: tests must control their inputs, never
+  read ambient globals — same seam discipline as the injected clock / process runner elsewhere.
+- Omar pulled CI forward from Launch (overriding Hard rule 10, which is amended to record it).
+  Added `.github/workflows/ci.yml`: `bun install --frozen-lockfile` -> `bunx biome ci .` -> `bun
+  test`, on push to main + PRs. `biome ci` (not split lint/format) keeps CI == the local gate incl.
+  import-order. DEV-111 created In Review; SHIP pending Omar's commit authorization.
+
+## Dev tooling — single-source .ai/ agent-docs + multi-CLI fan-out
+
+- Replicated eoa-server's single-source agent-docs architecture (its ADR-0001) at Omar's request:
+  one hand-edited source under `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor — the
+  same four CLIs Vesper's bring-your-own-CLI adapters target.
+- `.ai/context.md` (project contract, migrated from CLAUDE.md + source-of-truth header + refreshed
+  "Where we are") + `.ai/pipeline.md` (the Vesper cycle, rewritten — not eoa's lifecycle — plus the
+  Agent Teams parallel-work section and the 3-layer memory protocol). `scripts/sync-ai-docs.ts`
+  (`bun run sync:ai`) generates AGENTS.md (inline canonical) + CLAUDE.md/GEMINI.md (@-import stubs)
+  + `.cursor` symlink, and materializes `.claude/.opencode/.gemini` agents+skills. `.githooks/
+  pre-commit` (wired via `core.hooksPath`, auto-set by the `prepare` script) guards freshness.
+- Curated: 4 agents (code-reviewer, security-auditor, test-engineer copied as-is;
+  performance-reviewer authored fresh for Vesper's Bun/sqlite/scheduler domain — eoa's was a
+  tx-sender placeholder), 15 cycle-relevant skills, 4 references. Dropped commands (the
+  agent-skills plugin provides slashes globally) and `.mcp.json` (no project-scoped MCP servers).
+- CLAUDE.md is now a GENERATED stub — the biggest change; the real contract lives in `.ai/`.
+- Verified: sync is deterministic (second run byte-identical); `bun test` 270/0; `biome ci .` clean
+  (78 files); CLAUDE.md `@`-resolves to the full contract with all 13 hard rules intact.
+- RULE 11 FALLBACK: the Linear issue for this work could not be filed — the workspace hit its
+  free-tier issue cap right after DEV-111. Per the contract's Linear-unavailable fallback, this
+  entry is the record. RECONCILE: open a `chore/tooling` DEV issue (OpenSpec body drafted in the
+  session) once the cap is lifted, and backfill the status trail.
+- SHIP pending Omar's commit authorization (standing no-local-commits rule); nothing committed yet.

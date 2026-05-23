@@ -1,0 +1,5 @@
+---
+description: Vesper agent operating contract (generated from .ai/context.md + .ai/pipeline.md)
+globs: **/*
+alwaysApply: true
+---

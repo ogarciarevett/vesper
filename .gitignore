@@ -18,3 +18,19 @@ dist/
 
 # OS
 .DS_Store
+
+# local, per-dev agent working memory (seeded from .ai/memory.example.md via `bun run sync:ai`)
+.ai/memory.md
+
+# generated per-tool agent assets — sources live in .ai/; run `bun run sync:ai`
+/.claude/commands/
+/.claude/agents/
+/.claude/skills/
+/.opencode/commands/
+/.opencode/agents/
+/.gemini/commands/
+/.gemini/agents/
+/.gemini/skills/
+
+# per-user local Claude Code settings
+.claude/settings.local.json

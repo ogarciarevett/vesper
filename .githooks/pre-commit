@@ -1,0 +1,17 @@
+#!/bin/sh
+# Guard: generated agent docs must stay in sync with the single sources of truth
+# (.ai/context.md + .ai/pipeline.md). Regenerate, then fail the commit if any generated
+# file changed — i.e. it was stale, or someone hand-edited a generated file.
+#
+# To fix a failure: edit .ai/context.md / .ai/pipeline.md (never the generated files),
+# run `bun run sync:ai`, then `git add` the regenerated files and commit again.
+set -e
+
+bun run sync:ai >/dev/null
+
+GENERATED="AGENTS.md CLAUDE.md GEMINI.md .ai/generated/rules.mdc"
+if ! git diff --quiet -- $GENERATED; then
+  echo "ERROR: generated agent docs are stale — run 'bun run sync:ai' and re-stage:"
+  git --no-pager diff --name-only -- $GENERATED | sed 's/^/    /'
+  exit 1
+fi
