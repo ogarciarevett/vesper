@@ -36,6 +36,12 @@ transitions the Linear issue and posts a comment — see the "Linear status prot
 | `/test` | TEST | | `/ship` | SHIP/DELEGATE |
 | | | | (manual) | REPEAT |
 
+The `/spec`, `/plan`, etc. slashes are Claude Code's agent-skills plugin commands; Codex, Gemini,
+and opencode do not share that slash UI but DO run the same skills. Codex auto-discovers skills from
+its global `~/.codex/skills/` (`$CODEX_HOME/skills`), so install the `.ai/skills/*` there to use them
+in Codex; Gemini and opencode read the materialized `.gemini/`/`.opencode/` copies. Whatever the
+tool, the numbered cycle steps above are the cross-tool source of truth.
+
 Advancement gates: stop and show Omar after `/spec` and after `/plan`; await acknowledgment.
 TDD is test-first for vault/storage/cli/scheduler (CLI adapter tests **mock the process seam** —
 no real CLI calls in the suite; the suite must shell out to nothing).

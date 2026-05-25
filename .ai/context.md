@@ -260,16 +260,16 @@ scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README (DEV-106)
 (`vesper schedule` CLI + daemon tick loop) all Done; PRs #4 and #5 merged to `main`. Suite at
 270 tests / 0 fail; scheduler 100% lines; Biome clean; no provider SDKs.
 
-**In flight:**
-- **CI (DEV-111, In Review)** — `.github/workflows/ci.yml` (`biome ci` + `bun test`) built and
-  green locally; awaiting Omar's commit authorization to ship.
-- **Single-source `.ai/` agent-docs (this change)** — adopting eoa-server's model so one source
-  drives Claude/opencode/Codex/Gemini/Cursor. Linear issue blocked by the workspace's free-tier
-  issue cap; tracked in `cycle-log.md` pending reconciliation to a DEV issue.
+**CI** — GitHub Actions (`.github/workflows/ci.yml`) runs `biome ci` + `bun test` on push to
+`main` and on pull requests.
 
-**Next:** pick the next-highest-priority backlog issue (DEV-89 daemon lifecycle is Backlog and was
-deliberately deferred; Desktop work DEV-93/DEV-94 is Backlog). Re-enter at SPEC. Update this
-section after each `/ship`.
+**Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: 270 tests / 0 fail; Biome clean; no provider
+SDKs.
+
+**Next:** the first pipeline — establish the pipeline runtime (a handler invokes the user's chosen
+CLI via the adapter and records a run), then build on it. DEV-89 (daemon lifecycle) and Desktop
+(DEV-93/DEV-94) remain in the backlog. Update this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the
