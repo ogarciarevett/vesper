@@ -4,6 +4,8 @@ A local-first runtime for personal automation agents. Vesper runs on your machin
 independent automation **pipelines** under one host process — vault, storage, CLI orchestration,
 and an IPC surface.
 
+![Vesper: init, a real reply from your own CLI, and a healthy runtime](docs/imgs/demo.gif)
+
 ## Bring your own CLI
 
 Vesper does **not** ship or call any LLM provider SDK, and it never holds an API key. Instead it

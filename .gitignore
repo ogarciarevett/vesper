@@ -34,3 +34,9 @@ dist/
 
 # per-user local Claude Code settings
 .claude/settings.local.json
+
+# local-only demo recorder + its intermediates (not committed)
+/scripts/record-demo.sh
+/docs/imgs/demo.cast
+/docs/imgs/demo.mov
+# docs/imgs/demo.gif IS committed (embedded in the README); the .cast is also deleted after rendering
