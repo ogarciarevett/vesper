@@ -34,7 +34,14 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
+function printBanner(): void {
+  for (const row of ["  ┌─────┐", "  │ ◉ ◉ │", "  │  ─  │", "  └─┬─┬─┘"]) {
+    line(cyan(row));
+  }
+}
+
 function printTopHelp(registry: readonly Registrable[]): void {
+  printBanner();
   line(bold(`${PROGRAM} — a local-first runtime for personal automation agents`));
   line();
   line(`${bold("Usage:")} ${PROGRAM} <command> [options]`);

@@ -1,4 +1,17 @@
-# Vesper
+```
+                    ┌─────┐
+                    │ ◉ ◉ │
+                    │  ─  │
+                    └─┬─┬─┘
+   ██╗   ██╗███████╗███████╗██████╗ ███████╗██████╗
+   ██║   ██║██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗
+   ██║   ██║█████╗  ███████╗██████╔╝█████╗  ██████╔╝
+   ╚██╗ ██╔╝██╔══╝  ╚════██║██╔═══╝ ██╔══╝  ██╔══██╗
+    ╚████╔╝ ███████╗███████║██║     ███████╗██║  ██║
+     ╚═══╝  ╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝
+```
+
+[![CI](https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml/badge.svg)](https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml)
 
 A local-first runtime for personal automation agents. Vesper runs on your machine and hosts
 independent automation **pipelines** under one host process — vault, storage, CLI orchestration,
