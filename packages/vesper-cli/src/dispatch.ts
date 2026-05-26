@@ -1,5 +1,6 @@
 import { VesperError } from "@vesper/core";
 import { type ParsedArgs, parseArgs } from "./args.ts";
+import { agentFace } from "./banner.ts";
 import { bold, cyan, dim, errorLine, line } from "./ui.ts";
 
 /** A leaf command, e.g. `vesper init` or `vesper vault set`. */
@@ -35,9 +36,9 @@ function formatError(err: unknown): string {
 }
 
 function printBanner(): void {
-  for (const row of ["  ┌─────┐", "  │ ◉ ◉ │", "  │  ─  │", "  └─┬─┬─┘"]) {
-    line(cyan(row));
-  }
+  const { lines, id } = agentFace();
+  for (const row of lines) line(cyan(`  ${row}`));
+  line(dim(`  agent · ${id}`));
 }
 
 function printTopHelp(registry: readonly Registrable[]): void {
