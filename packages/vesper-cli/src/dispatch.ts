@@ -25,6 +25,12 @@ export type Registrable = Command | CommandGroup;
 
 const PROGRAM = "vesper";
 
+/**
+ * Flags that take a space-separated value (e.g. `--cli claude`). Listed centrally
+ * so the parser treats them as valued; everything else stays a boolean flag.
+ */
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["cli", "param"]);
+
 function isGroup(entry: Registrable): entry is CommandGroup {
   return "subcommands" in entry;
 }
@@ -92,7 +98,7 @@ export async function dispatch(
   registry: readonly Registrable[],
   argv: readonly string[],
 ): Promise<number> {
-  const { positionals, flags } = parseArgs(argv);
+  const { positionals, flags } = parseArgs(argv, VALUE_FLAGS);
   const wantsHelp = flags.help === true;
   const first = positionals[0];
 

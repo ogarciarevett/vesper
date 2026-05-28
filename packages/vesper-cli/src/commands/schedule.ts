@@ -1,15 +1,44 @@
 import { Database } from "bun:sqlite";
 import type { ScheduledTask } from "@vesper/core";
 import {
+  CAPABILITIES,
+  detectAvailableCLIs,
   HandlerRegistry,
   openStore,
   Scheduler,
   SchedulerError,
   TaskPersistence,
 } from "@vesper/core";
+import { registerPipelines } from "@vesper/pipelines";
+import { makeCompleteFn } from "../cli-resolver.ts";
+import { loadConfig } from "../config.ts";
 import type { Command, CommandGroup } from "../dispatch.ts";
 import { dbPath } from "../paths.ts";
 import { bold, cyan, dim, errorLine, green, line, yellow } from "../ui.ts";
+
+/**
+ * Parse transient run params from the tokens that follow the task id.
+ *
+ * Two equivalent forms are accepted: bare `key=value` positionals
+ * (`vesper schedule run echo prompt="hi"`) and the `--param key=value` flag
+ * (the parser treats `param` as a value-flag, so `--param prompt=hi` arrives as
+ * the string `flags.param`). Each `key=value` becomes a param entry; tokens
+ * without an `=` are ignored. The value keeps everything after the first `=`, so
+ * `a=b=c` yields `{ a: "b=c" }`.
+ */
+export function parseRunParams(
+  positionals: readonly string[],
+  paramFlag?: string | boolean,
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  const tokens = typeof paramFlag === "string" ? [...positionals, paramFlag] : positionals;
+  for (const token of tokens) {
+    const eq = token.indexOf("=");
+    if (eq < 0) continue;
+    params[token.slice(0, eq)] = token.slice(eq + 1);
+  }
+  return params;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -188,15 +217,29 @@ const showCommand: Command = {
 
 const runCommand: Command = {
   name: "run",
-  summary: "Manually run a task by id.",
-  usage: "vesper schedule run <id>",
-  async run({ positionals }) {
+  summary: "Manually run a task by id, invoking the resolved CLI and recording a run.",
+  usage: "vesper schedule run <id> [--cli <name>] [--param key=value]",
+  async run({ positionals, flags }) {
     const id = positionals[0];
-    if (id === undefined) throw new Error("usage: vesper schedule run <id>");
+    if (id === undefined) throw new Error("usage: vesper schedule run <id> [--cli <name>]");
+
+    // Params are transient (not persisted): `key=value` positionals after the id
+    // and/or the `--param key=value` flag.
+    const params = parseRunParams(positionals.slice(1), flags.param);
+    const cli = typeof flags.cli === "string" ? flags.cli : undefined;
+
+    const config = await loadConfig();
+    const installed = await detectAvailableCLIs();
+    const complete = makeCompleteFn(config, installed);
 
     const db = openDb();
     try {
-      // Look up the task first so we can provide a useful error if it doesn't exist.
+      // Register pipelines first so their tasks (e.g. `echo`) exist before lookup.
+      const registry = new HandlerRegistry();
+      const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES, complete });
+      registerPipelines(scheduler, registry);
+
+      // Look up the task so we can provide a useful error if it doesn't exist.
       const persistence = new TaskPersistence(db);
       const task = persistence.get(id);
 
@@ -205,12 +248,9 @@ const runCommand: Command = {
         return 1;
       }
 
-      const registry = new HandlerRegistry();
-      const scheduler = new Scheduler({ db, registry });
-
       try {
-        await scheduler.run(id);
-        line(green(`task "${id}" ran successfully`));
+        await scheduler.run(id, { ...(cli !== undefined ? { cli } : {}), params });
+        line(green(`task "${id}" ran — recorded a run`));
         return 0;
       } catch (err) {
         if (err instanceof SchedulerError && err.reason === "unknown_handler") {
@@ -219,7 +259,8 @@ const runCommand: Command = {
           );
           return 1;
         }
-        // Re-throw unexpected errors so the dispatch boundary can handle them.
+        // Re-throw unexpected errors (CLIError, CapabilityError, ...) so the
+        // dispatch boundary can print them as one actionable line.
         throw err;
       }
     } finally {

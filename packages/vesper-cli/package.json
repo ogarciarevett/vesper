@@ -7,6 +7,7 @@
     "vesper": "src/index.ts"
   },
   "dependencies": {
-    "@vesper/core": "workspace:*"
+    "@vesper/core": "workspace:*",
+    "@vesper/pipelines": "workspace:*"
   }
 }
