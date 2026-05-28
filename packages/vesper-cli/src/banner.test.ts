@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { VARIANTS, agentFace, faceFromSeed, machineFingerprint } from "./banner.ts";
+import { agentFace, faceFromSeed, machineFingerprint, VARIANTS } from "./banner.ts";
 
 describe("agent face", () => {
   test("is deterministic for a given seed", () => {
