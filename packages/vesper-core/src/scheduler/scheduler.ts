@@ -369,22 +369,26 @@ export class Scheduler {
       });
 
       // -- duration cap: race handler against timeout --
-      let handlerPromise: Promise<void>;
-      if (current.max_duration_ms !== null) {
-        const timeoutMs = current.max_duration_ms;
-        const timeoutPromise = new Promise<never>((_resolve, reject) =>
-          setTimeout(
-            () =>
-              reject(new Error(`task "${current.id}" exceeded max_duration_ms (${timeoutMs}ms)`)),
-            timeoutMs,
-          ),
-        );
-        handlerPromise = Promise.race([Promise.resolve(handler(ctx)), timeoutPromise]);
-      } else {
-        handlerPromise = Promise.resolve(handler(ctx));
+      // The timer handle is cleared in `finally` so a fast handler never leaves a
+      // pending timer keeping the event loop alive up to max_duration_ms.
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (current.max_duration_ms !== null) {
+          const timeoutMs = current.max_duration_ms;
+          const timeoutPromise = new Promise<never>((_resolve, reject) => {
+            timeoutHandle = setTimeout(
+              () =>
+                reject(new Error(`task "${current.id}" exceeded max_duration_ms (${timeoutMs}ms)`)),
+              timeoutMs,
+            );
+          });
+          await Promise.race([Promise.resolve(handler(ctx)), timeoutPromise]);
+        } else {
+          await Promise.resolve(handler(ctx));
+        }
+      } finally {
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       }
-
-      await handlerPromise;
 
       // Success: record run, reset backoff, update daily counter.
       this.#persistence.updateLastRun(current.id, now.getTime(), null);

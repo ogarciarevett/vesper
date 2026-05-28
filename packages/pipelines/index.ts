@@ -9,6 +9,7 @@
  */
 
 import {
+  type Capability,
   type HandlerRegistry,
   type RegisterTaskInput,
   type Scheduler,
@@ -51,6 +52,22 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     taskInput: skillTrainTaskInput,
   },
 ];
+
+/**
+ * The exact set of capabilities the built-in pipelines need — the union of every
+ * registered pipeline's `required_capabilities`. The host grants THIS instead of
+ * the full capability set, so the scheduler's capability check stays meaningful
+ * (deny-by-default): a task can never receive a capability no pipeline declared.
+ */
+export function grantedCapabilities(): Capability[] {
+  const granted = new Set<Capability>();
+  for (const descriptor of PIPELINES) {
+    for (const capability of descriptor.taskInput.required_capabilities ?? []) {
+      granted.add(capability);
+    }
+  }
+  return [...granted];
+}
 
 /**
  * Install every built-in pipeline into the given scheduler.
