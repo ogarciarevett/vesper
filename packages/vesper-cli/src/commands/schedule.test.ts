@@ -12,6 +12,7 @@ import {
 } from "@vesper/core";
 import { dispatch } from "../dispatch.ts";
 import { registry } from "./index.ts";
+import { parseRunParams } from "./schedule.ts";
 
 // ---------------------------------------------------------------------------
 // Test environment helpers
@@ -73,6 +74,49 @@ async function captureStdoutAsync(fn: () => Promise<unknown>): Promise<string> {
   }
   return chunks.join("");
 }
+
+// ---------------------------------------------------------------------------
+// parseRunParams (pure helper)
+// ---------------------------------------------------------------------------
+
+describe("parseRunParams", () => {
+  test("GIVEN no positionals THEN returns an empty object", () => {
+    expect(parseRunParams([])).toEqual({});
+  });
+
+  test("GIVEN a key=value (after the id slice) THEN parses it", () => {
+    // The id is positionals[0]; callers pass positionals.slice(1).
+    expect(parseRunParams(["prompt=hello world"])).toEqual({ prompt: "hello world" });
+  });
+
+  test("GIVEN a positional with no '=' THEN it is ignored", () => {
+    expect(parseRunParams(["echo", "bare"])).toEqual({});
+  });
+
+  test("GIVEN a trailing '=' THEN the value is the empty string", () => {
+    expect(parseRunParams(["key="])).toEqual({ key: "" });
+  });
+
+  test("GIVEN multiple '=' THEN only the first splits (value keeps the rest)", () => {
+    expect(parseRunParams(["a=b=c"])).toEqual({ a: "b=c" });
+  });
+
+  test("GIVEN a string --param flag THEN it is merged with positional params", () => {
+    expect(parseRunParams(["prompt=hi"], "topic=ai")).toEqual({ prompt: "hi", topic: "ai" });
+  });
+
+  test("GIVEN only a string --param flag THEN it is parsed", () => {
+    expect(parseRunParams([], "prompt=hi")).toEqual({ prompt: "hi" });
+  });
+
+  test("GIVEN a bare (boolean) --param flag THEN it is ignored", () => {
+    expect(parseRunParams([], true)).toEqual({});
+  });
+
+  test("GIVEN both define the same key THEN the --param flag wins", () => {
+    expect(parseRunParams(["prompt=positional"], "prompt=flag")).toEqual({ prompt: "flag" });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // schedule list

@@ -1,4 +1,5 @@
 import type { Capability } from "../capabilities/index.ts";
+import type { CompleteResult } from "../cli/types.ts";
 
 /** The kind of trigger that activates a scheduled task. */
 export type TaskKind = "cron" | "event" | "manual";
@@ -55,14 +56,57 @@ export interface ScheduledTask {
   readonly required_capabilities: readonly Capability[];
 }
 
-/** Context provided to a handler when a task is invoked. */
-export interface TaskContext {
-  readonly task: ScheduledTask;
-  readonly now: Date;
+/** Transient, per-run parameters passed to a manual run. Never persisted. */
+export type RunParams = Readonly<Record<string, unknown>>;
+
+/**
+ * A resolver that shells out to a CLI adapter and returns its completion.
+ * Injected into the {@link import("./scheduler.ts").Scheduler} by the host so
+ * `vesper-core` never imports config/path code. `opts.cli` selects a specific
+ * adapter; when omitted the resolver picks the configured default.
+ */
+export type CompleteFn = (
+  prompt: string,
+  opts?: { readonly cli?: string },
+) => Promise<CompleteResult>;
+
+/** Overrides for a single manual run (transient — not stored on the task). */
+export interface RunOptions {
+  /** Per-run CLI override (highest priority during adapter resolution). */
+  readonly cli?: string;
+  /** Transient run parameters, surfaced as {@link PipelineContext.params}. */
+  readonly params?: RunParams;
 }
 
+/**
+ * Capability-gated context handed to a pipeline handler on each invocation.
+ *
+ * Beyond the task metadata (`task`, `now`, `params`) it exposes two
+ * side-effecting methods, each gated on a capability the task must declare:
+ * `complete` (`CLI_INVOKE`) and `recordRun` (`WRITE_STORAGE`).
+ */
+export interface PipelineContext {
+  readonly task: ScheduledTask;
+  readonly now: Date;
+  /** Transient run params (empty object for scheduled runs). */
+  readonly params: RunParams;
+  /**
+   * Send `prompt` through the resolved CLI adapter. Requires the task to declare
+   * `CLI_INVOKE`. Resolution order: `opts.cli` -> run-override -> default.
+   */
+  complete(prompt: string, opts?: { readonly cli?: string }): Promise<CompleteResult>;
+  /** Write a `runs` row for this pipeline. Requires the task to declare `WRITE_STORAGE`. */
+  recordRun(input: { readonly status: string; readonly summary: string }): string;
+}
+
+/**
+ * Context provided to a handler when a task is invoked.
+ * @deprecated Use {@link PipelineContext}; retained as an alias for back-compat.
+ */
+export type TaskContext = PipelineContext;
+
 /** A function invoked when a task is triggered. */
-export type TaskHandler = (ctx: TaskContext) => Promise<void> | void;
+export type TaskHandler = (ctx: PipelineContext) => Promise<void> | void;
 
 /** Input for registering a new scheduled task. */
 export interface RegisterTaskInput {

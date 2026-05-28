@@ -30,4 +30,19 @@ describe("runProcess", () => {
       ProcessTimeoutError,
     );
   });
+
+  test("ProcessTimeoutError carries partial stdout/stderr captured before kill", async () => {
+    // Single Bun process (no child) so kill closes the pipes immediately.
+    const inline =
+      "console.log('out'); console.error('err'); await new Promise((r) => setTimeout(r, 5000));";
+    let caught: ProcessTimeoutError | undefined;
+    try {
+      await runProcess("bun", ["-e", inline], { timeoutMs: 400 });
+    } catch (e) {
+      if (e instanceof ProcessTimeoutError) caught = e;
+    }
+    expect(caught).toBeDefined();
+    expect(caught?.stdout).toContain("out");
+    expect(caught?.stderr).toContain("err");
+  });
 });

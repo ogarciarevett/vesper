@@ -157,3 +157,44 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
   entry is the record. RECONCILE: open a `chore/tooling` DEV issue (OpenSpec body drafted in the
   session) once the cap is lifted, and backfill the status trail.
 - SHIP pending Omar's commit authorization (standing no-local-commits rule); nothing committed yet.
+
+## First pipeline — runtime context + `echo` validator
+
+- Built the pipeline runtime contract the scheduler was missing: a capability-gated
+  `PipelineContext` (`scheduler/context.ts`) handed to every handler — `ctx.complete` (gated on
+  `CLI_INVOKE`), `ctx.recordRun` (gated on `WRITE_STORAGE`), `ctx.params`, `ctx.task`, `ctx.now`.
+  The gate is a two-layer model that coexists with DEV-109: the method asserts the capability is
+  *declared* in `task.required_capabilities` (self-declaration, at the context boundary, before any
+  side effect), while the scheduler independently asserts declared ⊆ host-granted. Verified there is
+  no TOCTOU window — the assert is the first statement in each method on immutable captured state.
+- `Scheduler` now holds a `SqliteStore` (wrapping the already-migrated handle — no double-migrate)
+  and an injected `CompleteFn`, keeping `vesper-core` free of config/path concerns (the resolver is
+  built in the CLI layer, `cli-resolver.ts`). `run(id, options)` threads a per-run `{ cli, params }`
+  through `#invoke` into the context; scheduled (cron/event) runs pass none (params `{}`, no override).
+- New `@vesper/pipelines` workspace with the `echo` pipeline + `registerPipelines`; `vesper schedule
+  run echo --cli <name> [--param k=v]` and `vesper daemon` both wire it in with `grants: CAPABILITIES`.
+- GOTCHA (caught by the acceptance smoke test, not the unit suite): the zero-dep `parseArgs` treated
+  `--cli claude` (space form, which the spec uses) as `flags.cli = true` PLUS a stray positional, so
+  the `--cli` override was silently ignored and the default always ran. Fix: `parseArgs` now takes an
+  explicit `valueFlags` set (`dispatch` passes `{cli, param}`) so named value-flags consume their next
+  token; default empty set preserves the documented "flags never consume positionals" contract and all
+  existing arg tests. Lesson: an end-to-end smoke test catches CLI-plumbing bugs that perfectly-passing
+  unit tests (which fed `flags` directly) never will — the manual acceptance pass is non-negotiable.
+- Parallel-work: lead built the core contract (the crux, tight type coupling) directly, then two
+  file-disjoint sub-agents built `packages/pipelines/` and the `vesper-cli` wiring concurrently, then
+  a 3-way REVIEW fan-out (code-reviewer + security-auditor + test-engineer). Review caught real gaps:
+  (1) the integrated `scheduler.run(id, options)` path + the "runs row + last_run_at" SHALL were
+  proven only by smoke — added `scheduler-context.test.ts`; (2) `parseRunParams` flag-form branch
+  untested — added; (3) resolver override could silently fall back — tightened to honor an installed
+  override verbatim; (4) an exit-0 empty completion recorded `ok` — now `error` ("a self-test with no
+  output is a failed echo"). SIMPLIFY: dropped `registerPipelines`' redundant `list()` pre-check (the
+  `duplicate_task` catch already covers idempotency, and removing it made that catch a tested path).
+- DELTAS for skill-train (next, the "auto-evolve" pipeline): it inherits this exact context contract
+  and is the first multi-capability pipeline (`CLI_INVOKE, READ/WRITE_STORAGE, FS_READ, FS_WRITE`) —
+  good stress test of the gate. Follow-ups flagged by review, deferred (NOT blockers for a self-test
+  pipeline): `runs.summary` persists raw CLI output in cleartext (redaction/metadata-only mode before
+  pipelines store third-party/PII output), and the daemon grants the full `CAPABILITIES` set (narrow
+  to the union actually declared by registered pipelines before untrusted pipelines ship).
+- RULE 11 FALLBACK: Linear workspace still issue-capped; this entry + `specs/first-pipeline.md` are
+  the record. RECONCILE to a DEV issue when the cap lifts. SHIP pending Omar's commit authorization
+  (standing no-local-commits rule) — nothing committed.

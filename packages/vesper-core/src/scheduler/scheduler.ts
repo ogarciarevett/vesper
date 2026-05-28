@@ -3,12 +3,15 @@ import { randomUUID } from "node:crypto";
 import { assertCapabilities } from "../capabilities/assert.ts";
 import { CapabilityError } from "../capabilities/errors.ts";
 import type { Capability } from "../capabilities/index.ts";
+import { SqliteStore } from "../storage/store.ts";
+import type { Store } from "../storage/types.ts";
+import { buildPipelineContext } from "./context.ts";
 import { cronMatches, parseCron } from "./cron.ts";
 import { SchedulerError } from "./errors.ts";
 import { EventBus } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
-import type { RegisterTaskInput, ScheduledTask } from "./types.ts";
+import type { CompleteFn, RegisterTaskInput, RunOptions, ScheduledTask } from "./types.ts";
 
 /** Options for constructing a {@link Scheduler}. */
 export interface SchedulerOptions {
@@ -24,6 +27,12 @@ export interface SchedulerOptions {
    * Tasks with required_capabilities not covered by this list will be refused.
    */
   readonly grants?: readonly Capability[];
+  /**
+   * Resolver used by `ctx.complete` to shell out to a CLI adapter. Injected by
+   * the host (CLI layer). If omitted, handlers that call `ctx.complete` fail with
+   * a clear {@link import("../cli/errors.ts").CLIError}.
+   */
+  readonly complete?: CompleteFn;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +78,8 @@ export class Scheduler {
   readonly #clock: () => Date;
   readonly #events: EventBus;
   readonly #grants: readonly Capability[];
+  readonly #store: Store;
+  readonly #complete: CompleteFn | undefined;
 
   /**
    * Map of task id -> bound event listener, so event tasks can be cleanly
@@ -88,6 +99,8 @@ export class Scheduler {
     this.#clock = options.clock ?? (() => new Date());
     this.#events = options.events ?? new EventBus();
     this.#grants = options.grants ?? [];
+    this.#store = new SqliteStore(options.db);
+    this.#complete = options.complete;
 
     // Load all persisted tasks and wire up event subscriptions.
     const tasks = this.#persistence.list();
@@ -196,15 +209,18 @@ export class Scheduler {
    * limit are checked and respected, but a blocked manual run throws rather than
    * silently skipping.
    *
+   * Pass `options` to supply a per-run CLI override and transient params; these
+   * are surfaced to the handler via `ctx` and never persisted on the task.
+   *
    * Throws `SchedulerError("unknown_task")` if `id` is not registered.
    */
-  async run(id: string): Promise<void> {
+  async run(id: string, options?: RunOptions): Promise<void> {
     const task = this.#persistence.get(id);
     if (task === null) {
       throw new SchedulerError("unknown_task", `task "${id}" is not registered`);
     }
 
-    await this.#invoke(task, false);
+    await this.#invoke(task, false, options);
   }
 
   // ---------------------------------------------------------------------------
@@ -257,7 +273,7 @@ export class Scheduler {
    *
    * On any failure the original error is re-thrown after being recorded.
    */
-  async #invoke(task: ScheduledTask, isScheduled: boolean): Promise<void> {
+  async #invoke(task: ScheduledTask, isScheduled: boolean, options?: RunOptions): Promise<void> {
     const now = this.#clock();
 
     // Re-fetch from persistence so we always have up-to-date guardrail state.
@@ -344,6 +360,13 @@ export class Scheduler {
 
     try {
       const handler = this.#registry.get(current.handler_id);
+      const ctx = buildPipelineContext({
+        task: current,
+        now,
+        store: this.#store,
+        ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
+        ...(options !== undefined ? { options } : {}),
+      });
 
       // -- duration cap: race handler against timeout --
       let handlerPromise: Promise<void>;
@@ -356,12 +379,9 @@ export class Scheduler {
             timeoutMs,
           ),
         );
-        handlerPromise = Promise.race([
-          Promise.resolve(handler({ task: current, now })),
-          timeoutPromise,
-        ]);
+        handlerPromise = Promise.race([Promise.resolve(handler(ctx)), timeoutPromise]);
       } else {
-        handlerPromise = Promise.resolve(handler({ task: current, now }));
+        handlerPromise = Promise.resolve(handler(ctx));
       }
 
       await handlerPromise;

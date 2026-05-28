@@ -1,0 +1,13 @@
+{
+  "name": "@vesper/pipelines",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@vesper/core": "workspace:*"
+  }
+}

@@ -36,11 +36,19 @@ export interface CLIAdapter {
   complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult>;
 
   /**
-   * Verify the CLI is installed and authenticated. Resolves on success, rejects
-   * with `CLIError` on any failure. Callers treat a rejection as a probe failure
-   * without further unwrapping.
+   * Verify the CLI is installed AND working by sending a no-op prompt. Resolves on
+   * success, rejects with `CLIError` on any failure (`not_installed`,
+   * `not_authenticated`, `rate_limited`, `timeout`, `nonzero_exit`). Pass
+   * `opts.timeoutMs` to tighten the timeout for listing/UX paths.
    */
-  probe(): Promise<void>;
+  probe(opts?: CompleteOptions): Promise<void>;
+
+  /**
+   * Run `<command> --version` and return the first line of stdout (trimmed). Fast,
+   * never hits the model, so callers can use this for "is it installed?" without
+   * touching auth or quota. Rejects with `CLIError` on failure.
+   */
+  version(opts?: CompleteOptions): Promise<string>;
 }
 
 /**

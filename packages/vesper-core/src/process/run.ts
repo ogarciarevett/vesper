@@ -41,11 +41,21 @@ export class CommandNotFoundError extends VesperError {
 export class ProcessTimeoutError extends VesperError {
   readonly command: string;
   readonly timeoutMs: number;
+  /** Whatever the child wrote to stdout before it was killed (may be empty). */
+  readonly stdout: string;
+  /** Whatever the child wrote to stderr before it was killed (may be empty). */
+  readonly stderr: string;
 
-  constructor(command: string, timeoutMs: number) {
+  constructor(
+    command: string,
+    timeoutMs: number,
+    partial: { stdout: string; stderr: string } = { stdout: "", stderr: "" },
+  ) {
     super("process", `command timed out after ${timeoutMs}ms: ${command}`);
     this.command = command;
     this.timeoutMs = timeoutMs;
+    this.stdout = partial.stdout;
+    this.stderr = partial.stderr;
   }
 }
 
@@ -84,7 +94,7 @@ export const runProcess: ProcessRunner = async (command, args, options = {}) => 
       proc.exited,
     ]);
     if (timedOut) {
-      throw new ProcessTimeoutError(command, timeoutMs);
+      throw new ProcessTimeoutError(command, timeoutMs, { stdout, stderr });
     }
     return { stdout, stderr, exitCode, durationMs: Math.round(performance.now() - start) };
   } finally {
