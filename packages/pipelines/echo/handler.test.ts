@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HandlerRegistry, openStore, type PipelineContext, Scheduler } from "@vesper/core";
-import { registerPipelines } from "../index.ts";
-import { echoHandler } from "./handler.ts";
+import { grantedCapabilities, registerPipelines } from "../index.ts";
+import { echoHandler, echoTaskInput } from "./handler.ts";
 
 // ---------------------------------------------------------------------------
 // Fake PipelineContext — captures calls without a real scheduler/CLI/storage.
@@ -210,5 +210,17 @@ describe("registerPipelines", () => {
 
     const echoTasks = scheduler.list().filter((task) => task.id === "echo");
     expect(echoTasks).toHaveLength(1);
+  });
+});
+
+describe("grantedCapabilities", () => {
+  test("is the deduplicated union of every registered pipeline's required capabilities", () => {
+    const granted = grantedCapabilities();
+    // Every registered pipeline's declared capability must be covered by the grant.
+    for (const cap of echoTaskInput.required_capabilities) {
+      expect(granted).toContain(cap);
+    }
+    // No duplicates.
+    expect(new Set(granted).size).toBe(granted.length);
   });
 });

@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import type { ScheduledTask } from "@vesper/core";
 import {
-  CAPABILITIES,
   detectAvailableCLIs,
   HandlerRegistry,
   openStore,
@@ -9,7 +8,7 @@ import {
   SchedulerError,
   TaskPersistence,
 } from "@vesper/core";
-import { registerPipelines } from "@vesper/pipelines";
+import { grantedCapabilities, registerPipelines } from "@vesper/pipelines";
 import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
 import type { Command, CommandGroup } from "../dispatch.ts";
@@ -236,7 +235,7 @@ const runCommand: Command = {
     try {
       // Register pipelines first so their tasks (e.g. `echo`) exist before lookup.
       const registry = new HandlerRegistry();
-      const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES, complete });
+      const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities(), complete });
       registerPipelines(scheduler, registry);
 
       // Look up the task so we can provide a useful error if it doesn't exist.

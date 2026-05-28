@@ -1,14 +1,13 @@
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
-  CAPABILITIES,
   detectAvailableCLIs,
   HandlerRegistry,
   openStore,
   Scheduler,
   startIpcServer,
 } from "@vesper/core";
-import { registerPipelines } from "@vesper/pipelines";
+import { grantedCapabilities, PIPELINES, registerPipelines } from "@vesper/pipelines";
 import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
 import type { Command } from "../dispatch.ts";
@@ -37,11 +36,11 @@ export const daemonCommand: Command = {
     const installed = await detectAvailableCLIs();
     const complete = makeCompleteFn(config, installed);
 
-    // Construct the Scheduler with the full capability grant set and the CLI
-    // resolver, then register the built-in pipelines so their handlers + tasks
-    // are available to the tick loop.
+    // Construct the Scheduler granting only the capabilities the built-in
+    // pipelines actually declare (deny-by-default), with the CLI resolver, then
+    // register the pipelines so their handlers + tasks are available to the tick loop.
     const registry = new HandlerRegistry();
-    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES, complete });
+    const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities(), complete });
     registerPipelines(scheduler, registry);
 
     // Start the cron tick loop. The scheduler records per-task errors for any
@@ -56,7 +55,7 @@ export const daemonCommand: Command = {
     line(green("vesper daemon listening"));
     line(dim(`  socket:    ${handle.socketPath}`));
     line(dim(`  scheduler: tick every ${TICK_INTERVAL_MS / 1_000}s`));
-    line(dim("  pipelines: echo"));
+    line(dim(`  pipelines: ${PIPELINES.map((p) => p.handlerId).join(", ")}`));
 
     const shutdown = (): void => {
       clearInterval(tickInterval);
