@@ -8,7 +8,7 @@ import type { Store } from "../storage/types.ts";
 import { buildPipelineContext } from "./context.ts";
 import { cronMatches, parseCron } from "./cron.ts";
 import { SchedulerError } from "./errors.ts";
-import { EventBus } from "./events.ts";
+import { EventBus, RUN_COMPLETED } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
 import type {
@@ -436,17 +436,18 @@ export class Scheduler {
       }
       const durationMs = Math.round(performance.now() - startedAt);
 
-      // Capture the run outcome for the (manual) caller.
-      if (capture !== undefined) {
-        capture.outcome = {
-          taskId: current.id,
-          runId: recorded?.runId ?? null,
-          status: recorded?.status ?? null,
-          summary: recorded?.summary ?? null,
-          cli: options?.cli ?? null,
-          durationMs,
-        };
-      }
+      // Build the outcome once — for the manual caller AND the run:completed event.
+      const outcome: RunOutcome = {
+        taskId: current.id,
+        runId: recorded?.runId ?? null,
+        status: recorded?.status ?? null,
+        summary: recorded?.summary ?? null,
+        cli: options?.cli ?? null,
+        durationMs,
+      };
+      if (capture !== undefined) capture.outcome = outcome;
+      // Live signal for the UI (manual + scheduled runs both reach here).
+      this.#events.emit(RUN_COMPLETED, outcome);
 
       // Success: record run, reset backoff, update daily counter.
       this.#persistence.updateLastRun(current.id, now.getTime(), null);

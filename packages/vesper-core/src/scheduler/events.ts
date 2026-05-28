@@ -4,6 +4,13 @@ import { EventEmitter } from "node:events";
 export type EventListener = (payload?: unknown) => void;
 
 /**
+ * Internal topic the scheduler emits a {@link import("./types.ts").RunOutcome} on
+ * after every completed run (manual or scheduled). Namespaced so it never collides
+ * with a user-defined event-task topic. Subscribe via `scheduler.eventBus.on(...)`.
+ */
+export const RUN_COMPLETED = "vesper:run:completed";
+
+/**
  * Thin in-process event bus wrapping Node.js `EventEmitter`.
  *
  * Topics are plain strings; payloads are untyped (`unknown`).

@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CAPABILITIES } from "../capabilities/capability.ts";
 import { CapabilityError } from "../capabilities/errors.ts";
 import { SqliteStore } from "../storage/store.ts";
+import { RUN_COMPLETED } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import { HandlerRegistry } from "./registry.ts";
 import { Scheduler } from "./scheduler.ts";
-import type { CompleteFn } from "./types.ts";
+import type { CompleteFn, RunOutcome } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers — an in-memory DB with migrations applied, plus a recording resolver.
@@ -91,6 +92,32 @@ describe("Scheduler — pipeline runtime context", () => {
     const task = new TaskPersistence(db).get("echo");
     expect(task?.last_run_at).not.toBeNull();
     expect(task?.last_error).toBeNull();
+  });
+
+  test("emits a run:completed event carrying the RunOutcome", async () => {
+    const { fn } = recordingComplete("pong");
+    registry.register("echo", async (ctx) => {
+      await ctx.complete("p");
+      ctx.recordRun({ status: "ok", summary: "done" });
+    });
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES, complete: fn });
+    scheduler.register({
+      id: "echo",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "echo",
+      required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE"],
+    });
+
+    const events: RunOutcome[] = [];
+    scheduler.eventBus.on(RUN_COMPLETED, (p) => events.push(p as RunOutcome));
+
+    await scheduler.run("echo");
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.taskId).toBe("echo");
+    expect(events[0]?.status).toBe("ok");
+    expect(events[0]?.summary).toBe("done");
   });
 
   test("with no --cli override the resolver receives no cli (picks its default)", async () => {
