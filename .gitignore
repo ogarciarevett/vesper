@@ -22,6 +22,10 @@ dist/
 # local, per-dev agent working memory (seeded from .ai/memory.example.md via `bun run sync:ai`)
 .ai/memory.md
 
+# design specs are LOCAL working drafts only — never distributed via the public repo.
+# the committed record of a cycle is the commit message + cycle-log.md (see .ai/context.md).
+/specs/
+
 # generated per-tool agent assets — sources live in .ai/; run `bun run sync:ai`
 /.claude/commands/
 /.claude/agents/

@@ -21,6 +21,10 @@ hand-edited one.
 - opencode reads `.ai/context.md` + `.ai/pipeline.md` + `.ai/memory.md` directly (`opencode.json`).
 - `.claude/`, `.opencode/`, `.gemini/` agents + skills are materialized copies of `.ai/agents/` +
   `.ai/skills/` (gitignored; each developer regenerates with `bun run sync:ai`).
+- `specs/` are **LOCAL-only working drafts** (gitignored — like `.ai/memory.md`): they are NOT
+  committed or distributed, so a GitHub clone never ships them. The committed, shared record of a
+  cycle is the **commit message + `cycle-log.md`**, never `specs/`. Treat `specs/<feature>.md` as a
+  private design scratchpad; durable decisions graduate into this contract and `cycle-log.md`.
 
 To change a convention: edit `.ai/context.md` or `.ai/pipeline.md`, run `bun run sync:ai`, and
 commit the regenerated entry files. A change that leaves the generated docs stale (no re-sync) is
@@ -64,15 +68,14 @@ that is an external identifier, never a human-readable phase name. Say "Foundati
 | Phase | Linear slug prefix | Scope (short) |
 |---|---|---|
 | **Foundation** | `m1-` | Host runtime — vault, storage, CLI orchestration, IPC. |
-| **Scheduler** | `m2-` | Pipeline runtime — cron, event triggers, manual run, budget caps (DEV-91 seed). |
+| **Scheduler** | `m2-` | Pipeline runtime — cron, event triggers, manual run, budget caps. |
 | **Desktop** | `m3-` | Elder-first consumer UI — the simplest possible surface for a non-technical user (the `vesper` CLI stays the developer-only surface). Built on the existing Bun/TypeScript/web stack by default; Tauri/Rust only if strictly necessary (see Hard rule 14). |
 | **Voice** | `m4-` | ElevenLabs voice integration. |
 | **Launch** | `m5-` | Packaging, distribution, public announcement (CI pulled forward — see Hard rule 10). |
 | (later) | `m6-` / `m7-` | See Linear DEV-86..100 for the full spine. |
 
-Note: Linear's surviving spine tags some later issues differently than these names (e.g. Voice
-work currently sits under an `[M3]`-tagged issue). The **phase names above are authoritative**;
-the `[Mn]` tags are URL identifiers being reconciled, not the source of phase scope.
+Note: the **phase names above are authoritative**; the `[Mn]` slug tags some Linear issues carry are
+URL identifiers, not the source of phase scope.
 
 Note: the Desktop phase was redefined from the earlier Tauri / power-user "Control Room" framing to
 an **elder-first consumer UI** — see Hard rule 14. A `specs/elder-first-ui.md` is pending Omar's
@@ -104,9 +107,10 @@ first** session bootstrap (writing this file, scaffolding the Bun workspace, the
 
 **Issue-cap exception (active):** the `claw-village` workspace has reached its free-tier issue cap —
 new Linear issues **cannot** be created. When the cap is in effect and Omar has authorized the work,
-record it as a `specs/<feature>.md` proposal plus a `cycle-log.md` entry (the documented Rule 11
-fallback) instead of halting; reconcile to a DEV issue when the cap lifts. This does **not** relax
-the rule against self-creating or improvising scope — it only substitutes the record-keeping surface.
+the **committed** record is the `cycle-log.md` entry plus the commit message (optionally drafted in a
+local `specs/<feature>.md`, which is gitignored — see the source-of-truth convention); reconcile to a
+DEV issue when the cap lifts. This does **not** relax the rule against self-creating or improvising
+scope — it only substitutes the record-keeping surface.
 
 ### Linear status protocol (every cycle step transitions the issue)
 
