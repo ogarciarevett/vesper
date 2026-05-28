@@ -14,5 +14,6 @@ export {
   runProcess,
 } from "./process/run.ts";
 export * from "./scheduler/index.ts";
+export * from "./skill-train/index.ts";
 export * from "./storage/index.ts";
 export * from "./vault/index.ts";

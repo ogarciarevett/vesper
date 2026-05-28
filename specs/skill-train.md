@@ -1,8 +1,12 @@
 # SPEC: `vesper skill train` — auto-improve skills via trajectory-driven optimization
 
-> Status: **NORTH-STAR SPEC — not built. Awaiting the pipeline runtime (see
-> `specs/first-pipeline.md`).** Recorded now (Omar's direction 2026-05-28) so the design is
-> durable; PLAN + BUILD come later.
+> Status: **CORE (slices 1-2) BUILT — module + pipeline green; CLI surface + IMPROVE
+> integration deferred.** The pipeline runtime it depends on shipped (see `specs/first-pipeline.md`).
+> Built: `packages/vesper-core/src/skill-train/` (skill loader, scorers, optimizer prompt+parse,
+> persistence, the epoch-loop `trainSkill`) + `packages/pipelines/skill-train/` (the first
+> multi-capability pipeline). 68 tests, biome clean, no provider SDKs. NOT YET built: the
+> `vesper skill {train,list,diff,revert}` CLI surface, the cost-confirmation prompt, and the
+> user-acked IMPROVE write-back to `.ai/skills/<name>/SKILL.md` (T6, T7) — next increment.
 > Linear: workspace issue-cap'd; this is the SPEC artifact under the Linear-unavailable fallback.
 > Inspired by Microsoft's SkillOpt (https://github.com/microsoft/SkillOpt) — adapted to Vesper's
 > bring-your-own-CLI / no-provider-SDK model.
@@ -60,9 +64,13 @@ append cycle-log.md entry
   durable artifact, updated only on user-acked IMPROVE.
 - **Trajectory recording.** Each task invocation writes a `runs` row plus a `trajectory.jsonl`
   line under `~/.vesper/skill-train/<name>/epoch-<n>/`. Cheap audit + reproducibility.
-- **Cost control.** Default `--epochs 2 --batchsize 4` ≈ 16 CLI calls per train run. The
-  command echoes the projected call count + asks for confirmation before any LLM call. Each
-  call is the user's CLI quota (Vesper holds no keys).
+- **Cost control.** The implemented loop validates each candidate against the FULL task set, so
+  the real per-run call count is `N + epochs*(batchSize + 1 + N)` for `N` tasks (baseline N, then
+  per epoch: the batch + 1 optimizer call + N candidate-validation calls). Example: `N=8`,
+  `--epochs 2 --batchsize 4` -> `8 + 2*(4+1+8) = 34` calls. The deferred CLI surface (T6) echoes
+  this projected count and asks for confirmation before any LLM call. Each call is the user's CLI
+  quota (Vesper holds no keys). FUTURE: validate on a held-out subset (T4's original intent) to cut
+  the `+N` validation cost and remove train/val overlap.
 - **`--dry-run`** prints the proposed candidate without modifying any SKILL.md.
 
 ## Hard dependency: pipeline runtime

@@ -198,3 +198,48 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
 - RULE 11 FALLBACK: Linear workspace still issue-capped; this entry + `specs/first-pipeline.md` are
   the record. RECONCILE to a DEV issue when the cap lifts. SHIP pending Omar's commit authorization
   (standing no-local-commits rule) — nothing committed.
+
+## skill-train (auto-evolve) — core slices 1-2
+
+- Built the SkillOpt-style self-optimization core on top of the new pipeline runtime. Module
+  `packages/vesper-core/src/skill-train/`: `frontmatter` (tiny name/description YAML parser, shared),
+  `skill` (loadSkill: SKILL.md + sibling tasks.json, injectable fs), `scorers` (exact_match/contains
+  pure + makeJudge LLM-as-judge via injected CompleteFn — Hard rule 12), `optimizer` (deterministic
+  meta-prompt + parseCandidate that enforces frontmatter name/description preservation), `persistence`
+  (~/.vesper/skill-train/<name>/{best.md,history.jsonl} via injected baseDir), and the heart `train`
+  (epoch loop: rotating batch -> target trajectories -> optimizer rewrite -> full-set validation ->
+  greedy val-strict accept, shorter-on-tie). Plus the `skill-train` PIPELINE — the first
+  multi-capability pipeline ([CLI_INVOKE, READ/WRITE_STORAGE, FS_READ, FS_WRITE]), reading paths
+  from ctx.params so core stays path-agnostic. 68 tests; 410 total / 0 fail; biome clean.
+- Parallel-work: lead laid the shared contract (types/errors/frontmatter), then THREE file-disjoint
+  sub-agents built skill.ts / scorers.ts / optimizer.ts concurrently; lead wrote persistence + train
+  + the pipeline + integration test. A focused code-review pass confirmed the accept/history logic
+  correct and caught: (HIGH) the epoch catch was reason-blind — a judge misconfig surfacing mid-run
+  would be swallowed as "no improvement"; now only `parse_failed` is a skippable epoch, everything
+  else propagates. (HIGH) the per-run CLI-call cost is N + epochs*(batch+1+N), NOT the spec's ~16 —
+  reconciled the spec's cost model + flagged held-out validation as the future cut. (MEDIUM)
+  `HistoryEntry.baselineScore` collided in meaning with `TrainResult.baselineScore` — renamed to
+  `priorBestScore`. (MEDIUM) handler `numParam` now validates positive integers at the param
+  boundary and throws typed `SkillTrainError`. (LOW) optimizer header re-numbering after sort + mean
+  score `toFixed(3)`.
+- GOTCHA: run params are all strings (the CLI `--param k=v` / positional `k=v` path yields
+  `Record<string,string>`), so the pipeline coerces epochs/batchsize and must validate them — a good
+  reminder that the param channel is an untrusted system boundary even for "internal" pipelines.
+- DEFERRED to the next increment (T6/T7): `vesper skill {train,list,diff,revert}` CLI with the
+  cost-confirmation prompt and per-role adapter flags (`--cli`/`--optimizer-cli`/`--judge-cli`), and
+  the user-acked IMPROVE write-back to the committed `.ai/skills/<name>/SKILL.md` + a seed `tasks.json`
+  for one real skill to validate the loop against a live CLI. Also still open from first-pipeline:
+  narrow daemon grants from full CAPABILITIES to the declared union; redact/meta-only `runs.summary`.
+- RULE 11 FALLBACK: Linear still capped; `specs/skill-train.md` + this entry are the record. SHIP of
+  this increment pending Omar's explicit commit authorization (standing no-local-commits rule) —
+  skill-train is NOT committed (first-pipeline was committed on branch feat/first-pipeline, sha f6a2044).
+
+### skill-train — final pre-merge review hardening
+- A second (pre-merge) review fan-out (code + security on both first-pipeline and skill-train) returned
+  no CRITICAL/HIGH; both MERGE-READY / SAFE TO MERGE. Acted on two cheap findings before pushing:
+  (1) the skill-train handler recorded `status:"error"` for a legitimate "no improvement"/dry-run run —
+  now `ok` (improved or dry-run inspection) vs `no_change` (no candidate beat baseline); `error` is
+  reserved for thrown failures. (2) Added `assertSkillName` (slug guard) wired into `loadSkill` +
+  `SkillTrainStore.dir` to close the param-driven path-traversal trust boundary BEFORE any IPC/remote
+  surface feeds `skill`/`*Dir` params. Still open follow-ups: narrow daemon grants to declared union;
+  redact/meta-only `runs.summary`; held-out validation split; `--judge-cli` up-front validation.
