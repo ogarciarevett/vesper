@@ -34,3 +34,10 @@ export function skillTrainDir(): string {
 export function socketPath(): string {
   return join(runDir(), "vesper.sock");
 }
+
+/** Localhost port the daemon serves the Vesper World UI on (override: `VESPER_UI_PORT`). */
+export function uiPort(): number {
+  const raw = process.env.VESPER_UI_PORT;
+  const n = raw !== undefined ? Number(raw) : Number.NaN;
+  return Number.isInteger(n) && n > 0 ? n : 4317;
+}

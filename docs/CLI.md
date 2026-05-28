@@ -17,6 +17,7 @@ Every `vesper` command, generated from the command registry
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
 | `vesper status` | Show versions and the health of every subsystem. |
 | `vesper daemon` | Run the Vesper IPC server and scheduler loop. Foreground; Ctrl-C to stop. |
+| `vesper ui [--no-open]` | Open Vesper World — a visual, living view of your agents (requires the daemon). |
 | `vesper schedule list` | List all scheduled tasks in an aligned table. |
 | `vesper schedule show <id>` | Print full details for a single task. |
 | `vesper schedule run <id> [--cli <name>] [--param key=value] [--quiet]` | Manually run a task by id, invoking the resolved CLI and recording a run. |

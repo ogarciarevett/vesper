@@ -25,6 +25,7 @@
       "dependencies": {
         "@vesper/core": "workspace:*",
         "@vesper/pipelines": "workspace:*",
+        "@vesper/ui": "workspace:*",
       },
     },
     "packages/vesper-core": {

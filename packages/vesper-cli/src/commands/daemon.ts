@@ -8,10 +8,12 @@ import {
   startIpcServer,
 } from "@vesper/core";
 import { grantedCapabilities, PIPELINES, registerPipelines } from "@vesper/pipelines";
+import { startUiServer } from "@vesper/ui";
+import { machineFingerprint } from "../banner.ts";
 import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
 import type { Command } from "../dispatch.ts";
-import { dbPath, runDir, socketPath } from "../paths.ts";
+import { dbPath, runDir, socketPath, uiPort } from "../paths.ts";
 import { dim, green, line } from "../ui.ts";
 
 /** Scheduler tick interval (1 minute). */
@@ -49,6 +51,16 @@ export const daemonCommand: Command = {
     });
     registerPipelines(scheduler, registry);
 
+    // Host the Vesper World UI in-process (one runtime): the UI reads this
+    // scheduler + storage directly and gets live run events off its EventBus.
+    const uiStore = openStore(dbPath());
+    const ui = await startUiServer({
+      scheduler,
+      store: uiStore,
+      seed: machineFingerprint(),
+      port: uiPort(),
+    });
+
     // Start the cron tick loop. The scheduler records per-task errors for any
     // task whose handler is not registered — pipelines are now loaded above.
     const tickInterval = setInterval(() => {
@@ -62,9 +74,12 @@ export const daemonCommand: Command = {
     line(dim(`  socket:    ${handle.socketPath}`));
     line(dim(`  scheduler: tick every ${TICK_INTERVAL_MS / 1_000}s`));
     line(dim(`  pipelines: ${PIPELINES.map((p) => p.handlerId).join(", ")}`));
+    line(dim(`  ui:        ${ui.url}  (run \`vesper ui\` to open)`));
 
     const shutdown = (): void => {
       clearInterval(tickInterval);
+      ui.stop();
+      uiStore.close();
       db.close();
       handle.stop();
       process.exit(0);

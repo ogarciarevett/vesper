@@ -7,6 +7,7 @@ import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
 import { skillGroup } from "./skill.ts";
 import { statusCommand } from "./status.ts";
+import { uiCommand } from "./ui.ts";
 import { vaultGroup } from "./vault.ts";
 
 /** Top-level command registry. New commands/groups register here — no central switch. */
@@ -17,6 +18,7 @@ export const registry: readonly Registrable[] = [
   cliGroup,
   statusCommand,
   daemonCommand,
+  uiCommand,
   scheduleGroup,
   runsGroup,
   skillGroup,
