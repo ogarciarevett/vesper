@@ -54,6 +54,35 @@ export function formatKeyValues(rows: readonly (readonly [string, string])[]): s
   return rows.map(([key, value]) => `  ${dim(key.padEnd(width))}  ${value}`).join("\n");
 }
 
+/** Visible length of a string, ignoring ANSI escape codes (for column alignment). */
+export function visibleLength(text: string): number {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI ESC must be matched literally
+  return text.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+/** Pad a (possibly ANSI-colored) string to `width` visible characters. */
+export function padVisible(text: string, width: number): string {
+  const extra = width - visibleLength(text);
+  return extra > 0 ? `${text}${" ".repeat(extra)}` : text;
+}
+
+/**
+ * Render an aligned table (bold headers, a dim rule, then rows) as a single
+ * string. Cells may already contain ANSI color — width is measured by visible
+ * length. Pure; no I/O. Columns are sized to the widest visible cell.
+ */
+export function table(headers: readonly string[], rows: readonly (readonly string[])[]): string {
+  const widths = headers.map((header, col) =>
+    Math.max(visibleLength(header), ...rows.map((row) => visibleLength(row[col] ?? ""))),
+  );
+  const render = (cells: readonly string[], style?: (s: string) => string): string =>
+    `  ${headers.map((_, col) => padVisible(style ? style(cells[col] ?? "") : (cells[col] ?? ""), widths[col] ?? 0)).join("  ")}`;
+  const headerRow = render(headers, bold);
+  const rule = `  ${widths.map((w) => dim("─".repeat(w))).join("  ")}`;
+  const bodyRows = rows.map((row) => render(row));
+  return [headerRow, rule, ...bodyRows].join("\n");
+}
+
 /** Write a line to stdout. */
 export function line(text = ""): void {
   process.stdout.write(`${text}\n`);

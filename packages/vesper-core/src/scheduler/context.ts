@@ -17,6 +17,11 @@ export interface BuildContextDeps {
   readonly complete?: CompleteFn;
   /** Per-run overrides (manual run): transient CLI override + params. */
   readonly options?: RunOptions;
+  /**
+   * Invoked synchronously after each `ctx.recordRun`, so the scheduler can build a
+   * {@link import("./types.ts").RunOutcome} without the handler returning anything.
+   */
+  readonly onRecordRun?: (record: { runId: string; status: string; summary: string }) => void;
 }
 
 /**
@@ -35,7 +40,7 @@ export interface BuildContextDeps {
  * (`options.cli`) -> the injected resolver's configured default.
  */
 export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
-  const { task, now, store, complete, options } = deps;
+  const { task, now, store, complete, options, onRecordRun } = deps;
   const params = options?.params ?? {};
 
   return {
@@ -57,7 +62,9 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
 
     recordRun({ status, summary }) {
       assertCapabilities(["WRITE_STORAGE"], task.required_capabilities);
-      return store.recordRun({ pipeline: task.handler_id, status, summary });
+      const runId = store.recordRun({ pipeline: task.handler_id, status, summary });
+      onRecordRun?.({ runId, status, summary });
+      return runId;
     },
   };
 }

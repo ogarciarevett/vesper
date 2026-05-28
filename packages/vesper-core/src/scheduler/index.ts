@@ -18,6 +18,7 @@ export type {
   PipelineContext,
   RegisterTaskInput,
   RunOptions,
+  RunOutcome,
   RunParams,
   ScheduledTask,
   TaskContext,

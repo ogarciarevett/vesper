@@ -79,6 +79,25 @@ export interface RunOptions {
 }
 
 /**
+ * The result of a completed manual run, returned by
+ * {@link import("./scheduler.ts").Scheduler.run}. Fields sourced from the handler
+ * are `null` when the handler did not record a run.
+ */
+export interface RunOutcome {
+  readonly taskId: string;
+  /** Id of the `runs` row the handler wrote via `ctx.recordRun`, or null. */
+  readonly runId: string | null;
+  /** Status the handler recorded (e.g. "ok", "no_change"), or null. */
+  readonly status: string | null;
+  /** Summary the handler recorded, or null. */
+  readonly summary: string | null;
+  /** The per-run CLI override requested for this run, or null (used the default). */
+  readonly cli: string | null;
+  /** Wall-clock duration of the handler invocation, in milliseconds. */
+  readonly durationMs: number;
+}
+
+/**
  * Capability-gated context handed to a pipeline handler on each invocation.
  *
  * Beyond the task metadata (`task`, `now`, `params`) it exposes two

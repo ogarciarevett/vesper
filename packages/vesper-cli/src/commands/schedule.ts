@@ -13,7 +13,7 @@ import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
 import type { Command, CommandGroup } from "../dispatch.ts";
 import { dbPath } from "../paths.ts";
-import { bold, cyan, dim, errorLine, green, line, yellow } from "../ui.ts";
+import { bold, cyan, dim, errorLine, formatKeyValues, green, line, table, yellow } from "../ui.ts";
 
 /**
  * Parse transient run params from the tokens that follow the task id.
@@ -71,19 +71,6 @@ function fmtEnabled(enabled: boolean): string {
   return enabled ? green("yes") : yellow("no");
 }
 
-/** Strip ANSI escape codes for accurate string length measurement. */
-function visibleLength(text: string): number {
-  // ESC character as unicode escape to satisfy lint/suspicious/noControlCharactersInRegex.
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI ESC must be matched literally
-  return text.replace(/\[[0-9;]*m/g, "").length;
-}
-
-/** Pad a (possibly ANSI-colored) string to `width` visible characters. */
-function padVisible(text: string, width: number): string {
-  const extra = width - visibleLength(text);
-  return extra > 0 ? `${text}${" ".repeat(extra)}` : text;
-}
-
 // ---------------------------------------------------------------------------
 // list
 // ---------------------------------------------------------------------------
@@ -95,46 +82,20 @@ const listCommand: Command = {
   run() {
     const db = openDb();
     try {
-      const persistence = new TaskPersistence(db);
-      const tasks = persistence.list();
-
+      const tasks = new TaskPersistence(db).list();
       if (tasks.length === 0) {
         line(dim("no tasks registered"));
         return 0;
       }
-
-      // Column header keys
-      const H_ID = "id";
-      const H_KIND = "kind";
-      const H_EXPR = "schedule_expr";
-      const H_ENABLED = "enabled";
-      const H_LAST_RUN = "last_run";
-      const H_ERROR = "last_error";
-
-      // Compute column widths (visible chars only)
-      const idW = Math.max(H_ID.length, ...tasks.map((t) => t.id.length));
-      const kindW = Math.max(H_KIND.length, ...tasks.map((t) => t.kind.length));
-      const exprW = Math.max(H_EXPR.length, ...tasks.map((t) => t.schedule_expr.length));
-      const enabledW = Math.max(H_ENABLED.length, "yes".length);
-      const lastRunW = Math.max(H_LAST_RUN.length, "2025-01-15 09:30:00".length);
-
-      // Header row
-      line(
-        `  ${padVisible(bold(H_ID), idW)}  ${padVisible(bold(H_KIND), kindW)}  ${padVisible(bold(H_EXPR), exprW)}  ${padVisible(bold(H_ENABLED), enabledW)}  ${padVisible(bold(H_LAST_RUN), lastRunW)}  ${bold(H_ERROR)}`,
-      );
-      line(
-        dim(
-          `  ${"─".repeat(idW)}  ${"─".repeat(kindW)}  ${"─".repeat(exprW)}  ${"─".repeat(enabledW)}  ${"─".repeat(lastRunW)}  ${"─".repeat(20)}`,
-        ),
-      );
-
-      for (const task of tasks) {
-        const lastRun = formatTs(task.last_run_at);
-        const errStr = fmt(task.last_error);
-        line(
-          `  ${padVisible(cyan(task.id), idW)}  ${padVisible(task.kind, kindW)}  ${padVisible(task.schedule_expr, exprW)}  ${padVisible(fmtEnabled(task.enabled), enabledW)}  ${padVisible(lastRun, lastRunW)}  ${errStr}`,
-        );
-      }
+      const rows = tasks.map((t) => [
+        cyan(t.id),
+        t.kind,
+        t.schedule_expr,
+        fmtEnabled(t.enabled),
+        formatTs(t.last_run_at),
+        fmt(t.last_error),
+      ]);
+      line(table(["id", "kind", "schedule_expr", "enabled", "last_run", "last_error"], rows));
       return 0;
     } finally {
       db.close();
@@ -217,7 +178,7 @@ const showCommand: Command = {
 const runCommand: Command = {
   name: "run",
   summary: "Manually run a task by id, invoking the resolved CLI and recording a run.",
-  usage: "vesper schedule run <id> [--cli <name>] [--param key=value]",
+  usage: "vesper schedule run <id> [--cli <name>] [--param key=value] [--quiet]",
   async run({ positionals, flags }) {
     const id = positionals[0];
     if (id === undefined) throw new Error("usage: vesper schedule run <id> [--cli <name>]");
@@ -226,6 +187,7 @@ const runCommand: Command = {
     // and/or the `--param key=value` flag.
     const params = parseRunParams(positionals.slice(1), flags.param);
     const cli = typeof flags.cli === "string" ? flags.cli : undefined;
+    const quiet = flags.quiet === true;
 
     const config = await loadConfig();
     const installed = await detectAvailableCLIs();
@@ -248,8 +210,19 @@ const runCommand: Command = {
       }
 
       try {
-        await scheduler.run(id, { ...(cli !== undefined ? { cli } : {}), params });
-        line(green(`task "${id}" ran — recorded a run`));
+        const outcome = await scheduler.run(id, { ...(cli !== undefined ? { cli } : {}), params });
+        if (!quiet) {
+          line(green(`task "${id}" ran`));
+          line(
+            formatKeyValues([
+              ["status", outcome.status ?? dim("(none recorded)")],
+              ["cli", outcome.cli ?? dim("default")],
+              ["duration", `${outcome.durationMs}ms`],
+              ["run id", outcome.runId ?? dim("(none)")],
+              ["summary", fmt(outcome.summary)],
+            ]),
+          );
+        }
         return 0;
       } catch (err) {
         if (err instanceof SchedulerError && err.reason === "unknown_handler") {

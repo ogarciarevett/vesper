@@ -11,7 +11,18 @@ import { SchedulerError } from "./errors.ts";
 import { EventBus } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
-import type { CompleteFn, RegisterTaskInput, RunOptions, ScheduledTask } from "./types.ts";
+import type {
+  CompleteFn,
+  RegisterTaskInput,
+  RunOptions,
+  RunOutcome,
+  ScheduledTask,
+} from "./types.ts";
+
+/** Mutable sink the success path of `#invoke` fills so `run()` can return a {@link RunOutcome}. */
+interface OutcomeCapture {
+  outcome?: RunOutcome;
+}
 
 /** Options for constructing a {@link Scheduler}. */
 export interface SchedulerOptions {
@@ -212,15 +223,31 @@ export class Scheduler {
    * Pass `options` to supply a per-run CLI override and transient params; these
    * are surfaced to the handler via `ctx` and never persisted on the task.
    *
-   * Throws `SchedulerError("unknown_task")` if `id` is not registered.
+   * Returns a {@link RunOutcome} describing the completed run (status/summary the
+   * handler recorded, the run id, the per-run CLI, and the wall-clock duration).
+   * Throws `SchedulerError("unknown_task")` if `id` is not registered, and
+   * propagates handler errors (CLIError/CapabilityError/...) to the caller.
    */
-  async run(id: string, options?: RunOptions): Promise<void> {
+  async run(id: string, options?: RunOptions): Promise<RunOutcome> {
     const task = this.#persistence.get(id);
     if (task === null) {
       throw new SchedulerError("unknown_task", `task "${id}" is not registered`);
     }
 
-    await this.#invoke(task, false, options);
+    const capture: OutcomeCapture = {};
+    await this.#invoke(task, false, options, capture);
+    // A manual run either threw above or reached the handler success path (manual
+    // guardrail skips throw rather than returning), so capture.outcome is set.
+    return (
+      capture.outcome ?? {
+        taskId: id,
+        runId: null,
+        status: null,
+        summary: null,
+        cli: options?.cli ?? null,
+        durationMs: 0,
+      }
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -273,7 +300,12 @@ export class Scheduler {
    *
    * On any failure the original error is re-thrown after being recorded.
    */
-  async #invoke(task: ScheduledTask, isScheduled: boolean, options?: RunOptions): Promise<void> {
+  async #invoke(
+    task: ScheduledTask,
+    isScheduled: boolean,
+    options?: RunOptions,
+    capture?: OutcomeCapture,
+  ): Promise<void> {
     const now = this.#clock();
 
     // Re-fetch from persistence so we always have up-to-date guardrail state.
@@ -360,10 +392,14 @@ export class Scheduler {
 
     try {
       const handler = this.#registry.get(current.handler_id);
+      let recorded: { runId: string; status: string; summary: string } | null = null;
       const ctx = buildPipelineContext({
         task: current,
         now,
         store: this.#store,
+        onRecordRun: (record) => {
+          recorded = record;
+        },
         ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
         ...(options !== undefined ? { options } : {}),
       });
@@ -371,6 +407,7 @@ export class Scheduler {
       // -- duration cap: race handler against timeout --
       // The timer handle is cleared in `finally` so a fast handler never leaves a
       // pending timer keeping the event loop alive up to max_duration_ms.
+      const startedAt = performance.now();
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       try {
         if (current.max_duration_ms !== null) {
@@ -388,6 +425,19 @@ export class Scheduler {
         }
       } finally {
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      }
+      const durationMs = Math.round(performance.now() - startedAt);
+
+      // Capture the run outcome for the (manual) caller.
+      if (capture !== undefined) {
+        capture.outcome = {
+          taskId: current.id,
+          runId: recorded?.runId ?? null,
+          status: recorded?.status ?? null,
+          summary: recorded?.summary ?? null,
+          cli: options?.cli ?? null,
+          durationMs,
+        };
       }
 
       // Success: record run, reset backoff, update daily counter.

@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { bold, colorEnabled, formatKeyValues, statusToken } from "./ui.ts";
+import {
+  bold,
+  colorEnabled,
+  formatKeyValues,
+  padVisible,
+  statusToken,
+  table,
+  visibleLength,
+} from "./ui.ts";
 
 // Color depends on NO_COLOR + stdout.isTTY, so `bun test` is plain when piped (CI)
 // but colored under an interactive TTY. Force NO_COLOR here to assert the plain-mode
@@ -38,5 +46,39 @@ describe("ui (plain mode, NO_COLOR forced)", () => {
     const [first, second] = out.split("\n");
     expect(first).toBe(`  ${"short".padEnd("longerkey".length)}  x`);
     expect(second).toBe("  longerkey  y");
+  });
+
+  test("visibleLength ignores ANSI escape codes", () => {
+    // In NO_COLOR mode `bold` is plain, so wrap a raw escape to exercise stripping.
+    const colored = `\x1b[1mhi\x1b[0m`;
+    expect(visibleLength(colored)).toBe(2);
+    expect(visibleLength("plain")).toBe(5);
+  });
+
+  test("padVisible pads by visible width (ignoring ANSI)", () => {
+    expect(padVisible("ab", 5)).toBe("ab   ");
+    expect(padVisible(`\x1b[1mab\x1b[0m`, 5)).toBe(`\x1b[1mab\x1b[0m   `);
+    expect(padVisible("toolong", 3)).toBe("toolong");
+  });
+
+  test("table aligns columns to the widest cell and renders a rule", () => {
+    const out = table(
+      ["id", "kind"],
+      [
+        ["echo", "manual"],
+        ["x", "cron"],
+      ],
+    );
+    const lines = out.split("\n");
+    expect(lines).toHaveLength(4); // header + rule + 2 rows
+    // header padded to width of "manual" / "echo"
+    expect(lines[0]).toBe("  id    kind  ");
+    expect(lines[2]).toBe("  echo  manual");
+    expect(lines[3]).toBe("  x     cron  ");
+  });
+
+  test("table handles zero rows (header + rule only)", () => {
+    const out = table(["a", "b"], []);
+    expect(out.split("\n")).toHaveLength(2);
   });
 });

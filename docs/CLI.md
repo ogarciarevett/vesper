@@ -19,6 +19,7 @@ Every `vesper` command, generated from the command registry
 | `vesper daemon` | Run the Vesper IPC server and scheduler loop. Foreground; Ctrl-C to stop. |
 | `vesper schedule list` | List all scheduled tasks in an aligned table. |
 | `vesper schedule show <id>` | Print full details for a single task. |
-| `vesper schedule run <id> [--cli <name>] [--param key=value]` | Manually run a task by id, invoking the resolved CLI and recording a run. |
+| `vesper schedule run <id> [--cli <name>] [--param key=value] [--quiet]` | Manually run a task by id, invoking the resolved CLI and recording a run. |
 | `vesper schedule enable <id>` | Enable a scheduled task by id. |
 | `vesper schedule disable <id>` | Disable a scheduled task by id. |
+| `vesper runs list [--pipeline <name>] [--status <status>] [--limit <n>]` | List recorded pipeline runs (oldest first). |

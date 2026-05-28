@@ -67,7 +67,16 @@ describe("Scheduler — pipeline runtime context", () => {
       required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE"],
     });
 
-    await scheduler.run("echo", { cli: "codex", params: { prompt: "ping" } });
+    const outcome = await scheduler.run("echo", { cli: "codex", params: { prompt: "ping" } });
+
+    // The returned RunOutcome reflects what the handler recorded + the per-run CLI.
+    expect(outcome.taskId).toBe("echo");
+    expect(outcome.status).toBe("ok");
+    expect(outcome.summary).toBe("hello back");
+    expect(outcome.cli).toBe("codex");
+    expect(outcome.runId).not.toBeNull();
+    expect(typeof outcome.durationMs).toBe("number");
+    expect(outcome.durationMs).toBeGreaterThanOrEqual(0);
 
     // The injected resolver saw the per-run override and the prompt.
     expect(calls).toEqual([{ prompt: "ping", cli: "codex" }]);

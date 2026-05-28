@@ -29,7 +29,7 @@ const PROGRAM = "vesper";
  * Flags that take a space-separated value (e.g. `--cli claude`). Listed centrally
  * so the parser treats them as valued; everything else stays a boolean flag.
  */
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["cli", "param"]);
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["cli", "param", "pipeline", "status", "limit"]);
 
 function isGroup(entry: Registrable): entry is CommandGroup {
   return "subcommands" in entry;

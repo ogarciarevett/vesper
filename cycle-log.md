@@ -321,3 +321,16 @@ reconciliation (no code change):
    non-technical user performs, the surface (daemon-served web app? menubar?), and confirmation of the
    Bun/TS/web stack (Hard rule 14). Ranks 1-4 are the correct enabling plumbing to land first,
    regardless of the eventual UI shape. HALT on implementation pending Omar.
+
+## Run-outcome visibility (backlog #1) — SHIPPED
+
+Made pipeline runs visible (prerequisite for any UI). `Scheduler.run(id, opts)` now returns a typed
+`RunOutcome` { taskId, runId, status, summary, cli, durationMs } — captured via an `onRecordRun` hook
+threaded into the `PipelineContext` (the success path fills a capture object; manual guardrail skips
+still throw, so a manual run always yields an outcome). `vesper schedule run` renders the outcome
+(status/cli/duration/run id/summary) with a `--quiet` opt-out. New `vesper runs list
+[--pipeline --status --limit]` reads `store.listRuns` — the runs every pipeline writes were never
+surfaced before. Extracted the ANSI-aware table renderer (`visibleLength`/`padVisible`/`table`) out
+of schedule.ts into the shared `ui.ts` so `schedule list` and `runs list` share one formatter.
+Tests: RunOutcome integration assertion, ui table unit tests, runs-command tests (filters + empty).
+436 tests / 0 fail; biome clean. Verified end-to-end (outcome render + runs table).

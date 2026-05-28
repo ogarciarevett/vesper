@@ -3,6 +3,7 @@ import { cliGroup } from "./cli.ts";
 import { daemonCommand } from "./daemon.ts";
 import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
+import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
 import { statusCommand } from "./status.ts";
 import { vaultGroup } from "./vault.ts";
@@ -16,4 +17,5 @@ export const registry: readonly Registrable[] = [
   statusCommand,
   daemonCommand,
   scheduleGroup,
+  runsGroup,
 ];
