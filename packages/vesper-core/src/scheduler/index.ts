@@ -1,7 +1,7 @@
 // Scheduler module public surface.
 
 export type { BuildContextDeps } from "./context.ts";
-export { buildPipelineContext } from "./context.ts";
+export { buildPipelineContext, redactSummary } from "./context.ts";
 export type { CronField, ParsedCron } from "./cron.ts";
 export { cronMatches, nextRun, parseCron } from "./cron.ts";
 export type { SchedulerErrorReason } from "./errors.ts";

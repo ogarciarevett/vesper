@@ -26,6 +26,15 @@ describe("normalizeConfig", () => {
   test("omits default when absent", () => {
     expect(normalizeConfig({ cli: { adapters: {} } }).cli.default).toBeUndefined();
   });
+
+  test("reads storage.redactRunSummaries only when true", () => {
+    expect(normalizeConfig({ storage: { redactRunSummaries: true } }).storage).toEqual({
+      redactRunSummaries: true,
+    });
+    // Absent or falsy => storage omitted entirely.
+    expect(normalizeConfig({ cli: { adapters: {} } }).storage).toBeUndefined();
+    expect(normalizeConfig({ storage: { redactRunSummaries: "yes" } }).storage).toBeUndefined();
+  });
 });
 
 describe("loadConfig / saveConfig", () => {

@@ -40,7 +40,13 @@ export const daemonCommand: Command = {
     // pipelines actually declare (deny-by-default), with the CLI resolver, then
     // register the pipelines so their handlers + tasks are available to the tick loop.
     const registry = new HandlerRegistry();
-    const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities(), complete });
+    const scheduler = new Scheduler({
+      db,
+      registry,
+      grants: grantedCapabilities(),
+      complete,
+      redactSummaries: config.storage?.redactRunSummaries === true,
+    });
     registerPipelines(scheduler, registry);
 
     // Start the cron tick loop. The scheduler records per-task errors for any

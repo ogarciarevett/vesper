@@ -349,3 +349,15 @@ best.md (via `git diff --no-index`). DEFERRED: `revert` + writing back to the co
 which stays a separate user-acked step. Tests: projectCalls, list (harness filter), diff-no-candidate.
 441 tests / 0 fail; biome clean. Smoked list + dry-run train end-to-end (recorded run visible in
 `vesper runs list`).
+
+## runs.summary redaction (backlog #3) — SHIPPED (opt-in)
+
+Closed the thrice-flagged security item: raw CLI output persisted in cleartext in `runs.summary`.
+Added `redactSummary(summary)` -> `[redacted: N chars]` and a `redactSummaries` Scheduler option
+threaded into the `PipelineContext.recordRun` boundary, so when enabled the stored summary (and the
+RunOutcome) is size-only metadata; the status is kept verbatim (never sensitive). Wired from a new
+config flag `storage.redactRunSummaries` (default FALSE — no behavior change; observability via
+`vesper runs list` is preserved unless the user opts in) at all three Scheduler sites (daemon,
+schedule run, skill train). This is the prerequisite for an elder-first UI rendering run summaries
+of pipelines that touch third-party/PII data. Tests: redactSummary unit, context recordRun redaction,
+config normalization. 444 tests / 0 fail; biome clean.

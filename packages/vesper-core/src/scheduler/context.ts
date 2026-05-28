@@ -3,6 +3,15 @@ import { CLIError } from "../cli/errors.ts";
 import type { Store } from "../storage/types.ts";
 import type { CompleteFn, PipelineContext, RunOptions, ScheduledTask } from "./types.ts";
 
+/**
+ * Replace a run summary with size-only metadata, so raw CLI output is never
+ * persisted in cleartext when redaction is enabled. The status is kept verbatim
+ * (it is never sensitive); only the free-text summary is redacted.
+ */
+export function redactSummary(summary: string): string {
+  return `[redacted: ${summary.length} chars]`;
+}
+
 /** Dependencies needed to build a {@link PipelineContext} for a single invocation. */
 export interface BuildContextDeps {
   readonly task: ScheduledTask;
@@ -20,8 +29,11 @@ export interface BuildContextDeps {
   /**
    * Invoked synchronously after each `ctx.recordRun`, so the scheduler can build a
    * {@link import("./types.ts").RunOutcome} without the handler returning anything.
+   * Reports the summary AS STORED (already redacted when `redactSummaries` is set).
    */
   readonly onRecordRun?: (record: { runId: string; status: string; summary: string }) => void;
+  /** When true, the run summary is stored as size-only metadata (see {@link redactSummary}). */
+  readonly redactSummaries?: boolean;
 }
 
 /**
@@ -40,7 +52,7 @@ export interface BuildContextDeps {
  * (`options.cli`) -> the injected resolver's configured default.
  */
 export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
-  const { task, now, store, complete, options, onRecordRun } = deps;
+  const { task, now, store, complete, options, onRecordRun, redactSummaries } = deps;
   const params = options?.params ?? {};
 
   return {
@@ -62,8 +74,9 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
 
     recordRun({ status, summary }) {
       assertCapabilities(["WRITE_STORAGE"], task.required_capabilities);
-      const runId = store.recordRun({ pipeline: task.handler_id, status, summary });
-      onRecordRun?.({ runId, status, summary });
+      const stored = redactSummaries === true ? redactSummary(summary) : summary;
+      const runId = store.recordRun({ pipeline: task.handler_id, status, summary: stored });
+      onRecordRun?.({ runId, status, summary: stored });
       return runId;
     },
   };

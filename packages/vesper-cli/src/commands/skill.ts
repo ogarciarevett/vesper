@@ -145,7 +145,13 @@ const trainCommand: Command = {
     const db = openDb();
     try {
       const registry = new HandlerRegistry();
-      const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities(), complete });
+      const scheduler = new Scheduler({
+        db,
+        registry,
+        grants: grantedCapabilities(),
+        complete,
+        redactSummaries: config.storage?.redactRunSummaries === true,
+      });
       registerPipelines(scheduler, registry);
 
       const params: Record<string, string> = {

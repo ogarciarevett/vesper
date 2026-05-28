@@ -14,6 +14,10 @@ export interface VesperConfig {
     /** Per-adapter command/args overrides, keyed by adapter name. */
     readonly adapters: Readonly<Record<string, AdapterConfig>>;
   };
+  readonly storage?: {
+    /** When true, run summaries are stored as size-only metadata (no raw CLI output). */
+    readonly redactRunSummaries?: boolean;
+  };
 }
 
 /** A fresh config with no default and no overrides. */
@@ -51,6 +55,11 @@ export function normalizeConfig(raw: unknown): VesperConfig {
 
   const defaultName = asString(cliRaw.default);
   const cli = defaultName !== undefined ? { default: defaultName, adapters } : { adapters };
+
+  const storageRaw = isObject(raw.storage) ? raw.storage : {};
+  if (storageRaw.redactRunSummaries === true) {
+    return { cli, storage: { redactRunSummaries: true } };
+  }
   return { cli };
 }
 

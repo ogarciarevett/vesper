@@ -197,7 +197,13 @@ const runCommand: Command = {
     try {
       // Register pipelines first so their tasks (e.g. `echo`) exist before lookup.
       const registry = new HandlerRegistry();
-      const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities(), complete });
+      const scheduler = new Scheduler({
+        db,
+        registry,
+        grants: grantedCapabilities(),
+        complete,
+        redactSummaries: config.storage?.redactRunSummaries === true,
+      });
       registerPipelines(scheduler, registry);
 
       // Look up the task so we can provide a useful error if it doesn't exist.

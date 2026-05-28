@@ -44,6 +44,11 @@ export interface SchedulerOptions {
    * a clear {@link import("../cli/errors.ts").CLIError}.
    */
   readonly complete?: CompleteFn;
+  /**
+   * When true, run summaries are persisted as size-only metadata (raw CLI output
+   * is never stored in cleartext). Host policy from `~/.vesper/config.json`.
+   */
+  readonly redactSummaries?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +96,7 @@ export class Scheduler {
   readonly #grants: readonly Capability[];
   readonly #store: Store;
   readonly #complete: CompleteFn | undefined;
+  readonly #redactSummaries: boolean;
 
   /**
    * Map of task id -> bound event listener, so event tasks can be cleanly
@@ -112,6 +118,7 @@ export class Scheduler {
     this.#grants = options.grants ?? [];
     this.#store = new SqliteStore(options.db);
     this.#complete = options.complete;
+    this.#redactSummaries = options.redactSummaries ?? false;
 
     // Load all persisted tasks and wire up event subscriptions.
     const tasks = this.#persistence.list();
@@ -400,6 +407,7 @@ export class Scheduler {
         onRecordRun: (record) => {
           recorded = record;
         },
+        redactSummaries: this.#redactSummaries,
         ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
         ...(options !== undefined ? { options } : {}),
       });

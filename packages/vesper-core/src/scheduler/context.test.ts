@@ -3,7 +3,7 @@ import { CapabilityError } from "../capabilities/errors.ts";
 import { CLIError } from "../cli/errors.ts";
 import type { CompleteResult } from "../cli/types.ts";
 import type { RecordRunInput, Store } from "../storage/types.ts";
-import { buildPipelineContext } from "./context.ts";
+import { buildPipelineContext, redactSummary } from "./context.ts";
 import type { Capability, CompleteFn, ScheduledTask } from "./types.ts";
 
 // ---------------------------------------------------------------------------
@@ -212,5 +212,27 @@ describe("buildPipelineContext.recordRun", () => {
     const id = ctx.recordRun({ status: "ok", summary: "done" });
     expect(id).toBe("run-id");
     expect(recorded).toEqual([{ pipeline: "echo", status: "ok", summary: "done" }]);
+  });
+
+  test("redacts the summary to size-only metadata when redactSummaries is set", () => {
+    const { store, recorded } = makeStore();
+    const ctx = buildPipelineContext({
+      task: makeTask(["WRITE_STORAGE"]),
+      now: NOW,
+      store,
+      redactSummaries: true,
+    });
+    ctx.recordRun({ status: "ok", summary: "sensitive raw output" });
+    // Status kept verbatim; only the free-text summary is redacted.
+    expect(recorded[0]?.status).toBe("ok");
+    expect(recorded[0]?.summary).toBe("[redacted: 20 chars]");
+    expect(recorded[0]?.summary).not.toContain("sensitive");
+  });
+});
+
+describe("redactSummary", () => {
+  test("replaces content with a size-only marker", () => {
+    expect(redactSummary("hello")).toBe("[redacted: 5 chars]");
+    expect(redactSummary("")).toBe("[redacted: 0 chars]");
   });
 });
