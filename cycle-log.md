@@ -243,3 +243,28 @@ MCP is unavailable, status transitions are also mirrored here for manual reconci
   `SkillTrainStore.dir` to close the param-driven path-traversal trust boundary BEFORE any IPC/remote
   surface feeds `skill`/`*Dir` params. Still open follow-ups: narrow daemon grants to declared union;
   redact/meta-only `runs.summary`; held-out validation split; `--judge-cli` up-front validation.
+
+## improve-pipelines workflow — results + backlog
+
+Ran a multi-agent workflow (33 agents) to improve the pipelines: 6 dimension analysts ->
+adversarial verify each finding -> synthesize. 10 confirmed -> 8 after dedupe. Applied the
+S-effort quick wins + the two real bugs immediately:
+- (PR #6 / runtime) narrow daemon+schedule grants to `grantedCapabilities()` (union of declared
+  pipeline caps) so the deny-by-default check is meaningful; clear the duration-cap setTimeout in a
+  finally (timer leak kept the event loop alive up to max_duration_ms); daemon banner derived from
+  the registry instead of a hardcoded "echo".
+- (PR #7 / skill-train) judge scorer read the FIRST number, so a preamble integer ("Task 1...")
+  clamped to 1.0 and silently inflated scores driving greedy accept — now prefers the first DECIMAL
+  (the score), integer-only fallback. Regression tests added.
+
+### M-effort backlog (next increment — pair with the deferred skill-train CLI surface T6/T7; each needs a SPEC/PLAN + Linear issue when the cap lifts)
+1. `Scheduler.run` returns a typed `RunOutcome` (runId/status/summary/resolved cli/duration_ms) and
+   `vesper schedule run` renders it (+ `--quiet`). Biggest UX gap today: run id/summary are discarded.
+2. `vesper runs list [--pipeline --status --limit]` — `store.listRuns` exists and every pipeline
+   writes a row, but nothing surfaces them. Extract the shared table formatters out of schedule.ts first.
+3. Per-role adapter wiring in the skill-train handler — build per-role CompleteFns bound via
+   `ctx.complete({cli})` so `--cli`/`--optimizer-cli`/`--judge-cli` (T6) actually route; wire `makeJudge`.
+4. Held-out validation split in `trainSkill` (deterministic `splitTasks`, opt-in `valFraction`) to cut
+   the per-run `+N` validation shell-outs and remove train/val overlap.
+Deferred further: AbortSignal-based handler cancellation; an opt-in real-CLI smoke harness
+(`VESPER_LIVE_SMOKE`, kept out of CI `bun test`).

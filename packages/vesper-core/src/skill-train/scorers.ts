@@ -18,8 +18,10 @@ export function contains(actual: string, expected: string): number {
   return actual.toLowerCase().includes(needle.toLowerCase()) ? 1 : 0;
 }
 
-/** Matches the first floating-point number in judge output (e.g. "Score: 0.8", "0.8/1.0"). */
-const FIRST_NUMBER = /-?\d+(?:\.\d+)?/;
+/** Matches decimal numbers (with a fractional part) — these are the score values. */
+const DECIMAL_NUMBER = /-?\d*\.\d+/g;
+/** Matches the first integer — only used as a fallback when no decimal is present. */
+const FIRST_INTEGER = /-?\d+/;
 
 /** Clamp a value into the [0, 1] interval. */
 function clamp01(value: number): number {
@@ -33,26 +35,35 @@ function clamp01(value: number): number {
 }
 
 /**
+ * Extract a score in [0, 1] from a chatty judge response. The score is the FIRST
+ * decimal (e.g. "0.5" in "0.5 out of 1.0", or "0.9" in "Task 1: 0.9") — preferring
+ * decimals over integers avoids a preamble integer (e.g. the "1" in "Task 1")
+ * being read as a perfect 1.0. Falls back to the first integer only when there is
+ * no decimal at all. Returns 0 when nothing parses.
+ */
+function parseScore(text: string): number {
+  const decimals = text.match(DECIMAL_NUMBER);
+  const token = decimals?.[0] ?? text.match(FIRST_INTEGER)?.[0];
+  if (token === undefined) {
+    return 0;
+  }
+  const parsed = Number.parseFloat(token);
+  return Number.isNaN(parsed) ? 0 : clamp01(parsed);
+}
+
+/**
  * Build an async LLM-as-judge scorer that asks the CLI to grade 0.0-1.0.
  *
  * The returned scorer routes through the injected {@link CompleteFn} (the CLI
- * adapter layer — never a provider SDK, per Hard rule 12). It parses the FIRST
- * floating-point number from the response, clamps it to [0, 1], and NEVER
- * throws: unparseable output yields 0.
+ * adapter layer — never a provider SDK, per Hard rule 12). It parses the score
+ * via {@link parseScore} (first decimal, integer fallback), clamps to [0, 1], and
+ * NEVER throws: unparseable output yields 0.
  */
 export function makeJudge(complete: CompleteFn, opts?: { readonly cli?: string }): Scorer {
   return async (actual: string, expected: string): Promise<number> => {
     const prompt = buildJudgePrompt(actual, expected);
     const result = await complete(prompt, opts?.cli !== undefined ? { cli: opts.cli } : undefined);
-    const match = result.text.match(FIRST_NUMBER);
-    if (match === null) {
-      return 0;
-    }
-    const parsed = Number.parseFloat(match[0]);
-    if (Number.isNaN(parsed)) {
-      return 0;
-    }
-    return clamp01(parsed);
+    return parseScore(result.text);
   };
 }
 
