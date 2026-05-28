@@ -23,6 +23,6 @@ Every `vesper` command, generated from the command registry
 | `vesper schedule enable <id>` | Enable a scheduled task by id. |
 | `vesper schedule disable <id>` | Disable a scheduled task by id. |
 | `vesper runs list [--pipeline <name>] [--status <status>] [--limit <n>]` | List recorded pipeline runs (oldest first). |
-| `vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--dry-run] [--yes]` | Train a skill against its tasks.json via the skill-train pipeline. |
+| `vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--val-fraction F] [--dry-run] [--yes]` | Train a skill against its tasks.json via the skill-train pipeline. |
 | `vesper skill list [--skills-dir <dir>]` | List trainable skills (those with a tasks.json validation harness). |
 | `vesper skill diff <name> [--skills-dir <dir>]` | Diff the committed SKILL.md against the trained best candidate. |

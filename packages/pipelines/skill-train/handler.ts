@@ -83,6 +83,9 @@ export const skillTrainHandler: TaskHandler = async (ctx) => {
   // distinct adapter when `optimizerCli` / `judgeCli` params are supplied.
   const optimizerCli = strParam(ctx.params, "optimizerCli");
   const judgeCli = strParam(ctx.params, "judgeCli");
+  // Optional held-out validation fraction (0..1); trainSkill ignores out-of-range values.
+  const valFractionRaw = strParam(ctx.params, "valFraction");
+  const valFraction = valFractionRaw !== undefined ? Number(valFractionRaw) : undefined;
 
   const skill = await loadSkill(name, { skillsDir });
   const store = new SkillTrainStore(stateDir);
@@ -103,6 +106,7 @@ export const skillTrainHandler: TaskHandler = async (ctx) => {
     optimizerCli: optimizerCli ?? cliLabel,
     now: () => new Date().toISOString(),
     ...(dryRun ? { dryRun: true } : {}),
+    ...(valFraction !== undefined && Number.isFinite(valFraction) ? { valFraction } : {}),
     onEpoch: (entry) => store.appendHistory(name, entry),
   });
 

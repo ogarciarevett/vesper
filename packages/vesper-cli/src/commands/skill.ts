@@ -105,7 +105,7 @@ const trainCommand: Command = {
   name: "train",
   summary: "Train a skill against its tasks.json via the skill-train pipeline.",
   usage:
-    "vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--dry-run] [--yes]",
+    "vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--val-fraction F] [--dry-run] [--yes]",
   async run({ positionals, flags }) {
     const name = positionals[0];
     if (name === undefined) throw new Error("usage: vesper skill train <name>");
@@ -117,6 +117,7 @@ const trainCommand: Command = {
     const cli = strFlag(flags.cli);
     const optimizerCli = strFlag(flags["optimizer-cli"]);
     const judgeCli = strFlag(flags["judge-cli"]);
+    const valFraction = strFlag(flags["val-fraction"]);
 
     // Load the skill first to count tasks (and fail early if it/its harness is missing).
     const skill = await loadSkill(name, { skillsDir });
@@ -163,6 +164,7 @@ const trainCommand: Command = {
         ...(dryRun ? { dryRun: "true" } : {}),
         ...(optimizerCli !== undefined ? { optimizerCli } : {}),
         ...(judgeCli !== undefined ? { judgeCli } : {}),
+        ...(valFraction !== undefined ? { valFraction } : {}),
         ...(cli !== undefined ? { cli } : {}),
       };
 

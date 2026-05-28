@@ -361,3 +361,16 @@ config flag `storage.redactRunSummaries` (default FALSE — no behavior change; 
 schedule run, skill train). This is the prerequisite for an elder-first UI rendering run summaries
 of pipelines that touch third-party/PII data. Tests: redactSummary unit, context recordRun redaction,
 config normalization. 444 tests / 0 fail; biome clean.
+
+## Held-out validation split for skill-train (backlog #4) — SHIPPED (opt-in)
+
+Fixed the correctness/cost issue flagged in review: `trainSkill` validated every candidate against
+the FULL task set (per-run cost N + epochs*(batch+1+N), with train/val overlap). Added
+`splitTasks(tasks, valFraction)` (deterministic: first `round(N*frac)` tasks held out for validation,
+clamped to leave >=1 training task; <2 tasks or out-of-range fraction => no split = original
+behavior). `trainSkill` now samples optimizer batches from the training set and scores baseline +
+candidates only on the held-out validation set when `valFraction` is given. Exposed end-to-end:
+pipeline handler reads a `valFraction` param; `vesper skill train --val-fraction F`. Default unchanged
+(no split) so existing behavior + tests are preserved. Cost model with held-out: baseline |val| +
+epochs*(min(batch,|train|) + 1 + |val|). Tests: splitTasks (determinism, clamp, no-split edges) +
+a trainSkill held-out assertion (baseline reflects only val tasks). 449 tests / 0 fail; biome clean.

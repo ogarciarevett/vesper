@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { CompleteFn } from "../scheduler/types.ts";
 import { SkillTrainError } from "./errors.ts";
-import { trainSkill } from "./train.ts";
-import type { HistoryEntry, Scorer, Skill, TrajectoryResult } from "./types.ts";
+import { splitTasks, trainSkill } from "./train.ts";
+import type { HistoryEntry, Scorer, Skill, SkillTask, TrajectoryResult } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -247,5 +247,92 @@ describe("trainSkill", () => {
     await expect(trainSkill({ ...base, epochs: 1, batchSize: 0 })).rejects.toBeInstanceOf(
       SkillTrainError,
     );
+  });
+});
+
+describe("splitTasks", () => {
+  const tasks: SkillTask[] = [
+    { id: "a", prompt: "p", expected: "e" },
+    { id: "b", prompt: "p", expected: "e" },
+    { id: "c", prompt: "p", expected: "e" },
+    { id: "d", prompt: "p", expected: "e" },
+  ];
+
+  test("no fraction => both sets are the full list (no split)", () => {
+    const { trainTasks, valTasks } = splitTasks(tasks);
+    expect(trainTasks).toBe(tasks);
+    expect(valTasks).toBe(tasks);
+  });
+
+  test("0.5 of 4 tasks => 2 validation (first), 2 training (rest), deterministic", () => {
+    const { trainTasks, valTasks } = splitTasks(tasks, 0.5);
+    expect(valTasks.map((t) => t.id)).toEqual(["a", "b"]);
+    expect(trainTasks.map((t) => t.id)).toEqual(["c", "d"]);
+  });
+
+  test("clamps to leave at least one training task", () => {
+    const { trainTasks, valTasks } = splitTasks(tasks, 0.99);
+    expect(valTasks).toHaveLength(3);
+    expect(trainTasks).toHaveLength(1);
+  });
+
+  test("fewer than 2 tasks or out-of-range fraction => no split", () => {
+    expect(splitTasks([tasks[0] as SkillTask], 0.5).valTasks).toHaveLength(1);
+    expect(splitTasks(tasks, 0).valTasks).toBe(tasks);
+    expect(splitTasks(tasks, 1).valTasks).toBe(tasks);
+  });
+});
+
+describe("trainSkill held-out validation", () => {
+  const FM = "---\nname: demo\ndescription: d\n---\n";
+  const ISO = () => "2026-05-29T00:00:00.000Z";
+
+  test("scores candidates only on the held-out validation tasks", async () => {
+    // Target always answers "VAL". Validation tasks expect "VAL" (score 1); training
+    // tasks expect "TRAIN" (would score 0). With valFraction 0.5 the baseline reflects
+    // only the val tasks -> 1.0, proving validation ignored the training tasks.
+    const complete: CompleteFn = async () => ({
+      text: "VAL",
+      exit_code: 0,
+      raw_stdout: "VAL",
+      raw_stderr: "",
+      duration_ms: 1,
+    });
+    const skill: Skill = {
+      name: "demo",
+      body: `${FM}body`,
+      frontmatter: { name: "demo", description: "d" },
+      tasks: [
+        { id: "v1", prompt: "p", expected: "VAL" },
+        { id: "v2", prompt: "p", expected: "VAL" },
+        { id: "t1", prompt: "p", expected: "TRAIN" },
+        { id: "t2", prompt: "p", expected: "TRAIN" },
+      ],
+    };
+
+    const withSplit = await trainSkill({
+      skill,
+      complete,
+      epochs: 1,
+      batchSize: 2,
+      targetCli: "claude",
+      optimizerCli: "claude",
+      now: ISO,
+      valFraction: 0.5,
+      dryRun: true,
+    });
+    expect(withSplit.baselineScore).toBe(1); // only v1/v2 validated
+
+    const noSplit = await trainSkill({
+      skill,
+      complete,
+      epochs: 1,
+      batchSize: 2,
+      targetCli: "claude",
+      optimizerCli: "claude",
+      now: ISO,
+      dryRun: true,
+    });
+    expect(noSplit.baselineScore).toBe(0.5); // all four validated (2 of 4 match)
   });
 });

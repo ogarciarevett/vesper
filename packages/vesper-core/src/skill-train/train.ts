@@ -27,11 +27,37 @@ export interface TrainOptions {
   readonly now: () => string;
   /** When true, never adopt a candidate — propose and score only. */
   readonly dryRun?: boolean;
+  /**
+   * Fraction of tasks (0..1, exclusive) reserved as a held-out VALIDATION set.
+   * When set, optimizer batches are sampled only from the remaining training
+   * tasks and candidates are scored only on the held-out set — cutting the
+   * per-epoch validation cost and removing train/val overlap. When omitted (or
+   * out of range, or fewer than 2 tasks), both train and val are the full set
+   * (the original behavior).
+   */
+  readonly valFraction?: number;
   /** Per-epoch hook (e.g. persistence/logging). Awaited if it returns a promise. */
   readonly onEpoch?: (
     entry: HistoryEntry,
     trajectories: readonly TrajectoryResult[],
   ) => void | Promise<void>;
+}
+
+/**
+ * Deterministically split tasks into a held-out validation set and a training
+ * set. With no/invalid `valFraction` or fewer than 2 tasks, both sets are the
+ * full list (no split). The first `round(N * valFraction)` tasks (clamped to
+ * leave at least one training task) become validation; the rest are training.
+ */
+export function splitTasks(
+  tasks: readonly SkillTask[],
+  valFraction?: number,
+): { trainTasks: readonly SkillTask[]; valTasks: readonly SkillTask[] } {
+  if (valFraction === undefined || valFraction <= 0 || valFraction >= 1 || tasks.length < 2) {
+    return { trainTasks: tasks, valTasks: tasks };
+  }
+  const valCount = Math.min(tasks.length - 1, Math.max(1, Math.round(tasks.length * valFraction)));
+  return { valTasks: tasks.slice(0, valCount), trainTasks: tasks.slice(valCount) };
 }
 
 /** Outcome of a full training run. */
@@ -125,15 +151,16 @@ export async function trainSkill(options: TrainOptions): Promise<TrainResult> {
   const optimizerComplete = options.optimizerComplete ?? complete;
   const judge = options.judge;
   const dryRun = options.dryRun ?? false;
+  const { trainTasks, valTasks } = splitTasks(skill.tasks, options.valFraction);
 
-  const baseline = await evaluate(skill.body, skill.tasks, complete, judge);
+  const baseline = await evaluate(skill.body, valTasks, complete, judge);
   let bestBody = skill.body;
   let bestScore = baseline.score;
   let acceptedAny = false;
   const history: HistoryEntry[] = [];
 
   for (let epoch = 1; epoch <= epochs; epoch++) {
-    const batch = sampleBatch(skill.tasks, epoch, batchSize);
+    const batch = sampleBatch(trainTasks, epoch, batchSize);
     const batchResults: TrajectoryResult[] = [];
     for (const task of batch) {
       batchResults.push(await runTrajectory(bestBody, task, complete, judge));
@@ -152,7 +179,7 @@ export async function trainSkill(options: TrainOptions): Promise<TrainResult> {
     try {
       const proposal = await optimizerComplete(prompt);
       candidateBody = parseCandidate(proposal.text, skill.frontmatter);
-      const evaluated = await evaluate(candidateBody, skill.tasks, complete, judge);
+      const evaluated = await evaluate(candidateBody, valTasks, complete, judge);
       candidateScore = evaluated.score;
       accepted =
         candidateScore > bestScore ||

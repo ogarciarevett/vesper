@@ -40,6 +40,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "epochs",
   "batchsize",
   "skills-dir",
+  "val-fraction",
 ]);
 
 function isGroup(entry: Registrable): entry is CommandGroup {
