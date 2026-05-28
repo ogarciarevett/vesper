@@ -202,6 +202,45 @@ describe("ClaudeCodeAdapter.complete", () => {
     const err = await adapter.complete("test").catch((e: unknown) => e);
     expect(err).toBe(unexpected);
   });
+
+  test("nonzero exit with 429 stderr -> CLIError(rate_limited)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stderr: "Error: 429 quota exceeded", stdout: "" })),
+    });
+    const err = await adapter.complete("p").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("rate_limited");
+  });
+
+  test("nonzero exit with RESOURCE_EXHAUSTED stderr -> CLIError(rate_limited)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(
+        okResult({ exitCode: 1, stderr: "RESOURCE_EXHAUSTED: model capacity", stdout: "" }),
+      ),
+    });
+    const err = await adapter.complete("p").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("rate_limited");
+  });
+
+  test("ProcessTimeoutError carrying rate-limit stderr -> CLIError(rate_limited)", async () => {
+    const t = new ProcessTimeoutError("claude", 5000, {
+      stdout: "",
+      stderr: "Attempt 1 failed with status 429. Retrying with backoff...",
+    });
+    const adapter = new ClaudeCodeAdapter({ run: throwingRunner(t) });
+    const err = await adapter.complete("p").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("rate_limited");
+  });
+
+  test("ProcessTimeoutError with unrelated stderr -> CLIError(timeout)", async () => {
+    const t = new ProcessTimeoutError("claude", 5000, { stdout: "", stderr: "loading models..." });
+    const adapter = new ClaudeCodeAdapter({ run: throwingRunner(t) });
+    const err = await adapter.complete("p").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("timeout");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -239,6 +278,89 @@ describe("CLIAdapter.probe", () => {
     const err = await adapter.probe().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CLIError);
     expect((err as CLIError).reason).toBe("not_authenticated");
+  });
+
+  test("probe(opts) passes timeoutMs through to the runner", async () => {
+    let captured: number | undefined;
+    const run: ProcessRunner = async (_c, _a, opts) => {
+      captured = opts?.timeoutMs;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.probe({ timeoutMs: 1234 });
+    expect(captured).toBe(1234);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLIAdapter.version()
+// ---------------------------------------------------------------------------
+
+describe("CLIAdapter.version", () => {
+  test("returns the first line of <cmd> --version, trimmed", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "claude 2.1.150 (Claude Code)\n", exitCode: 0 })),
+    });
+    expect(await adapter.version()).toBe("claude 2.1.150 (Claude Code)");
+  });
+
+  test("multi-line stdout: only the first line", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "v1.2.3\ncommit abc\n", exitCode: 0 })),
+    });
+    expect(await adapter.version()).toBe("v1.2.3");
+  });
+
+  test("invokes the underlying binary with `--version`", async () => {
+    let cmd = "";
+    let args: readonly string[] = [];
+    const run: ProcessRunner = async (c, a) => {
+      cmd = c;
+      args = a;
+      return okResult({ stdout: "x\n", exitCode: 0 });
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.version();
+    expect(cmd).toBe("claude");
+    expect(args).toEqual(["--version"]);
+  });
+
+  test("CommandNotFoundError -> CLIError(not_installed)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new CommandNotFoundError("claude")),
+    });
+    const err = await adapter.version().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("not_installed");
+  });
+
+  test("nonzero exit -> CLIError(nonzero_exit)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ exitCode: 1, stdout: "", stderr: "" })),
+    });
+    const err = await adapter.version().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("nonzero_exit");
+  });
+
+  test("ProcessTimeoutError -> CLIError(timeout)", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: throwingRunner(new ProcessTimeoutError("claude", 3000)),
+    });
+    const err = await adapter.version().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CLIError);
+    expect((err as CLIError).reason).toBe("timeout");
+  });
+
+  test("honors timeoutMs override", async () => {
+    let captured: number | undefined;
+    const run: ProcessRunner = async (_c, _a, opts) => {
+      captured = opts?.timeoutMs;
+      return okResult({ stdout: "x\n", exitCode: 0 });
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.version({ timeoutMs: 999 });
+    expect(captured).toBe(999);
   });
 });
 

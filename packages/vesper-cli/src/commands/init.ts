@@ -34,15 +34,16 @@ export const initCommand: Command = {
     line();
     printSection("CLIs", [
       ["installed", installed.length > 0 ? installed.join(", ") : dim("none detected")],
-      ["default", chosenDefault ?? dim("none — install claude / opencode / codex / gemini")],
+      ["default", chosenDefault ?? dim("none — run `vesper cli install <name>`")],
     ]);
     if (chosenDefault === undefined) {
       line();
       line(
         dim(
-          "Tip: install a supported CLI, then re-run `vesper init` or `vesper cli select <name>`.",
+          "no working CLI found — install one with `vesper cli install <claude|codex|opencode|gemini>`",
         ),
       );
+      line(dim("(run `vesper cli list` after install to verify it's authenticated)"));
     }
     return 0;
   },

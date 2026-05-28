@@ -1,7 +1,12 @@
 import { VesperError } from "../errors.ts";
 
 /** Discriminant reasons for {@link CLIError}. */
-export type CLIErrorReason = "not_installed" | "not_authenticated" | "timeout" | "nonzero_exit";
+export type CLIErrorReason =
+  | "not_installed"
+  | "not_authenticated"
+  | "rate_limited"
+  | "timeout"
+  | "nonzero_exit";
 
 /**
  * Raised by every {@link import("./types.ts").CLIAdapter} operation, discriminated by

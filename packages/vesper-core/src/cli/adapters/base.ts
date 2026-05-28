@@ -10,6 +10,10 @@ import type { CLIAdapter, CompleteOptions, CompleteResult } from "../types.ts";
 /** Auth-related patterns in stderr that indicate the user needs to log in. */
 const AUTH_STDERR_RE = /not.*(authenticat|logged in|api key)|unauthorized|login/i;
 
+/** Rate-limit / quota patterns — checked even on timeout from a CLI that retried internally. */
+const RATE_LIMIT_STDERR_RE =
+  /\b429\b|RESOURCE_EXHAUSTED|rate.?limit(?:ed)?|quota.{0,40}exhaust|too.{1,5}many.{1,5}requests/i;
+
 /** Fixed prompt used by {@link BaseAdapter.probe} to verify liveness. */
 const PROBE_PROMPT = "respond with the word OK";
 
@@ -83,6 +87,13 @@ export abstract class BaseAdapter implements CLIAdapter {
         });
       }
       if (err instanceof ProcessTimeoutError) {
+        if (RATE_LIMIT_STDERR_RE.test(err.stderr)) {
+          throw new CLIError(
+            "rate_limited",
+            `${this.resolvedCommand}: rate-limited (CLI retried until killed at ${err.timeoutMs}ms)`,
+            { cause: err },
+          );
+        }
         throw new CLIError(
           "timeout",
           `${this.resolvedCommand}: timed out after ${err.timeoutMs}ms`,
@@ -94,12 +105,49 @@ export abstract class BaseAdapter implements CLIAdapter {
     }
   }
 
-  async probe(): Promise<void> {
+  async probe(opts?: CompleteOptions): Promise<void> {
     // complete() already maps all error categories to CLIError; just let it throw.
-    await this.complete(PROBE_PROMPT);
+    await this.complete(PROBE_PROMPT, opts);
+  }
+
+  async version(opts?: CompleteOptions): Promise<string> {
+    try {
+      const res = await this.#run(this.resolvedCommand, ["--version"], {
+        timeoutMs: opts?.timeoutMs ?? 3000,
+      });
+      if (res.exitCode !== 0) {
+        throw new CLIError(
+          "nonzero_exit",
+          `${this.resolvedCommand} --version: exited with code ${res.exitCode}`,
+        );
+      }
+      const first = res.stdout.split("\n", 1)[0] ?? "";
+      return first.trim();
+    } catch (err) {
+      if (err instanceof CLIError) throw err;
+      if (err instanceof CommandNotFoundError) {
+        throw new CLIError("not_installed", `${this.resolvedCommand}: command not found`, {
+          cause: err,
+        });
+      }
+      if (err instanceof ProcessTimeoutError) {
+        throw new CLIError(
+          "timeout",
+          `${this.resolvedCommand} --version: timed out after ${err.timeoutMs}ms`,
+          { cause: err },
+        );
+      }
+      throw err;
+    }
   }
 
   #mapNonzero(exitCode: number, stderr: string): CLIError {
+    if (RATE_LIMIT_STDERR_RE.test(stderr)) {
+      return new CLIError(
+        "rate_limited",
+        `${this.resolvedCommand}: rate-limited (exit ${exitCode}): ${stderr.trim().slice(0, 200)}`,
+      );
+    }
     if (AUTH_STDERR_RE.test(stderr)) {
       return new CLIError(
         "not_authenticated",
