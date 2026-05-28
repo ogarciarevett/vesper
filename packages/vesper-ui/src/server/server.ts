@@ -2,6 +2,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunOutcome, Scheduler, Store } from "@vesper/core";
 import { RUN_COMPLETED, SchedulerError } from "@vesper/core";
+import { ModuleRegistry } from "../modules/registry.ts";
+import type { UiModule } from "../modules/types.ts";
 import { buildSnapshot } from "./snapshot.ts";
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
@@ -14,6 +16,8 @@ export interface UiServerDeps {
   readonly seed: string;
   readonly port?: number;
   readonly hostname?: string;
+  /** Optional pluggable UI modules (e.g. Voice). MVP passes none. */
+  readonly modules?: readonly UiModule[];
 }
 
 /** A running UI server. */
@@ -54,6 +58,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   const { scheduler, store, seed } = deps;
   const hostname = deps.hostname ?? "127.0.0.1";
   const port = deps.port ?? 4317;
+  const modules = new ModuleRegistry(deps.modules ?? []);
 
   const indexHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
   const appJs = await buildClientBundle();
@@ -112,12 +117,11 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
     },
   });
 
-  // Push every completed run to connected browsers.
+  // Push every completed run to connected browsers + notify modules (e.g. Voice).
   const onRun = (payload?: unknown): void => {
-    server.publish(
-      "world",
-      JSON.stringify({ type: "run:completed", outcome: payload as RunOutcome }),
-    );
+    const outcome = payload as RunOutcome;
+    server.publish("world", JSON.stringify({ type: "run:completed", outcome }));
+    void modules.dispatchRunCompleted(outcome);
   };
   scheduler.eventBus.on(RUN_COMPLETED, onRun);
 

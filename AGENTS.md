@@ -304,18 +304,23 @@ list`; (2) `vesper skill {train,list,diff}` for the skill-train engine (per-role
 confirmation); (3) opt-in `runs.summary` redaction (`storage.redactRunSummaries`); (4) held-out
 validation split for skill-train (`--val-fraction`). See `cycle-log.md` for per-item detail.
 
+**Elder-first UI ("Vesper World") MVP SHIPPED.** The Desktop-phase consumer UI per
+`specs/elder-first-ui.md`: a new `@vesper/ui` workspace — a pure deterministic World model
+(`buildWorld`), a daemon-hosted `Bun.serve` (127.0.0.1) server (`/api/world`, run, live WS), a
+Canvas 2D pixel-art client (seeded creatures, mood glow, click→plain-language inspect card + Run,
+live updates), a `UiModule` registry (zero modules; locks the Voice contract), and `vesper ui`
+(daemon-required). Bun/TS/web only — no Rust/Tauri (Hard rule 14). Verified end-to-end in a real
+browser. See `docs/ui.md`.
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **449 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **470 tests / 0 fail**; Biome clean; no
 provider SDKs.
 
-**Next:** the **elder-first consumer UI** (Bun/TS/web stack — Hard rule 14) is **BLOCKED on an Omar
-product decision** — no Linear issue, no shell spec (`specs/ui-react-page-pipeline.md` is a
-React-page-generating pipeline, not the consumer shell). It needs a `specs/elder-first-ui.md` driven
-by Omar's answers (the 2-3 tasks a non-technical user does, the surface, stack confirmation). The
-remaining Linear backlog needs Omar's call before building: **DEV-89** (daemon lifecycle) is
-sensible but its shape depends on the UI surface; **DEV-93** (global capture via macOS Shortcuts) is
-STALE — its body predates the bring-your-own-CLI pivot (references an LLM router / vault API key /
-`packages/daemon`) and its power-user framing may not fit elder-first, so it needs a rewrite +
+**Next:** UI fast-followers (richer onboarding beats, animation/customization, multiple templates,
+the Voice module via the Voice phase). The remaining Linear backlog still needs Omar's call before
+building: **DEV-89** (daemon lifecycle) — sensible, shape now informed by the shipped daemon-hosted
+UI; **DEV-93** (global capture via macOS Shortcuts) — STALE (predates the bring-your-own-CLI pivot;
+references an LLM router / vault API key / `packages/daemon`), needs a rewrite + elder-first
 fit-review, not a build. (Canceled/superseded issues + the Linear reconciliation are in
 `cycle-log.md`.) Update this section after each ship.
 

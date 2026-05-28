@@ -392,3 +392,30 @@ validation). Remaining Linear / backlog, with verdicts:
   "highlight text -> hotkey -> LLM" framing also may not fit the elder-first direction. Needs a
   rewrite to the current architecture + a fit-review against elder-first BEFORE any build — flagging,
   not building.
+
+## Elder-first UI — "Vesper World" MVP (T1-T7) — SHIPPED
+
+Built the Desktop-phase consumer UI per specs/elder-first-ui.md, autonomously, to a "looks sick"
+bar (verified in a real browser via agent-browser). New `@vesper/ui` workspace:
+- T1 pure World model: `buildWorld(snapshot, seed) -> SceneGraph` — one inhabitant per pipeline,
+  deterministic seeded layout, prominence ∝ run share, mood from last run, liveliness from total
+  activity. Fully unit-tested, no DOM.
+- T2 core: scheduler emits `vesper:run:completed` (RunOutcome) on its EventBus after every run.
+- T3 server: daemon-hosted `Bun.serve` on 127.0.0.1 — `/api/world` (SceneGraph), `POST /run`, serves
+  the Bun-bundled client.
+- T4 live: `WS /api/live` pushes run:completed to browsers.
+- T5: the daemon hosts the UI in-process (one runtime; live EventBus events; seed = machine
+  fingerprint); `vesper ui` requires the daemon (IPC ping) and opens a browser tab.
+- T6 client: Canvas 2D pixel-art world — deterministic seeded creatures (clean silhouette outline +
+  top highlight + eyes), mood glow, idle-bob / working-pulse / run-pop, starfield + drifting motes +
+  vignette; click -> plain-language inspect card (status, last result, run count) + a big Run button;
+  live updates. Elder-first: minimal text, big targets, plain language.
+- T7 module seam: `UiModule` + `AgentAddon` + `ModuleRegistry` (augmentAgent + onRunCompleted),
+  wired into the server (run:completed dispatch); ZERO modules enabled — locks the Voice-module
+  contract cheaply (Voice = speak the result aloud, lands with the Voice phase).
+Stack: Bun/TypeScript/web + Canvas 2D only — NO Rust/Tauri (Hard rule 14). 470 tests / 0 fail; biome
+clean. GOTCHA: the daemon builds+caches the client bundle at startup, so visual changes need a daemon
+restart to appear. DEFERRED (T8 fast-followers): a richer first-launch onboarding overlay,
+animation/customization depth, multiple UI templates, and the Voice module. A formal REVIEW fan-out
+was skipped under time pressure (tests + browser verification stand in) — recommend a review pass
+before merge.
