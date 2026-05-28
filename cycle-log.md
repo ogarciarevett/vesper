@@ -334,3 +334,18 @@ surfaced before. Extracted the ANSI-aware table renderer (`visibleLength`/`padVi
 of schedule.ts into the shared `ui.ts` so `schedule list` and `runs list` share one formatter.
 Tests: RunOutcome integration assertion, ui table unit tests, runs-command tests (filters + empty).
 436 tests / 0 fail; biome clean. Verified end-to-end (outcome render + runs table).
+
+## `vesper skill` CLI (backlog #2) — SHIPPED
+
+Surfaced the already-built skill-train engine as `vesper skill {train,list,diff}` (reusing the
+`skill-train` pipeline via `scheduler.run`, so it inherits capability-gating + the rank-#1
+RunOutcome). `train <name>` loads the skill to count tasks, prints a projected CLI-call count
+(`N + epochs*(batch+1+N)`), confirms before spending quota (TTY prompt or `--yes`; non-TTY without
+`--yes` refuses), then runs with per-role adapters — `--cli`/`--optimizer-cli`/`--judge-cli` now
+route via `ctx.complete({cli})` + `makeJudge` (wired into the pipeline handler). `list` shows
+trainable skills (those with a tasks.json); `diff` shows the committed SKILL.md vs the trained
+best.md (via `git diff --no-index`). DEFERRED: `revert` + writing back to the committed
+`.ai/skills/<name>/SKILL.md` (T7) — they only make sense once train can mutate the repo SKILL.md,
+which stays a separate user-acked step. Tests: projectCalls, list (harness filter), diff-no-candidate.
+441 tests / 0 fail; biome clean. Smoked list + dry-run train end-to-end (recorded run visible in
+`vesper runs list`).

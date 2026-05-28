@@ -25,6 +25,11 @@ export function runDir(): string {
   return join(vesperHome(), "run");
 }
 
+/** Directory holding per-skill training state (best.md + history.jsonl). */
+export function skillTrainDir(): string {
+  return join(vesperHome(), "skill-train");
+}
+
 /** Path to the IPC Unix socket. */
 export function socketPath(): string {
   return join(runDir(), "vesper.sock");

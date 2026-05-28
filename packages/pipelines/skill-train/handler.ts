@@ -17,7 +17,9 @@
  */
 
 import {
+  type CompleteFn,
   loadSkill,
+  makeJudge,
   type RegisterTaskInput,
   SkillTrainError,
   SkillTrainStore,
@@ -77,17 +79,28 @@ export const skillTrainHandler: TaskHandler = async (ctx) => {
   const batchSize = numParam(ctx.params, "batchsize", DEFAULT_BATCH_SIZE);
   const dryRun = boolParam(ctx.params, "dryRun");
   const cliLabel = strParam(ctx.params, "cli") ?? "default";
+  // Per-role adapters: optimizer + judge default to the target CLI, or route to a
+  // distinct adapter when `optimizerCli` / `judgeCli` params are supplied.
+  const optimizerCli = strParam(ctx.params, "optimizerCli");
+  const judgeCli = strParam(ctx.params, "judgeCli");
 
   const skill = await loadSkill(name, { skillsDir });
   const store = new SkillTrainStore(stateDir);
 
+  const target: CompleteFn = (prompt, opts) => ctx.complete(prompt, opts);
+  const judge = makeJudge(target, judgeCli !== undefined ? { cli: judgeCli } : undefined);
+
   const result = await trainSkill({
     skill,
-    complete: (prompt, opts) => ctx.complete(prompt, opts),
+    complete: target,
+    ...(optimizerCli !== undefined
+      ? { optimizerComplete: (prompt: string) => ctx.complete(prompt, { cli: optimizerCli }) }
+      : {}),
+    judge,
     epochs,
     batchSize,
     targetCli: cliLabel,
-    optimizerCli: cliLabel,
+    optimizerCli: optimizerCli ?? cliLabel,
     now: () => new Date().toISOString(),
     ...(dryRun ? { dryRun: true } : {}),
     onEpoch: (entry) => store.appendHistory(name, entry),

@@ -5,6 +5,7 @@ import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
 import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
+import { skillGroup } from "./skill.ts";
 import { statusCommand } from "./status.ts";
 import { vaultGroup } from "./vault.ts";
 
@@ -18,4 +19,5 @@ export const registry: readonly Registrable[] = [
   daemonCommand,
   scheduleGroup,
   runsGroup,
+  skillGroup,
 ];
