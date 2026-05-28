@@ -374,3 +374,21 @@ pipeline handler reads a `valFraction` param; `vesper skill train --val-fraction
 (no split) so existing behavior + tests are preserved. Cost model with held-out: baseline |val| +
 epochs*(min(batch,|train|) + 1 + |val|). Tests: splitTasks (determinism, clamp, no-split edges) +
 a trainSkill held-out assertion (baseline reflects only val tasks). 449 tests / 0 fail; biome clean.
+
+## Backlog close-out — remaining Linear issues assessed (per "let me know if any issue doesn't make sense")
+
+Ranks 1-4 shipped (run-outcome visibility, vesper skill CLI, runs.summary redaction, held-out
+validation). Remaining Linear / backlog, with verdicts:
+- **Elder-first consumer UI** (the Desktop direction) — BLOCKED on Omar's product decision. No Linear
+  issue, no shell spec. Needs `specs/elder-first-ui.md` (the 2-3 tasks a non-technical 70yo does, the
+  surface — daemon-served web app? menubar? — and Bun/TS/web stack confirmation per Hard rule 14).
+  Not buildable without those answers; HALT.
+- **DEV-89 (daemon lifecycle)** — sensible (a real runtime wants start/stop/status/background service),
+  but its shape depends on the elder-first UI surface (does the dad-facing app embed the daemon, run
+  it via launchd, etc.). Recommend deferring until the UI decision lands so we build the right shape.
+- **DEV-93 (global capture via macOS Shortcuts)** — DOES NOT MAKE SENSE as written. Its body is
+  pre-pivot: references an "LLM router + adapter chain", a vault-held Anthropic API key, `packages/
+  daemon`, `packages/cli` — none of which match the bring-your-own-CLI architecture. Its power-user
+  "highlight text -> hotkey -> LLM" framing also may not fit the elder-first direction. Needs a
+  rewrite to the current architecture + a fit-review against elder-first BEFORE any build — flagging,
+  not building.
