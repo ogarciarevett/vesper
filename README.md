@@ -75,19 +75,18 @@ subscription, captured over a subprocess pipe.
 
 ## Commands
 
-| Command | Description |
-|---|---|
-| `vesper init` | Create the `~/.vesper` runtime tree, initialize the SQLite store, detect installed CLIs, and write `config.json`. |
-| `vesper hello` | Send a fixed prompt to the configured CLI and print the reply. |
-| `vesper vault set <key>` | Store a pipeline secret (value read from **stdin**, never the command line). |
-| `vesper vault get <key>` | Print a stored secret, or exit non-zero if absent. |
-| `vesper vault list` | List stored secret keys (never their values). |
-| `vesper cli list` | List supported CLIs and their probe status. |
-| `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
-| `vesper status` | Show versions and the health of storage, vault, IPC, and the CLI. |
-| `vesper daemon` | Run the IPC server (Unix socket at `~/.vesper/run/vesper.sock`). |
+The full, always-current command reference lives in **[docs/CLI.md](docs/CLI.md)** — it is
+generated from the command registry by `bun run docs:cli` and kept in sync by a pre-commit hook,
+so it never drifts. A few to get started:
 
-Run `vesper <command> --help` for details.
+```sh
+vesper init                 # create ~/.vesper, init storage, detect installed CLIs
+vesper cli list             # show installed CLIs + working status
+vesper hello                # prove orchestration works via your configured CLI
+vesper schedule run echo    # run the echo pipeline through the resolved CLI
+```
+
+Run `vesper <command> --help` for details, or see [docs/CLI.md](docs/CLI.md) for every command.
 
 ## Configuration
 

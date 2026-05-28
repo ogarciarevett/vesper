@@ -13,6 +13,7 @@
     "format": "biome format --write .",
     "vesper": "bun packages/vesper-cli/src/index.ts",
     "sync:ai": "bun scripts/sync-ai-docs.ts",
+    "docs:cli": "bun scripts/gen-cli-docs.ts",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "engines": {
