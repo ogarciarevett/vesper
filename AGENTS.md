@@ -39,8 +39,8 @@ on top of it; nothing leaves the machine except calls the user's own CLI tool ma
 
 ## Positioning rule (IMPORTANT)
 
-"Personal Agent OS" is the **internal** framing (this file may use it). Until the **Desktop**
-phase ships a demoable UI, **all public surfaces** — README, repo description, any issue/PR
+"Personal Agent OS" is the **internal** framing (this file may use it). Until a demoable consumer UI
+ships, **all public surfaces** — README, repo description, any issue/PR
 copy, commit messages — describe Vesper in mechanics-first language:
 
 > "A local-first runtime for personal automation agents."
@@ -67,7 +67,7 @@ that is an external identifier, never a human-readable phase name. Say "Foundati
 |---|---|---|
 | **Foundation** | `m1-` | Host runtime — vault, storage, CLI orchestration, IPC. |
 | **Scheduler** | `m2-` | Pipeline runtime — cron, event triggers, manual run, budget caps (DEV-91 seed). |
-| **Desktop** | `m3-` | Tauri UI shell, system tray, in-app pipeline controls. |
+| **Desktop** | `m3-` | Elder-first consumer UI — the simplest possible surface for a non-technical user (the `vesper` CLI stays the developer-only surface). Built on the existing Bun/TypeScript/web stack by default; Tauri/Rust only if strictly necessary (see Hard rule 14). |
 | **Voice** | `m4-` | ElevenLabs voice integration. |
 | **Launch** | `m5-` | Packaging, distribution, public announcement (CI pulled forward — see Hard rule 10). |
 | (later) | `m6-` / `m7-` | See Linear DEV-86..100 for the full spine. |
@@ -75,6 +75,11 @@ that is an external identifier, never a human-readable phase name. Say "Foundati
 Note: Linear's surviving spine tags some later issues differently than these names (e.g. Voice
 work currently sits under an `[M3]`-tagged issue). The **phase names above are authoritative**;
 the `[Mn]` tags are URL identifiers being reconciled, not the source of phase scope.
+
+Note: the Desktop phase was redefined from the earlier Tauri / power-user "Control Room" framing to
+an **elder-first consumer UI** — see Hard rule 14. A `specs/elder-first-ui.md` is pending Omar's
+product decisions. (The point-in-time Linear reconciliation — which issues were canceled, the
+issue-cap state — lives in `cycle-log.md`, not in this durable contract.)
 
 ---
 
@@ -98,6 +103,12 @@ Canceled issues (so you don't redo dropped work). The only standing exception is
 first** session bootstrap (writing this file, scaffolding the Bun workspace, the initial
 `chore:` commits) — that runs against Omar's kickoff authorization. From the first feature
 `/spec` onward, this rule is absolute.
+
+**Issue-cap exception (active):** the `claw-village` workspace has reached its free-tier issue cap —
+new Linear issues **cannot** be created. When the cap is in effect and Omar has authorized the work,
+record it as a `specs/<feature>.md` proposal plus a `cycle-log.md` entry (the documented Rule 11
+fallback) instead of halting; reconcile to a DEV issue when the cap lifts. This does **not** relax
+the rule against self-creating or improvising scope — it only substitutes the record-keeping surface.
 
 ### Linear status protocol (every cycle step transitions the issue)
 
@@ -140,6 +151,9 @@ fallback for manual reconciliation.
 - **Only dependency is `@biomejs/biome` (devDep)** (+ `@types/bun` for Bun TS types). No
   `commander`/`zod`/`keytar` — hand-roll the small CLI arg parser. Bun-only: `bun install`,
   `bun run`, `bun test`, `bun x`. No npm/yarn.
+- UI: **Bun/TypeScript/web stack** for any user-facing surface (local-first, ESM-only, served from
+  the existing TS toolchain). **No Rust/Tauri by default** — Tauri is opt-in only when a capability
+  strictly requires a native shell, and only after surfacing the need to Omar (see Hard rule 14).
 
 ### Bring-your-own-CLI commitment (the distribution model, not a preference)
 Vesper does **LLM orchestration via CLI adapters, never provider SDKs.** It shells out to the
@@ -226,7 +240,8 @@ vesper/
 
 ### Out of scope (deferred by phase)
 sqlite-vec index (Scheduler); paperclip-style capture (Scheduler); ElevenLabs voice (Voice);
-Tauri UI (Desktop); Linux/Windows vault backends (later); packaging + distribution (Launch).
+elder-first consumer UI shell on the Bun/TS/web stack (Desktop; Tauri only if strictly required —
+see Hard rule 14); Linux/Windows vault backends (later); packaging + distribution (Launch).
 
 ---
 
@@ -237,7 +252,7 @@ Tauri UI (Desktop); Linux/Windows vault backends (later); packaging + distributi
 3. **OpenSpec format** for Linear issue create/update: Why / What Changes / Impact / Tasks /
    Design Decisions / Spec Deltas / Out of Scope / Acceptance. SHALL + GIVEN/WHEN/THEN where apt.
 4. **No silent `rm`** — destructive file ops use a controlled archival pattern.
-5. **No "Agent OS" framing** in repo/README/commits — mechanics-first until Desktop.
+5. **No "Agent OS" framing** in repo/README/commits — mechanics-first until a demoable consumer UI ships.
 6. **TypeScript strict, no `any`** — model the domain instead.
 7. **Test-first** for vault, storage, cli, scheduler. (Skip TDD on CLI glue and config wiring.)
 8. **Bun-only** — no npm/yarn.
@@ -248,6 +263,12 @@ Tauri UI (Desktop); Linux/Windows vault backends (later); packaging + distributi
 11. **No work without a Linear issue** (see Linear section). Halt + surface; never self-create.
 12. **No LLM provider SDKs, ever** (see bring-your-own-CLI). All LLM access via CLI shell-out.
 13. **Phase names are canonical** — Foundation/Scheduler/Desktop/Voice/Launch, never M1..M5.
+14. **No Rust/Tauri by default (UI stack)** — every user-facing surface uses the existing
+    Bun/TypeScript/web stack. Introduce Tauri or any Rust component ONLY when a capability strictly
+    requires a native desktop shell, and only after surfacing the need to Omar. The prior
+    "Desktop = Tauri" framing in earlier drafts of this contract is **SUPERSEDED**. The Desktop phase
+    target is an **elder-first consumer UI** (must be usable by a non-technical 70-year-old); the
+    `vesper` CLI is the developer surface only.
 
 ---
 
@@ -259,19 +280,33 @@ scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README (DEV-106)
 
 **Scheduler SHIPPED.** DEV-91 (epic) + DEV-107 (core: cron/event/manual + persistence), DEV-108
 (guardrails: run-count caps + backoff + dead-letter), DEV-109 (capability enforcement), DEV-110
-(`vesper schedule` CLI + daemon tick loop) all Done; PRs #4 and #5 merged to `main`. Suite at
-270 tests / 0 fail; scheduler 100% lines; Biome clean; no provider SDKs.
+(`vesper schedule` CLI + daemon tick loop) all Done; PRs #4 and #5 merged to `main`; scheduler
+100% lines; Biome clean; no provider SDKs.
+
+**First pipeline + skill-train SHIPPED.** The pipeline runtime context (`scheduler/context.ts` ->
+`PipelineContext` with `complete` + `recordRun`), the `@vesper/pipelines` workspace + `echo`
+validator pipeline (`specs/first-pipeline.md`), and skill-train core slices 1-2
+(`specs/skill-train.md`: skill loader, scorers, optimizer, persistence, `trainSkill`, the
+multi-capability `skill-train` pipeline) landed on `main`. **No Linear issue backs these** — the
+workspace is at its free-tier issue cap, so `specs/` + `cycle-log.md` are the record (Rule 11
+issue-cap fallback). `vesper cli install` (onboarding) also shipped.
 
 **CI** — GitHub Actions (`.github/workflows/ci.yml`) runs `biome ci` + `bun test` on push to
 `main` and on pull requests.
 
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: 270 tests / 0 fail; Biome clean; no provider
-SDKs.
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **428 tests / 0 fail**; Biome clean; no
+provider SDKs.
 
-**Next:** the first pipeline — establish the pipeline runtime (a handler invokes the user's chosen
-CLI via the adapter and records a run), then build on it. DEV-89 (daemon lifecycle) and Desktop
-(DEV-93/DEV-94) remain in the backlog. Update this section after each ship.
+**Next:** the **elder-first consumer UI** (Bun/TS/web stack — Hard rule 14) is **BLOCKED on an Omar
+product decision**: no Linear issue, no shell spec yet (`specs/ui-react-page-pipeline.md` is a
+React-page-generating pipeline, not the consumer shell). Buildable now (pure Bun/TS, unblocked, and
+the right enabling plumbing under any UI): (1) run-outcome visibility — `Scheduler.run` returns a
+typed `RunOutcome` + a `vesper runs list` command; (2) the `vesper skill {train,list,diff,revert}`
+CLI for the already-built skill-train engine; (3) `runs.summary` redaction / metadata-only mode;
+(4) held-out validation split for skill-train. DEV-89 (daemon lifecycle) remains in Backlog.
+(Canceled/superseded UI issues and the Linear reconciliation are recorded in `cycle-log.md`, not
+here.) Update this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the

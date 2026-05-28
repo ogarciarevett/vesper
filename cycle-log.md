@@ -268,3 +268,56 @@ S-effort quick wins + the two real bugs immediately:
    the per-run `+N` validation shell-outs and remove train/val overlap.
 Deferred further: AbortSignal-based handler cancellation; an opt-in real-CLI smoke harness
 (`VESPER_LIVE_SMOKE`, kept out of CI `bun test`).
+
+## CLI onboarding (T1-T6) — backfilled IMPROVE entry
+
+(Backfill: this cycle shipped in commit `a7dbcad` but its IMPROVE step was never logged — recorded
+now during the plan reconciliation.) Shipped working-CLI verification + `vesper cli list` with
+version display, an 8s probe timeout, and per-CLI remediation hints; `vesper cli install <name>`
+(claude/codex/opencode/gemini/cursor) with a TTY guard, Bun prerequisite, already-installed guard,
+and alias support (cursor-cli -> cursor); and a `vesper init` redirect hint when no working CLI is
+detected. Lesson: the IMPROVE step is non-skippable — an unlogged cycle is invisible to the plan and
+had to be reconstructed from git later.
+
+## Plan reconciliation — contract de-staled, Tauri/Rust rule added
+
+Ran the `reconcile-plan` workflow (5 agents, 38 findings) auditing the Linear spine + specs +
+contract against repo ground truth (verified: 428 tests, ZERO Tauri/Rust deps in any package.json,
+no `vesper skill`/`vesper runs` command, migrations stop at `004`). Applied the documentation
+reconciliation (no code change):
+- **NEW Hard rule 14 — no Rust/Tauri by default.** Every user-facing surface uses the existing
+  Bun/TypeScript/web stack; Tauri/Rust is opt-in only when a capability strictly requires a native
+  shell, and only after surfacing to Omar. The prior "Desktop = Tauri" framing is SUPERSEDED. The
+  Desktop phase is redefined as an **elder-first consumer UI** (usable by a non-technical 70-year-old);
+  the `vesper` CLI is the developer-only surface. [Omar's authoritative direction this session.]
+- De-staled `.ai/context.md`: Desktop phase row + reconciliation footnote, a UI Stack bullet, the
+  Foundation out-of-scope line, the "Where we are" section (270->428 tests; first-pipeline +
+  skill-train recorded as SHIPPED under the issue-cap fallback; "Next" rewritten), the positioning
+  gate (re-anchored off "Desktop" to "a demoable consumer UI"), and a documented **Linear issue-cap
+  exception** (record work as specs/+cycle-log when the cap blocks issue creation; does not relax the
+  no-self-create / no-improvise rule). Regenerated AGENTS.md/CLAUDE.md/GEMINI.md/.cursor via sync:ai.
+- De-staled spec headers: first-pipeline (SHIPPED, 428), skill-train (SHIPPED core; CLI T6/T7 still
+  unbuilt), pipeline-scheduler (SHIPPED), cli-onboarding (SHIPPED T1-T6), ui-react-page-pipeline
+  (flagged: it is a code-gen pipeline, NOT the elder-first shell; its "full runtime contract" /
+  migration 005 / ctx.writeFile was never built — the shipped PipelineContext is minimal).
+
+### Reconciled next-steps backlog (buildable now, pure Bun/TS, unblocked — each its own cycle)
+1. **Run-outcome visibility** (M) — `Scheduler.run` returns a typed `RunOutcome`
+   (runId/status/summary/cli/durationMs); `vesper schedule run` renders it (+ `--quiet`); add
+   `vesper runs list [--pipeline --status --limit]` over `store.listRuns`. Extract the shared ANSI
+   table formatter out of `schedule.ts` into a `vesper-cli/src/ui` helper first. Prerequisite for ANY
+   UI (the runs are written but never read back).
+2. **`vesper skill {train,list,diff,revert}` CLI** (M) — surface the already-built skill-train engine
+   (currently only reachable via `schedule run skill-train --param`); includes the projected-call-count
+   cost-confirmation prompt + per-role `--cli`/`--optimizer-cli`/`--judge-cli` routing via
+   `ctx.complete({cli})` + `makeJudge`. Defer T7 write-back to its own user-acked step.
+3. **`runs.summary` redaction / metadata-only mode** (S) — flagged 3x, never built; prerequisite
+   before an elder-first UI renders run summaries to a non-technical user.
+4. **Held-out validation split for skill-train** (S) — `splitTasks(tasks, valFraction)` so validation
+   uses a held-out subset (cuts the per-run `+N` validation shell-outs; removes train/val overlap).
+
+### BLOCKED on Omar (product decision, not the issue cap)
+5. **Elder-first consumer UI** (L) — needs a new `specs/elder-first-ui.md` capturing the 2-3 tasks a
+   non-technical user performs, the surface (daemon-served web app? menubar?), and confirmation of the
+   Bun/TS/web stack (Hard rule 14). Ranks 1-4 are the correct enabling plumbing to land first,
+   regardless of the eventual UI shape. HALT on implementation pending Omar.

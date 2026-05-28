@@ -1,6 +1,7 @@
 # SPEC: CLI onboarding — working verification + guided install
 
-> Status: **SPEC gate — awaiting Omar's acknowledgment. Not building yet.**
+> Status: **SHIPPED (T1-T6).** Working verification + remediation hints + the guided
+> `vesper cli install` (with already-installed guard) landed on `main` (commit `a7dbcad`).
 > Linear: workspace issue-cap'd; this is the SPEC artifact under the Linear-unavailable fallback.
 > Reconcile to a DEV issue when the cap lifts. Prompted by Omar's pupila #49/#50 experience.
 

@@ -1,9 +1,10 @@
 # SPEC: first pipeline — runtime contract + `echo` validator
 
-> Status: **BUILT — TEST + REVIEW + SIMPLIFY green; SHIP pending Omar's commit authorization.**
-> Runtime context (`scheduler/context.ts`), the `@vesper/pipelines` workspace + `echo` pipeline,
-> and the `vesper schedule run --cli/--param` wiring landed; 342 tests / 0 fail, biome clean, no
-> provider SDKs. All "Acceptance (SHALL)" criteria below are met (per-request CLI routing proven
+> Status: **SHIPPED to `main`.** Runtime context (`scheduler/context.ts`), the `@vesper/pipelines`
+> workspace + `echo` pipeline, and the `vesper schedule run --cli/--param` wiring landed (plus a
+> pipeline-runtime hardening follow-up: grants narrowed to the declared union, duration-timer leak
+> fixed). Suite at 428 tests / 0 fail, biome clean, no provider SDKs. All "Acceptance (SHALL)"
+> criteria below are met (per-request CLI routing proven
 > end-to-end via adapter-command override, capability refusal proven by unit + integration tests).
 > Linear: no active issue (pipeline specializations Canceled); workspace issue-cap'd. This file is
 > the SPEC artifact under the contract's Linear-unavailable fallback; reconcile to a DEV issue when

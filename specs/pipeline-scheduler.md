@@ -1,6 +1,7 @@
 # SPEC: pipeline scheduler (DEV-91) — Scheduler phase entry
 
-> Status: **SPEC gate — awaiting architecture approval. Not building yet.**
+> Status: **SHIPPED.** The Scheduler phase is complete (DEV-91 epic + DEV-107/108/109/110) and
+> merged to `main` (PRs #4, #5). Historical SPEC artifact.
 
 ## Why
 Pipelines need triggers (cron / event / manual) plus guardrails, or Vesper is just an on-demand

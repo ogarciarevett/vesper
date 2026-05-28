@@ -1,7 +1,9 @@
 # SPEC: `vesper skill train` — auto-improve skills via trajectory-driven optimization
 
-> Status: **CORE (slices 1-2) BUILT — module + pipeline green; CLI surface + IMPROVE
-> integration deferred.** The pipeline runtime it depends on shipped (see `specs/first-pipeline.md`).
+> Status: **CORE (slices 1-2) SHIPPED to `main` — module + pipeline green; the `vesper skill`
+> CLI surface (T6) + IMPROVE write-back (T7) are NOT built yet (next increment).** The judge scorer
+> was also hardened post-ship (reads the decimal score, not a preamble integer). The pipeline
+> runtime it depends on shipped (see `specs/first-pipeline.md`).
 > Built: `packages/vesper-core/src/skill-train/` (skill loader, scorers, optimizer prompt+parse,
 > persistence, the epoch-loop `trainSkill`) + `packages/pipelines/skill-train/` (the first
 > multi-capability pipeline). 68 tests, biome clean, no provider SDKs. NOT YET built: the

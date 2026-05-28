@@ -1,8 +1,13 @@
 # SPEC: UI/UX pipeline (#2) — `ui.react-page`, then `open-design`
 
-> Status: **DEFERRED — pipeline #2. Build only after `specs/first-pipeline.md` validates the
-> runtime path. This spec carries the FULL runtime contract (persisted task `cli`/`params`,
-> migration 005, FS-writing context) layered on top of the echo validator's minimal runtime.**
+> Status: **DEFERRED — pipeline #2 (a React-PAGE-generating pipeline).** NOTE (2026-05-28): this is
+> NOT the elder-first consumer UI shell. That Desktop direction (Hard rule 14 — Bun/TS/web stack,
+> usable by a non-technical 70-year-old) is a separate, not-yet-written `specs/elder-first-ui.md`,
+> blocked on Omar's product decisions. Also STALE here: the "FULL runtime contract" below (persisted
+> task `cli`/`params`, migration 005, `ctx.writeFile`/`FS_WRITE`) describes a contract the shipped
+> first-pipeline runtime did NOT build — the shipped `PipelineContext` is minimal (`complete` +
+> `recordRun`) and migrations stop at `004_capabilities`. Treat the runtime sections below as a
+> proposal to reconcile, not as built fact. Build only after the elder-first decision lands.
 > Linear: no active issue (DEV-95/96/97 specializations + DEV-19 webpage-generator are Canceled);
 > workspace is issue-cap'd. Reconcile to a DEV issue when the cap lifts.
 
