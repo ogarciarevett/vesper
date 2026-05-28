@@ -16,8 +16,20 @@ import {
   type TaskHandler,
 } from "@vesper/core";
 import { ECHO_HANDLER_ID, echoHandler, echoTaskInput } from "./echo/handler.ts";
+import {
+  SKILL_TRAIN_HANDLER_ID,
+  skillTrainHandler,
+  skillTrainTaskInput,
+} from "./skill-train/handler.ts";
 
-export { ECHO_HANDLER_ID, echoHandler, echoTaskInput };
+export {
+  ECHO_HANDLER_ID,
+  echoHandler,
+  echoTaskInput,
+  SKILL_TRAIN_HANDLER_ID,
+  skillTrainHandler,
+  skillTrainTaskInput,
+};
 
 /** Self-contained description of a built-in pipeline: handler + task wiring. */
 export interface PipelineDescriptor {
@@ -32,6 +44,11 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: ECHO_HANDLER_ID,
     handler: echoHandler,
     taskInput: echoTaskInput,
+  },
+  {
+    handlerId: SKILL_TRAIN_HANDLER_ID,
+    handler: skillTrainHandler,
+    taskInput: skillTrainTaskInput,
   },
 ];
 
