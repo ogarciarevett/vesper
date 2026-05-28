@@ -59,6 +59,22 @@ describe("makeJudge", () => {
     expect(await judge("a", "b")).toBe(0.5);
   });
 
+  test("ignores a preamble integer and reads the decimal score", async () => {
+    // Regression: a leading integer (e.g. "Task 1") must not be read as 1.0.
+    const judge = makeJudge(fakeComplete("Task 1 rating: 0.9").fn);
+    expect(await judge("a", "b")).toBe(0.9);
+  });
+
+  test("reads the score, not the scale, in 'X out of 1.0'", async () => {
+    const judge = makeJudge(fakeComplete("0.4 out of 1.0").fn);
+    expect(await judge("a", "b")).toBe(0.4);
+  });
+
+  test("falls back to an integer when there is no decimal", async () => {
+    expect(await makeJudge(fakeComplete("1").fn)("a", "b")).toBe(1);
+    expect(await makeJudge(fakeComplete("0").fn)("a", "b")).toBe(0);
+  });
+
   test("returns 0 when no number is present", async () => {
     const judge = makeJudge(fakeComplete("garbage no number").fn);
     expect(await judge("a", "b")).toBe(0);
