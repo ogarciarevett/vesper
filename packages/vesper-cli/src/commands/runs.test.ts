@@ -76,6 +76,18 @@ describe("vesper runs list", () => {
     expect(out).not.toContain("skill-train");
   });
 
+  test("--limit shows the most recent N (not the oldest)", async () => {
+    seedRuns([
+      { pipeline: "echo", status: "ok", summary: "oldest" },
+      { pipeline: "echo", status: "ok", summary: "middle" },
+      { pipeline: "echo", status: "ok", summary: "newest" },
+    ]);
+    const out = await captureStdout(() => dispatch(registry, ["runs", "list", "--limit", "2"]));
+    expect(out).toContain("middle");
+    expect(out).toContain("newest");
+    expect(out).not.toContain("oldest");
+  });
+
   test("--status filters by status", async () => {
     seedRuns([
       { pipeline: "echo", status: "ok", summary: "good" },

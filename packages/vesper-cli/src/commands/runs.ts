@@ -21,11 +21,13 @@ const listCommand: Command = {
     // openStore applies migrations and returns a ready Store; close it when done.
     const store = openStore(dbPath());
     try {
-      const runs = store.listRuns({
+      // listRuns is oldest-first; `--limit` should show the most RECENT N, so take
+      // the tail (still rendered oldest-first). The local runs table is small.
+      const all = store.listRuns({
         ...(pipeline !== undefined ? { pipeline } : {}),
         ...(status !== undefined ? { status } : {}),
-        ...(limit !== undefined ? { limit } : {}),
       });
+      const runs = limit !== undefined ? all.slice(-limit) : all;
       if (runs.length === 0) {
         line(dim("no runs recorded"));
         return 0;

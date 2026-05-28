@@ -26,6 +26,8 @@ const DEFAULT_SKILLS_DIR = ".ai/skills";
  * Projected CLI calls for a training run: a baseline pass over all N tasks, then
  * per epoch a batch (min(batch, N)) + 1 optimizer call + an N-task validation pass.
  * Mirrors `trainSkill`'s loop so the confirmation prompt is honest about quota.
+ * This is an UPPER BOUND: it ignores `--val-fraction` (a held-out split runs the
+ * baseline/validation over fewer tasks), which only makes the real count smaller.
  */
 export function projectCalls(taskCount: number, epochs: number, batchSize: number): number {
   const batch = Math.min(batchSize, taskCount);

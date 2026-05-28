@@ -117,7 +117,7 @@ async function runTrajectory(
   };
 }
 
-/** Evaluate a skill body across ALL tasks (the validation set); return mean score. */
+/** Evaluate a skill body across the supplied tasks (the validation set); return mean score. */
 async function evaluate(
   skillBody: string,
   tasks: readonly SkillTask[],
