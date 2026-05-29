@@ -18,12 +18,35 @@ export interface RunInfo {
   readonly ts: number;
 }
 
-/** Everything `buildWorld` needs: the registered pipelines, their runs, and a machine seed. */
+/**
+ * A live agent process detected on this machine (the "echo" of agents running) —
+ * the world-facing shape of a `@vesper/core` `AgentPresence`. These are NOT Vesper
+ * pipelines; they are external agents (a `claude`/`codex` CLI, a desktop app) seen
+ * via the process table, rendered as their own live inhabitants.
+ */
+export interface PresenceInfo {
+  /** Matcher id, e.g. "claude-cli" (stable key across polls). */
+  readonly id: string;
+  readonly label: string;
+  /** "cli" | "app". */
+  readonly kind: string;
+  /** Elapsed time the process has been up, as `ps` reports it. */
+  readonly since: string;
+  /** How many OS processes collapsed into this presence. */
+  readonly procCount: number;
+}
+
+/**
+ * Everything `buildWorld` needs: the registered pipelines, their runs, a machine
+ * seed, and (optionally) the agents currently running on this machine.
+ */
 export interface WorldSnapshot {
   readonly pipelines: readonly PipelineInfo[];
   readonly runs: readonly RunInfo[];
   /** Stable per-machine seed (fingerprint) — makes the world deterministic + unique. */
   readonly seed: string;
+  /** Agents detected running on this machine right now (defaults to none). */
+  readonly presences?: readonly PresenceInfo[];
 }
 
 /**
@@ -50,6 +73,14 @@ export interface Inhabitant {
   readonly lastStatus: string | null;
   readonly lastSummary: string | null;
   readonly lastRunAt: number | null;
+  /**
+   * True for a live external-agent presence (a process running on this machine
+   * right now), false for a Vesper pipeline. The renderer gives live inhabitants
+   * a distinct "alive" treatment and the card hides the Run button for them.
+   */
+  readonly live: boolean;
+  /** For a live presence: elapsed uptime as `ps` reports it; null for pipelines. */
+  readonly liveSince: string | null;
 }
 
 /** The renderable scene: the inhabitants + world-level aggregates. */

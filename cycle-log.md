@@ -419,3 +419,30 @@ restart to appear. DEFERRED (T8 fast-followers): a richer first-launch onboardin
 animation/customization depth, multiple UI templates, and the Voice module. A formal REVIEW fan-out
 was skipped under time pressure (tests + browser verification stand in) — recommend a review pass
 before merge.
+
+## Echo — live agent presence in Vesper World — SHIPPED
+
+The world now shows the "echo" of agents actually running on this machine, not just Vesper's own
+pipeline runs (Omar: "the echo of agents running into this PC should appear there"). No Linear issue
+(issue cap) — record is this entry + the commit. Spec: `specs/echo-presence.md`.
+- Detection core (`vesper-core/src/presence/`): `detectAgents(rows, matchers)` — pure, allowlist of
+  serializable regex matchers over the FULL command line, deduped per matcher to one `AgentPresence`
+  (representative = shortest args = the main process). `psProcessLister` is the impure `ps -axo
+  pid,etime,args` seam (via the existing `ProcessRunner`); typed `PresenceError(ps_unavailable)`.
+- KEY DISCOVERY (verified on the real process table): agent CLIs run as `node`/`bun`, so `comm` is
+  useless — match `args`. Desktop apps spawn an Electron helper swarm — anchor app matchers to
+  `/<App>.app/Contents/MacOS/<App>` so helpers don't register as separate agents. Allowlist-bound, no
+  fuzzy matching -> no false positives (a `vim claude-notes.md` or a `zeroclaw` repo path won't match).
+  Validated live: detected Claude desktop + Claude Code CLI (7 procs) + Codex desktop/CLI.
+- World merge: `buildWorld` stays pure — `WorldSnapshot.presences` feeds `live` inhabitants that float
+  in an upper band, seeded position stable per agent id; running agents raise `liveliness`.
+- Server: daemon-hosted poll (3s) via an injectable `PresenceDetector` (defaults to the real `ps`
+  scanner, failure-safe -> []); pushes a `presence` WS message only when the set changes (signature
+  compare). Client renders a teal "heartbeat" ring + a read-only "running now" card (Run hidden).
+- Allowlist ships claude/codex (app+cli), opencode, gemini, zeroclaw; overridable via config.
+- Renamed the `echo` validator pipeline -> `selftest` to free the name "echo" for this feature
+  (Omar-approved); contract + demo gif updated. Added the `echo` dev sub-agent persona.
+- 498 tests / 0 fail; biome clean; no provider SDKs. DELTA vs spec: the per-machine `presence.matchers`
+  config override is NOT yet wired into the server (the engine accepts custom matchers + is tested;
+  only the config read is pending) — logged as the next follow-up. GOTCHA (still true): a running
+  daemon caches the build at startup, so picking up new matchers (e.g. zeroclaw) needs a daemon restart.

@@ -19,7 +19,7 @@ import { bold, cyan, dim, errorLine, formatKeyValues, green, line, table, yellow
  * Parse transient run params from the tokens that follow the task id.
  *
  * Two equivalent forms are accepted: bare `key=value` positionals
- * (`vesper schedule run echo prompt="hi"`) and the `--param key=value` flag
+ * (`vesper schedule run selftest prompt="hi"`) and the `--param key=value` flag
  * (the parser treats `param` as a value-flag, so `--param prompt=hi` arrives as
  * the string `flags.param`). Each `key=value` becomes a param entry; tokens
  * without an `=` are ignored. The value keeps everything after the first `=`, so

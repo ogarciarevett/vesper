@@ -294,8 +294,9 @@ scaffold (DEV-103), vesper hello (DEV-104), ipc stub (DEV-105), README (DEV-106)
 100% lines; Biome clean; no provider SDKs.
 
 **First pipeline + skill-train SHIPPED.** The pipeline runtime context (`scheduler/context.ts` ->
-`PipelineContext` with `complete` + `recordRun`), the `@vesper/pipelines` workspace + `echo`
-validator pipeline (`specs/first-pipeline.md`), and skill-train core slices 1-2
+`PipelineContext` with `complete` + `recordRun`), the `@vesper/pipelines` workspace + `selftest`
+validator pipeline (renamed from `echo`; "echo" now names the live agent-presence feature in
+Vesper World) (`specs/first-pipeline.md`), and skill-train core slices 1-2
 (`specs/skill-train.md`: skill loader, scorers, optimizer, persistence, `trainSkill`, the
 multi-capability `skill-train` pipeline) landed on `main`. **No Linear issue backs these** — the
 workspace is at its free-tier issue cap, so `specs/` + `cycle-log.md` are the record (Rule 11

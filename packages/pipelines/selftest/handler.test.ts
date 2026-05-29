@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HandlerRegistry, openStore, type PipelineContext, Scheduler } from "@vesper/core";
 import { grantedCapabilities, registerPipelines } from "../index.ts";
-import { echoHandler, echoTaskInput } from "./handler.ts";
+import { selftestHandler, selftestTaskInput } from "./handler.ts";
 
 // ---------------------------------------------------------------------------
 // Fake PipelineContext — captures calls without a real scheduler/CLI/storage.
@@ -43,10 +43,10 @@ function makeFakeContext(options: {
 
   const ctx: PipelineContext = {
     task: {
-      id: "echo",
+      id: "selftest",
       kind: "manual",
       schedule_expr: "",
-      handler_id: "echo",
+      handler_id: "selftest",
       enabled: true,
       last_run_at: null,
       last_error: null,
@@ -81,14 +81,14 @@ function makeFakeContext(options: {
 }
 
 // ---------------------------------------------------------------------------
-// echoHandler
+// selftestHandler
 // ---------------------------------------------------------------------------
 
-describe("echoHandler", () => {
+describe("selftestHandler", () => {
   test("GIVEN a non-empty prompt param THEN that prompt is sent to complete", async () => {
     const fake = makeFakeContext({ params: { prompt: "hello there" } });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.completeCalls).toHaveLength(1);
     expect(fake.completeCalls[0]?.prompt).toBe("hello there");
@@ -97,34 +97,34 @@ describe("echoHandler", () => {
   test("GIVEN a missing prompt param THEN the default self-test prompt is used", async () => {
     const fake = makeFakeContext({});
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.completeCalls).toHaveLength(1);
     const prompt = fake.completeCalls[0]?.prompt ?? "";
-    expect(prompt).toContain("Vesper echo pipeline");
+    expect(prompt).toContain("Vesper self-test pipeline");
     expect(prompt.length).toBeGreaterThan(0);
   });
 
   test("GIVEN a blank prompt param THEN the default self-test prompt is used", async () => {
     const fake = makeFakeContext({ params: { prompt: "   " } });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
-    expect(fake.completeCalls[0]?.prompt).toContain("Vesper echo pipeline");
+    expect(fake.completeCalls[0]?.prompt).toContain("Vesper self-test pipeline");
   });
 
   test("GIVEN a non-string prompt param THEN the default self-test prompt is used", async () => {
     const fake = makeFakeContext({ params: { prompt: 42 } });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
-    expect(fake.completeCalls[0]?.prompt).toContain("Vesper echo pipeline");
+    expect(fake.completeCalls[0]?.prompt).toContain("Vesper self-test pipeline");
   });
 
   test("summary is the trimmed completion text", async () => {
     const fake = makeFakeContext({ text: "  spaced response  " });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.recordedRuns).toHaveLength(1);
     expect(fake.recordedRuns[0]?.summary).toBe("spaced response");
@@ -134,7 +134,7 @@ describe("echoHandler", () => {
     const longText = "x".repeat(750);
     const fake = makeFakeContext({ text: longText });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.recordedRuns[0]?.summary).toHaveLength(500);
   });
@@ -142,7 +142,7 @@ describe("echoHandler", () => {
   test("status is 'ok' when exit_code is 0", async () => {
     const fake = makeFakeContext({ exitCode: 0 });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.recordedRuns[0]?.status).toBe("ok");
   });
@@ -150,7 +150,7 @@ describe("echoHandler", () => {
   test("status is 'error' when exit_code is non-zero", async () => {
     const fake = makeFakeContext({ exitCode: 1 });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.recordedRuns[0]?.status).toBe("error");
   });
@@ -158,7 +158,7 @@ describe("echoHandler", () => {
   test("GIVEN exit 0 but empty output THEN status is 'error' with a placeholder summary", async () => {
     const fake = makeFakeContext({ exitCode: 0, text: "   " });
 
-    await echoHandler(fake.ctx);
+    await selftestHandler(fake.ctx);
 
     expect(fake.recordedRuns[0]?.status).toBe("error");
     expect(fake.recordedRuns[0]?.summary).toBe("(empty response)");
@@ -187,29 +187,29 @@ describe("registerPipelines", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("registers the echo handler and a manual echo task with the right capabilities", () => {
+  test("registers the selftest handler and a manual selftest task with the right capabilities", () => {
     const registry = new HandlerRegistry();
     const scheduler = new Scheduler({ db, registry });
 
     registerPipelines(scheduler, registry);
 
-    expect(registry.has("echo")).toBe(true);
+    expect(registry.has("selftest")).toBe(true);
 
-    const echoTask = scheduler.list().find((task) => task.id === "echo");
-    expect(echoTask).toBeDefined();
-    expect(echoTask?.required_capabilities).toContain("CLI_INVOKE");
-    expect(echoTask?.required_capabilities).toContain("WRITE_STORAGE");
+    const selftestTask = scheduler.list().find((task) => task.id === "selftest");
+    expect(selftestTask).toBeDefined();
+    expect(selftestTask?.required_capabilities).toContain("CLI_INVOKE");
+    expect(selftestTask?.required_capabilities).toContain("WRITE_STORAGE");
   });
 
-  test("is idempotent — calling twice does not throw and yields a single echo task", () => {
+  test("is idempotent — calling twice does not throw and yields a single selftest task", () => {
     const registry = new HandlerRegistry();
     const scheduler = new Scheduler({ db, registry });
 
     registerPipelines(scheduler, registry);
     expect(() => registerPipelines(scheduler, registry)).not.toThrow();
 
-    const echoTasks = scheduler.list().filter((task) => task.id === "echo");
-    expect(echoTasks).toHaveLength(1);
+    const selftestTasks = scheduler.list().filter((task) => task.id === "selftest");
+    expect(selftestTasks).toHaveLength(1);
   });
 });
 
@@ -217,7 +217,7 @@ describe("grantedCapabilities", () => {
   test("is the deduplicated union of every registered pipeline's required capabilities", () => {
     const granted = grantedCapabilities();
     // Every registered pipeline's declared capability must be covered by the grant.
-    for (const cap of echoTaskInput.required_capabilities) {
+    for (const cap of selftestTaskInput.required_capabilities) {
       expect(granted).toContain(cap);
     }
     // No duplicates.

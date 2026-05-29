@@ -4,6 +4,8 @@ import type { RunOutcome, Scheduler, Store } from "@vesper/core";
 import { RUN_COMPLETED, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
+import type { PresenceInfo } from "../world/types.ts";
+import { defaultPresenceDetector, type PresenceDetector, presenceSignature } from "./presence.ts";
 import { buildSnapshot } from "./snapshot.ts";
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
@@ -18,6 +20,10 @@ export interface UiServerDeps {
   readonly hostname?: string;
   /** Optional pluggable UI modules (e.g. Voice). MVP passes none. */
   readonly modules?: readonly UiModule[];
+  /** Detects agents running on this machine. Defaults to the real `ps` scanner. */
+  readonly detectPresences?: PresenceDetector;
+  /** How often to re-scan for running agents (ms). Default 3000. */
+  readonly presencePollMs?: number;
 }
 
 /** A running UI server. */
@@ -94,6 +100,13 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   const indexHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
   const appJs = await buildClientBundle();
 
+  // Live presence: the agents running on this machine right now. Detected once at
+  // startup, then re-scanned on an interval; the latest set feeds every /api/world.
+  const detect = deps.detectPresences ?? defaultPresenceDetector();
+  const pollMs = deps.presencePollMs ?? 3_000;
+  let presences: PresenceInfo[] = await detect();
+  let presenceSig = presenceSignature(presences);
+
   const server = Bun.serve({
     port,
     hostname,
@@ -118,7 +131,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         });
       }
       if (req.method === "GET" && pathname === "/api/world") {
-        return json(buildSnapshot(scheduler, store, seed));
+        return json(buildSnapshot(scheduler, store, seed, presences));
       }
 
       // POST /api/pipelines/:id/run
@@ -159,11 +172,26 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   };
   scheduler.eventBus.on(RUN_COMPLETED, onRun);
 
+  // Re-scan running agents on an interval; push a refresh only when the set
+  // actually changes (an agent started/stopped), so idle ticks are silent.
+  const poll = async (): Promise<void> => {
+    const next = await detect();
+    const nextSig = presenceSignature(next);
+    if (nextSig === presenceSig) return;
+    presences = next;
+    presenceSig = nextSig;
+    server.publish("world", JSON.stringify({ type: "presence" }));
+  };
+  const pollTimer = setInterval(() => {
+    void poll();
+  }, pollMs);
+
   const url = `http://${hostname}:${server.port}`;
   return {
     port: server.port,
     url,
     stop() {
+      clearInterval(pollTimer);
       scheduler.eventBus.off(RUN_COMPLETED, onRun);
       server.stop(true);
     },

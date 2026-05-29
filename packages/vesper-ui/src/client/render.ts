@@ -118,13 +118,18 @@ export function drawScene(
     const cx = inh.x * w;
     const baseY = inh.y * h;
     const working = opts.workingIds.has(inh.id);
+    // A live external-agent presence (a process running on this machine) gets a
+    // gentle, faster "breathing" bob and a teal glow distinct from idle pipelines.
+    const live = inh.live;
     const phase = inh.avatarSeed % 1000;
-    const bob = Math.sin(t / (working ? 260 : 900) + phase) * (working ? 5 : 3);
+    const bobPeriod = working ? 260 : live ? 520 : 900;
+    const bobAmp = working ? 5 : live ? 4 : 3;
+    const bob = Math.sin(t / bobPeriod + phase) * bobAmp;
     const cy = baseY + bob;
 
-    const moodKey = working ? "working" : inh.mood;
+    const moodKey = working || live ? "working" : inh.mood;
     const rgb = MOOD_RGB[moodKey] ?? MOOD_RGB.idle;
-    const intensity = working ? 0.5 : inh.mood === "idle" ? 0.16 : 0.32;
+    const intensity = working ? 0.5 : live ? 0.42 : inh.mood === "idle" ? 0.16 : 0.32;
 
     // Shadow on the floor.
     ctx.fillStyle = "rgba(0,0,0,0.28)";
@@ -141,6 +146,16 @@ export function drawScene(
     ctx.beginPath();
     ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
     ctx.fill();
+
+    // Live "heartbeat" ring — only on presences (an agent running right now).
+    if (live) {
+      const pulse = 0.5 + 0.5 * Math.sin(t / 600 + phase);
+      ctx.strokeStyle = `rgba(124, 243, 208, ${0.22 + 0.4 * pulse})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, footprint * (0.52 + 0.12 * pulse), 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     // "Pop" ring after a recent run.
     const pop = opts.pops.get(inh.id);

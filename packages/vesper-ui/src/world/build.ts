@@ -1,5 +1,12 @@
 import { fnv1a, seededUnit } from "./hash.ts";
-import type { AgentMood, Inhabitant, RunInfo, SceneGraph, WorldSnapshot } from "./types.ts";
+import type {
+  AgentMood,
+  Inhabitant,
+  PresenceInfo,
+  RunInfo,
+  SceneGraph,
+  WorldSnapshot,
+} from "./types.ts";
 
 /** Total runs at which the world reaches full "liveliness" (ambient detail saturates). */
 const LIVELINESS_SATURATION = 20;
@@ -29,17 +36,59 @@ function lastRunFor(runs: readonly RunInfo[], id: string): RunInfo | null {
   return latest;
 }
 
+/** Presence band: live external agents float in the upper part of the scene. */
+const PRESENCE_BAND_TOP = 0.12;
+const PRESENCE_BAND_HEIGHT = 0.28;
+
+/**
+ * Build the live-presence inhabitants — external agents (CLIs, desktop apps)
+ * running on this machine right now. Positions are seeded by agent id (stable
+ * per agent across polls, independent of how many are running), so a given agent
+ * always floats in the same spot. These are visually distinct (`live: true`) and
+ * carry no run history.
+ */
+function buildPresenceInhabitants(presences: readonly PresenceInfo[], seed: string): Inhabitant[] {
+  return presences.map((pr): Inhabitant => {
+    const x = clamp(
+      EDGE_MARGIN + seededUnit(`${seed}:presence:${pr.id}:x`) * (1 - 2 * EDGE_MARGIN),
+      EDGE_MARGIN,
+      1 - EDGE_MARGIN,
+    );
+    const y = PRESENCE_BAND_TOP + seededUnit(`${seed}:presence:${pr.id}:y`) * PRESENCE_BAND_HEIGHT;
+    return {
+      id: `presence:${pr.id}`,
+      label: pr.label,
+      x,
+      y,
+      prominence: clamp(0.5 + (pr.procCount - 1) * 0.06, 0.5, 1),
+      mood: "ok",
+      avatarSeed: fnv1a(`${seed}::presence:${pr.id}`),
+      enabled: true,
+      runCount: 0,
+      lastStatus: null,
+      lastSummary: null,
+      lastRunAt: null,
+      live: true,
+      liveSince: pr.since,
+    };
+  });
+}
+
 /**
  * Project a {@link WorldSnapshot} into a renderable {@link SceneGraph} — pure and
  * deterministic: the same snapshot + seed always yields byte-identical output, so
  * the world is stable per machine yet unique across machines.
  *
- * Layout: a loose grid with per-agent seeded jitter (stable, non-overlapping-ish).
- * Prominence ∝ each agent's share of total runs (auto-evolve from usage). Mood from
- * the last run; `working` is never produced here (the client applies it live).
+ * Layout: pipelines sit in a loose grid with per-agent seeded jitter (stable,
+ * non-overlapping-ish); live external-agent presences (CLIs/apps running on this
+ * machine, from `snapshot.presences`) float in an upper band as their own `live`
+ * inhabitants. Prominence ∝ each pipeline's share of total runs (auto-evolve from
+ * usage). Mood from the last run; `working` is never produced here (the client
+ * applies it live).
  */
 export function buildWorld(snapshot: WorldSnapshot): SceneGraph {
   const { pipelines, runs, seed } = snapshot;
+  const presences = snapshot.presences ?? [];
   const n = pipelines.length;
 
   const runCounts = pipelines.map((p) =>
@@ -80,13 +129,18 @@ export function buildWorld(snapshot: WorldSnapshot): SceneGraph {
       lastStatus: last?.status ?? null,
       lastSummary: last?.summary ?? null,
       lastRunAt: last?.ts ?? null,
+      live: false,
+      liveSince: null,
     };
   });
 
+  const presenceInhabitants = buildPresenceInhabitants(presences, seed);
+
   return {
     seed,
-    inhabitants,
+    inhabitants: [...inhabitants, ...presenceInhabitants],
     totalRuns,
-    liveliness: clamp(totalRuns / LIVELINESS_SATURATION, 0, 1),
+    // Live agents make the world feel alive even before Vesper has run anything.
+    liveliness: clamp((totalRuns + presences.length * 2) / LIVELINESS_SATURATION, 0, 1),
   };
 }

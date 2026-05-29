@@ -1,9 +1,19 @@
 import type { Scheduler, Store } from "@vesper/core";
 import { buildWorld } from "../world/build.ts";
-import type { PipelineInfo, RunInfo, SceneGraph } from "../world/types.ts";
+import type { PipelineInfo, PresenceInfo, RunInfo, SceneGraph } from "../world/types.ts";
 
-/** Build the current {@link SceneGraph} from live scheduler + storage state. Pure read. */
-export function buildSnapshot(scheduler: Scheduler, store: Store, seed: string): SceneGraph {
+/**
+ * Build the current {@link SceneGraph} from live scheduler + storage state, plus
+ * the agents currently running on this machine. Pure read — `presences` are
+ * detected by the caller (the server's poll loop) and passed in so this stays
+ * deterministic and free of process I/O.
+ */
+export function buildSnapshot(
+  scheduler: Scheduler,
+  store: Store,
+  seed: string,
+  presences: readonly PresenceInfo[] = [],
+): SceneGraph {
   const pipelines: PipelineInfo[] = scheduler.list().map((t) => ({
     id: t.id,
     label: t.id,
@@ -16,5 +26,5 @@ export function buildSnapshot(scheduler: Scheduler, store: Store, seed: string):
     summary: r.summary,
     ts: r.ts,
   }));
-  return buildWorld({ pipelines, runs, seed });
+  return buildWorld({ pipelines, runs, seed, presences });
 }

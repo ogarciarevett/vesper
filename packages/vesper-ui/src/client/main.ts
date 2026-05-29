@@ -82,6 +82,7 @@ function timeAgo(ts: number | null): string {
 }
 
 function statusWord(inh: Inhabitant): string {
+  if (inh.live) return "running now";
   if (workingIds.has(inh.id)) return "working…";
   switch (inh.mood) {
     case "ok":
@@ -99,6 +100,19 @@ function renderCard(): void {
   const inh = inhabitant(selectedId);
   if (inh === null) return;
   cardName.textContent = inh.label;
+
+  // A live presence is an external agent running on this machine — read-only:
+  // show that it's running, for how long, and hide the Run button (nothing to run).
+  if (inh.live) {
+    cardDot.className = "dot working";
+    cardStatus.textContent = statusWord(inh);
+    cardSummary.textContent = "This agent is running on your computer right now.";
+    cardMeta.textContent = inh.liveSince !== null ? `up ${inh.liveSince}` : "running";
+    cardRun.style.display = "none";
+    return;
+  }
+
+  cardRun.style.display = "";
   const mood = workingIds.has(inh.id) ? "working" : inh.mood;
   cardDot.className = `dot ${mood}`;
   cardStatus.textContent = statusWord(inh);
@@ -191,6 +205,9 @@ function connectLive(): void {
       const msg = JSON.parse(String(ev.data)) as { type?: string; outcome?: { taskId?: string } };
       if (msg.type === "run:completed" && msg.outcome?.taskId !== undefined) {
         pops.set(msg.outcome.taskId, performance.now());
+        void refreshWorld();
+      } else if (msg.type === "presence") {
+        // An agent started or stopped on this machine — refresh the live echoes.
         void refreshWorld();
       }
     } catch {

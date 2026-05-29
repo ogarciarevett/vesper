@@ -16,7 +16,7 @@ import {
   SchedulerError,
   type TaskHandler,
 } from "@vesper/core";
-import { ECHO_HANDLER_ID, echoHandler, echoTaskInput } from "./echo/handler.ts";
+import { SELFTEST_HANDLER_ID, selftestHandler, selftestTaskInput } from "./selftest/handler.ts";
 import {
   SKILL_TRAIN_HANDLER_ID,
   skillTrainHandler,
@@ -24,10 +24,10 @@ import {
 } from "./skill-train/handler.ts";
 
 export {
-  ECHO_HANDLER_ID,
-  echoHandler,
-  echoTaskInput,
+  SELFTEST_HANDLER_ID,
   SKILL_TRAIN_HANDLER_ID,
+  selftestHandler,
+  selftestTaskInput,
   skillTrainHandler,
   skillTrainTaskInput,
 };
@@ -42,9 +42,9 @@ export interface PipelineDescriptor {
 /** Every built-in Vesper pipeline. */
 export const PIPELINES: readonly PipelineDescriptor[] = [
   {
-    handlerId: ECHO_HANDLER_ID,
-    handler: echoHandler,
-    taskInput: echoTaskInput,
+    handlerId: SELFTEST_HANDLER_ID,
+    handler: selftestHandler,
+    taskInput: selftestTaskInput,
   },
   {
     handlerId: SKILL_TRAIN_HANDLER_ID,

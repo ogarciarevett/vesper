@@ -5,6 +5,7 @@ export * from "./capabilities/index.ts";
 export * from "./cli/index.ts";
 export { VesperError } from "./errors.ts";
 export * from "./ipc/index.ts";
+export * from "./presence/index.ts";
 export {
   CommandNotFoundError,
   type ProcessRunner,
