@@ -1,77 +1,88 @@
+<p align="center">
+  <img src="docs/imgs/vesper-world.png" alt="Vesper World — watch your personal agents work" width="100%">
+</p>
+
+<h1 align="center">Vesper</h1>
+
+<p align="center">
+  <a href="https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml"><img src="https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License: MIT">
+  <img src="https://img.shields.io/badge/runtime-Bun-black?style=flat-square&logo=bun" alt="Bun">
+  <img src="https://img.shields.io/badge/local--first-no%20cloud-7cf3d0?style=flat-square" alt="Local-first">
+  <img src="https://img.shields.io/badge/LLM-bring%20your%20own%20CLI-ffd479?style=flat-square" alt="Bring your own CLI">
+</p>
+
+<p align="center"><b>A local-first runtime for your personal automation agents — that you can actually watch work.</b></p>
+
+Vesper runs on your machine and hosts small automation **pipelines** (your "agents") under one host
+process. It drives **the AI CLI you already pay for** — `claude`, `codex`, `opencode`, or `gemini` —
+so it holds **no API keys** and ships **no provider SDKs**. Nothing leaves your machine except the
+calls your own CLI makes. And instead of a cold dashboard, you watch your agents in a little
+pixel-art world: tap one to see, in plain language, what it just did — or to put it to work.
+
+<table>
+<tr><td width="34%"><b>Bring your own CLI — no keys</b></td><td>Orchestrates <code>claude</code> / <code>codex</code> / <code>opencode</code> / <code>gemini</code> over a subprocess. You pay once for your CLI; Vesper adds no per-call billing and stores no LLM credentials. Pick the model per request.</td></tr>
+<tr><td><b>Watch your agents work</b></td><td>A pixel-art world (<i>Vesper World</i>) where each agent is a character — busier ones grow, the world livens up with use. Click one for a plain-language result + a big <b>Run</b> button. Built for someone who has never opened a terminal.</td></tr>
+<tr><td><b>Local-first &amp; private</b></td><td>SQLite storage + OS-keychain secrets, all on your machine. The UI binds to <code>127.0.0.1</code> only. No accounts, no cloud, no telemetry.</td></tr>
+<tr><td><b>Capability-sandboxed pipelines</b></td><td>Every agent declares what it may touch — invoke a CLI, read/write storage, touch files — and the host enforces it (deny-by-default) before any side effect.</td></tr>
+<tr><td><b>Self-improving skills</b></td><td>The <code>skill-train</code> engine optimizes a skill's playbook against its own test set (SkillOpt-style: epochs, held-out validation, greedy accept) — using your CLI, never a provider key.</td></tr>
+<tr><td><b>A real scheduler</b></td><td>Cron, event, and manual triggers with run-count caps, backoff, and a dead-letter queue. Your agents can run on their own, unattended.</td></tr>
+</table>
+
+---
+
+## Vesper World
+
+```sh
+vesper daemon     # hosts the runtime + the UI
+vesper ui         # opens a browser tab — http://127.0.0.1:4317
 ```
-                    ┌─────┐
-                    │ ◉ ◉ │
-                    │  ─  │
-                    └─┬─┬─┘
-   ██╗   ██╗███████╗███████╗██████╗ ███████╗██████╗
-   ██║   ██║██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗
-   ██║   ██║█████╗  ███████╗██████╔╝█████╗  ██████╔╝
-   ╚██╗ ██╔╝██╔══╝  ╚════██║██╔═══╝ ██╔══╝  ██╔══██╗
-    ╚████╔╝ ███████╗███████║██║     ███████╗██║  ██║
-     ╚═══╝  ╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝
-```
 
-[![CI](https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml/badge.svg)](https://github.com/ogarciarevett/vesper/actions/workflows/ci.yml)
+<p align="center">
+  <img src="docs/imgs/vesper-card.png" alt="Click an agent to see what it just did, in plain language" width="80%">
+</p>
 
-A local-first runtime for personal automation agents. Vesper runs on your machine and hosts
-independent automation **pipelines** under one host process — vault, storage, CLI orchestration,
-and an IPC surface.
-
-![Vesper: init, a real reply from your own CLI, and a healthy runtime](docs/imgs/demo.gif)
+Tap an agent → a plain-language card shows what it last did and lets you run it. The world is a live
+projection of your real runtime (pipelines, runs, schedules) — nothing is faked. It's deliberately
+simple, and built to extend: a planned **Voice** module will let an agent *speak* its result aloud.
+See [docs/ui.md](docs/ui.md).
 
 ## Bring your own CLI
 
-Vesper does **not** ship or call any LLM provider SDK, and it never holds an API key. Instead it
-orchestrates the AI CLI tool you already pay for and have authenticated:
+Vesper does **not** ship or call any LLM provider SDK, and it never holds an API key. It orchestrates
+the AI CLI you already have authenticated:
 
-- [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code)
-- `opencode`
-- `codex`
-- `gemini`
+- [`claude`](https://docs.claude.com/en/docs/claude-code) (Claude Code) · `opencode` · `codex` · `gemini`
 
-Vesper shells out to whichever of these you have installed (via `Bun.spawn`) and composes on top
-of it. You pay once for your CLI subscription; Vesper adds no per-call billing and stores no
-provider credentials. The only secrets Vesper keeps are *pipeline-side* (e.g. a GitHub token),
-stored in your OS keychain — never LLM auth.
+It shells out to whichever you have installed (via `Bun.spawn`) and composes on top. The only secrets
+Vesper keeps are *pipeline-side* (e.g. a GitHub token) in your OS keychain — never LLM auth.
 
 ## Requirements
 
-- [Bun](https://bun.sh) >= 1.1
-- macOS (the Foundation vault uses the system Keychain via the `security` CLI)
-- At least one installed, authenticated CLI from the list above
+- [Bun](https://bun.sh) ≥ 1.1
+- macOS (the vault uses the system Keychain via the `security` CLI)
+- At least one installed, authenticated CLI from the list above (`vesper cli install <name>` can set one up)
 
 ## Install
 
 ```sh
 git clone https://github.com/ogarciarevett/vesper.git
-cd vesper
-bun install
-```
-
-Make the `vesper` command available globally:
-
-```sh
-cd packages/vesper-cli && bun link
-```
-
-Or run it from the repo without linking:
-
-```sh
-bun packages/vesper-cli/src/index.ts <command>
+cd vesper && bun install
+cd packages/vesper-cli && bun link    # make `vesper` global (or run from the repo)
 ```
 
 ## Quick start
 
 ```sh
 vesper init          # create ~/.vesper, initialize storage, detect installed CLIs
-vesper cli list      # show each CLI and its probe status (ok / not-authenticated / not-installed)
+vesper cli list      # show each CLI + probe status (ok / not-authenticated / not-installed)
 vesper hello         # ask your configured CLI to reply — proves orchestration works
-vesper status        # versions + health of every subsystem
+vesper daemon &      # start the runtime + UI
+vesper ui            # open Vesper World in your browser
 ```
 
-`vesper hello` is the proof that the model works: it sends a fixed prompt to your configured CLI
-and prints the reply. No Vesper-held API key is involved — the response comes from your own CLI
-subscription, captured over a subprocess pipe.
+`vesper hello` is the proof the model works: a fixed prompt to your CLI, reply printed — no
+Vesper-held key, captured over a subprocess pipe.
 
 ## Commands
 
@@ -113,24 +124,31 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 {
   "cli": {
     "default": "claude",
-    "adapters": {
-      "claude": { "command": "claude", "args": ["-p"] }
-    }
-  }
+    "adapters": { "claude": { "command": "claude", "args": ["-p"] } }
+  },
+  "storage": { "redactRunSummaries": false }
 }
 ```
 
-`cli.default` selects which CLI `vesper hello` and pipelines use. Per-adapter `command`/`args`
-override the default headless invocation if a tool changes its flags.
+`cli.default` selects which CLI pipelines use; per-adapter `command`/`args` override the headless
+invocation if a tool changes its flags. `storage.redactRunSummaries` (opt-in) stores run summaries as
+size-only metadata instead of raw CLI output.
+
+## How it works
+
+A `vesper-core` host (vault · SQLite storage · CLI adapters · capabilities · scheduler · IPC) runs
+your pipelines; `vesper-cli` is the developer surface; `vesper-ui` is the consumer surface. Every LLM
+call is a shell-out to your CLI — there is no provider SDK anywhere in the dependency tree.
 
 ## Development
 
 ```sh
-bun test          # run the test suite
+bun test          # run the suite
 bun run lint      # Biome lint + format check
+bun run docs:cli  # regenerate docs/CLI.md + this README's command table (enforced pre-commit)
 ```
 
-The only dependencies are `@biomejs/biome` and Bun's type definitions — no LLM provider SDKs.
+The only dependency is `@biomejs/biome` (+ Bun's types) — no LLM provider SDKs.
 
 ## License
 
