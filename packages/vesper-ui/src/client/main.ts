@@ -22,6 +22,28 @@ const cardMeta = el("card-meta");
 const cardRun = el<HTMLButtonElement>("card-run");
 const hint = el("hint");
 const toastEl = el("toast");
+const welcome = el("welcome");
+const welcomeGo = el<HTMLButtonElement>("welcome-go");
+
+// First-launch welcome — shown once per browser (elder-first onboarding).
+const WELCOMED_KEY = "vesper:welcomed";
+function maybeWelcome(): void {
+  let seen = false;
+  try {
+    seen = window.localStorage.getItem(WELCOMED_KEY) === "1";
+  } catch {
+    seen = false; // private mode / storage disabled → just show it.
+  }
+  if (!seen) welcome.classList.add("show");
+}
+welcomeGo.addEventListener("click", () => {
+  welcome.classList.remove("show");
+  try {
+    window.localStorage.setItem(WELCOMED_KEY, "1");
+  } catch {
+    // ignore
+  }
+});
 
 let scene: SceneGraph | null = null;
 let hits: HitRegion[] = [];
@@ -184,6 +206,7 @@ function frame(t: number): void {
   requestAnimationFrame(frame);
 }
 
+maybeWelcome();
 void refreshWorld();
 connectLive();
 requestAnimationFrame(frame);

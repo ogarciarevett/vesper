@@ -86,10 +86,46 @@
         opacity: 0; pointer-events: none; transition: opacity .3s ease, transform .3s ease;
       }
       .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+      /* First-launch welcome */
+      .welcome-scrim {
+        position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+        background: rgba(7, 10, 22, 0.72); backdrop-filter: blur(6px); z-index: 10;
+      }
+      .welcome-scrim.show { display: flex; }
+      .welcome {
+        width: min(440px, calc(100vw - 48px)); text-align: center;
+        background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 22px;
+        box-shadow: var(--shadow); padding: 36px 32px;
+      }
+      .welcome h2 {
+        margin: 0 0 14px; font-size: 24px; letter-spacing: 3px; text-transform: uppercase;
+        text-shadow: 0 0 18px rgba(124, 243, 208, 0.35);
+      }
+      .welcome p { margin: 0 0 12px; font-size: 16px; line-height: 1.6; color: var(--ink); }
+      .welcome p.dim { color: var(--ink-dim); font-size: 14px; }
+      .welcome .go {
+        margin-top: 22px; padding: 15px 34px; border: none; border-radius: 14px;
+        font-family: var(--font); font-size: 17px; font-weight: 700; letter-spacing: 1px;
+        color: #08210f; background: linear-gradient(180deg, var(--accent), #46c9a6);
+        cursor: pointer; box-shadow: 0 8px 24px rgba(124, 243, 208, 0.35);
+        transition: transform .12s ease, filter .12s ease;
+      }
+      .welcome .go:hover { filter: brightness(1.07); transform: translateY(-1px); }
+      .welcome .go:active { transform: translateY(1px); }
     </style>
   </head>
   <body>
     <canvas id="scene"></canvas>
+    <div class="welcome-scrim" id="welcome">
+      <div class="welcome">
+        <h2>Welcome</h2>
+        <p>These little characters are your agents. They quietly do things for you.</p>
+        <p>Tap one to see what it just did — or tap <strong>Run</strong> to put it to work.</p>
+        <p class="dim">That's it. Nothing to set up.</p>
+        <button type="button" class="go" id="welcome-go">Let's go</button>
+      </div>
+    </div>
     <div class="header">
       <h1>Vesper</h1>
       <span class="sub">your agents</span>
