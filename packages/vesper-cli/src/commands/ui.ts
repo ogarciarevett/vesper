@@ -25,7 +25,7 @@ export const uiCommand: Command = {
   async run({ flags }) {
     // The daemon hosts the UI in-process, so it must be running first.
     try {
-      await ipcRequest("ping", { socketPath: socketPath() });
+      await ipcRequest(socketPath(), "ping", { timeoutMs: 500 });
     } catch {
       errorLine("the daemon isn't running — start it first, then retry:");
       line(dim("    vesper daemon"));
