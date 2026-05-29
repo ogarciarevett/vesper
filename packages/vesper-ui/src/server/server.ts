@@ -30,6 +30,37 @@ export interface UiServerHandle {
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/** Local hostnames the server accepts (single-user local runtime). */
+const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/** Extract the host (no port) from a `Host` header value or an `Origin` URL. */
+function hostOf(value: string | null): string | null {
+  if (value === null || value.length === 0) return null;
+  try {
+    if (value.includes("://")) return new URL(value).hostname;
+    if (value.startsWith("[")) return value.slice(0, value.indexOf("]") + 1); // [::1]:port
+    return value.split(":")[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reject requests that aren't local-origin: blocks CSRF from a malicious website
+ * (cross-origin POST `/run`) and DNS-rebinding (a rebound `Host`). A request with
+ * no `Origin` (direct navigation, curl) and a local `Host` is allowed.
+ */
+function isLocalRequest(req: Request): boolean {
+  const host = hostOf(req.headers.get("host"));
+  if (host !== null && !LOCAL_HOSTS.has(host)) return false;
+  const origin = req.headers.get("origin");
+  if (origin !== null) {
+    const oh = hostOf(origin);
+    if (oh === null || !LOCAL_HOSTS.has(oh)) return false;
+  }
+  return true;
+}
+
 /** Build the browser client bundle once (Bun bundles `client/main.ts`). */
 async function buildClientBundle(): Promise<string> {
   const built = await Bun.build({
@@ -67,6 +98,9 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
     port,
     hostname,
     async fetch(req, srv) {
+      // Local-origin guard: blocks cross-site CSRF on /run + DNS-rebinding reads.
+      if (!isLocalRequest(req)) return new Response("forbidden", { status: 403 });
+
       const url = new URL(req.url);
       const { pathname } = url;
 

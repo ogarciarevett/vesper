@@ -99,6 +99,21 @@ describe("UI server", () => {
     expect(res.status).toBe(404);
   });
 
+  test("rejects a cross-origin request (CSRF/rebinding guard)", async () => {
+    const res = await fetch(`${handle.url}/api/pipelines/echo/run`, {
+      method: "POST",
+      headers: { origin: "http://evil.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("rejects a rebound Host header", async () => {
+    const res = await fetch(`${handle.url}/api/world`, {
+      headers: { host: "attacker.example.com" },
+    });
+    expect(res.status).toBe(403);
+  });
+
   test("a run is pushed to a live WebSocket subscriber", async () => {
     const ws = new WebSocket(`${handle.url.replace("http", "ws")}/api/live`);
     const message = new Promise<string>((resolve) => {
