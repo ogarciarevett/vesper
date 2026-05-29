@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderCliDocs } from "./cli-docs.ts";
+import { injectReadmeCommands, README_BEGIN, README_END, renderCliDocs } from "./cli-docs.ts";
 import { registry } from "./commands/index.ts";
 import type { Command, CommandGroup, Registrable } from "./dispatch.ts";
 
@@ -53,5 +53,30 @@ describe("renderCliDocs", () => {
     const md = renderCliDocs(registry);
     expect(md.startsWith("<!-- GENERATED")).toBe(true);
     expect(md.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("injectReadmeCommands", () => {
+  const wrap = (inner: string): string => `# Vesper\n\n## Commands\n\n${inner}\n\n## Next\n`;
+
+  test("replaces the marked block with the command table", () => {
+    const before = wrap(`${README_BEGIN}\nOLD CONTENT\n${README_END}`);
+    const after = injectReadmeCommands(before, registry);
+    expect(after).not.toContain("OLD CONTENT");
+    expect(after).toContain("| Command | Description |");
+    expect(after).toContain("`vesper init`");
+    // Surrounding content is preserved.
+    expect(after.startsWith("# Vesper")).toBe(true);
+    expect(after).toContain("## Next");
+  });
+
+  test("is idempotent — re-injecting yields the same output", () => {
+    const once = injectReadmeCommands(wrap(`${README_BEGIN}\n${README_END}`), registry);
+    expect(injectReadmeCommands(once, registry)).toBe(once);
+  });
+
+  test("returns the README unchanged when markers are absent", () => {
+    const noMarkers = "# Vesper\n\nno markers here\n";
+    expect(injectReadmeCommands(noMarkers, registry)).toBe(noMarkers);
   });
 });

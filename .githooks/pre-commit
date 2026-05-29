@@ -16,14 +16,17 @@ if ! git diff --quiet -- $GENERATED; then
   exit 1
 fi
 
-# Guard: docs/CLI.md must list every `vesper` command. Regenerate it from the
-# command registry, then fail if it changed — i.e. a command was added/edited
-# without refreshing the reference (or docs/CLI.md was hand-edited).
+# Guard: the command reference must list every `vesper` command. Regenerate both
+# docs/CLI.md and the auto-injected command table in README.md from the registry,
+# then fail if either changed — i.e. a command was added/edited without refreshing
+# the docs (or one was hand-edited).
 #
-# To fix a failure: run `bun run docs:cli`, then `git add docs/CLI.md` and commit again.
+# To fix a failure: run `bun run docs:cli`, then `git add docs/CLI.md README.md` and commit again.
 bun run docs:cli >/dev/null
 
-if ! git diff --quiet -- docs/CLI.md; then
-  echo "ERROR: docs/CLI.md is stale — run 'bun run docs:cli' and re-stage docs/CLI.md"
+CLI_DOCS="docs/CLI.md README.md"
+if ! git diff --quiet -- $CLI_DOCS; then
+  echo "ERROR: command docs are stale — run 'bun run docs:cli' and re-stage:"
+  git --no-pager diff --name-only -- $CLI_DOCS | sed 's/^/    /'
   exit 1
 fi
