@@ -29,6 +29,10 @@ pixel-art world: tap one to see, in plain language, what it just did — or to p
 <tr><td><b>A real scheduler</b></td><td>Cron, event, and manual triggers with run-count caps, backoff, and a dead-letter queue. Your agents can run on their own, unattended.</td></tr>
 </table>
 
+<p align="center">
+  <img src="docs/imgs/demo.gif" alt="vesper help, init, run an agent, list runs, status — in the terminal" width="100%">
+</p>
+
 ---
 
 ## Vesper World

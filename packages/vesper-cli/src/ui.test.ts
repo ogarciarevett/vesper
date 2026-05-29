@@ -82,3 +82,40 @@ describe("ui (plain mode, NO_COLOR forced)", () => {
     expect(out.split("\n")).toHaveLength(2);
   });
 });
+
+describe("colorEnabled precedence (NO_COLOR / FORCE_COLOR)", () => {
+  let priorNo: string | undefined;
+  let priorForce: string | undefined;
+
+  beforeAll(() => {
+    priorNo = process.env.NO_COLOR;
+    priorForce = process.env.FORCE_COLOR;
+  });
+  const restore = (key: string, value: string | undefined): void => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  };
+  afterAll(() => {
+    restore("NO_COLOR", priorNo);
+    restore("FORCE_COLOR", priorForce);
+  });
+
+  test("FORCE_COLOR enables color even without a TTY", () => {
+    delete process.env.NO_COLOR;
+    process.env.FORCE_COLOR = "1";
+    expect(colorEnabled()).toBe(true);
+  });
+
+  test("NO_COLOR overrides FORCE_COLOR", () => {
+    process.env.NO_COLOR = "1";
+    process.env.FORCE_COLOR = "1";
+    expect(colorEnabled()).toBe(false);
+  });
+
+  test("FORCE_COLOR=0 does not force color", () => {
+    delete process.env.NO_COLOR;
+    process.env.FORCE_COLOR = "0";
+    // Not a TTY under `bun test` piped → false.
+    expect(colorEnabled()).toBe(false);
+  });
+});

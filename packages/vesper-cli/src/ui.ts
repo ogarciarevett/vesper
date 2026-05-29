@@ -17,9 +17,17 @@ const ANSI = {
 
 type Style = Exclude<keyof typeof ANSI, "reset">;
 
-/** Whether ANSI styling should be emitted right now. */
+/**
+ * Whether ANSI styling should be emitted right now. Precedence (standard conventions):
+ * `NO_COLOR` (set, non-empty) disables; else `FORCE_COLOR` (truthy) enables even without a
+ * TTY (useful for recordings/CI); else color follows whether stdout is a TTY.
+ */
 export function colorEnabled(): boolean {
-  return process.env.NO_COLOR === undefined && process.stdout.isTTY === true;
+  const noColor = process.env.NO_COLOR;
+  if (noColor !== undefined && noColor !== "") return false;
+  const force = process.env.FORCE_COLOR;
+  if (force !== undefined && force !== "" && force !== "0" && force !== "false") return true;
+  return process.stdout.isTTY === true;
 }
 
 function paint(style: Style, text: string): string {
