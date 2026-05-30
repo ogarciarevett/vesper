@@ -3,11 +3,27 @@ import type { Inhabitant, SceneGraph } from "../world/types.ts";
 import type { HitRegion } from "./render.ts";
 import { drawSprite, SPRITE_W, spriteFor } from "./sprite.ts";
 import { resolveTheme } from "./theme/registry.ts";
+import {
+  pickThemeId,
+  readServerDefaultTheme,
+  readStoredTheme,
+  readUrlTheme,
+  storeTheme,
+} from "./theme-store.ts";
 import "./themes/index.ts"; // registers the built-in themes (hearth = default)
 
-// The active renderer. Themes are a pure client concern over the same /api/world
-// data; Slice 3 adds config/URL/picker selection — for now resolve the default.
-const activeTheme = resolveTheme(null);
+// Resolve the active renderer: URL ?theme= > the user's stored choice > the daemon's
+// configured default (<meta name="vesper-theme">) > the registry default. A ?theme=
+// visit is remembered. Unknown ids fall back in resolveTheme (never throws).
+const urlTheme = readUrlTheme(window.location.search);
+if (urlTheme !== null) storeTheme(urlTheme);
+const activeTheme = resolveTheme(
+  pickThemeId({
+    url: urlTheme,
+    stored: readStoredTheme(),
+    serverDefault: readServerDefaultTheme(),
+  }),
+);
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);

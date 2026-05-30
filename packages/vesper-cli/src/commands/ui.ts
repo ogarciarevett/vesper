@@ -21,7 +21,7 @@ function openBrowser(url: string): void {
 export const uiCommand: Command = {
   name: "ui",
   summary: "Open Vesper World — a visual, living view of your agents (requires the daemon).",
-  usage: "vesper ui [--no-open]",
+  usage: "vesper ui [--no-open] [--theme <id>]",
   async run({ flags }) {
     // The daemon hosts the UI in-process, so it must be running first.
     try {
@@ -32,8 +32,13 @@ export const uiCommand: Command = {
       return 1;
     }
 
-    const url = `http://127.0.0.1:${uiPort()}`;
+    const theme = typeof flags.theme === "string" ? flags.theme : undefined;
+    const url =
+      theme !== undefined
+        ? `http://127.0.0.1:${uiPort()}/?theme=${encodeURIComponent(theme)}`
+        : `http://127.0.0.1:${uiPort()}`;
     line(green(`Vesper World is live at ${url}`));
+    if (theme !== undefined) line(dim(`  theme: ${theme} (the browser remembers your choice)`));
     if (flags["no-open"] !== true) {
       openBrowser(url);
       line(dim("  opening your browser…"));

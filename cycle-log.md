@@ -546,3 +546,17 @@ ships dev-only until an a11y/contrast review.
   (port the cyberpunk theme once its index.html is generated from the prompt). 544 tests / 0 fail
   (+10: brand + theme registries); Biome clean; bundles; no provider SDKs. docs/ui.md update folded
   into Slice 3 (themes documented there).
+
+## Pluggable renderer Slice 3 — theme selection — SHIPPED
+
+Theme switching plumbing (selectable themes), per `specs/pluggable-renderer.md`:
+- `client/theme-store.ts` (pure, tested): `pickThemeId` precedence URL `?theme=` > localStorage >
+  server `<meta name="vesper-theme">` > registry default; `readUrlTheme` + storage/meta readers.
+- config: `ui.theme` in `~/.vesper/config.json` (`normalizeUi`, drop-on-invalid); daemon threads it
+  to `startUiServer({ defaultTheme })`; the server stamps a sanitized `<meta>` hint into the served
+  HTML (shell templating only — `/api/world` untouched).
+- `vesper ui --theme <id>` opens `?theme=<id>` (browser remembers it); `--theme` added to the
+  dispatch VALUE_FLAGS allowlist. `main.ts` resolves the active theme via theme-store at load.
+- DEFERRED to Slice 4: the in-page elder theme PICKER overlay (a one-option picker has no value
+  until cyberpunk lands as theme #2). 545 tests / 0 fail (+6 theme-store); Biome clean; bundles;
+  CLI docs + README regenerated; live smoke green (unknown `?theme=` falls back, no error).

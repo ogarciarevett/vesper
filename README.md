@@ -113,7 +113,7 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper daemon status` | Show the daemon's lifecycle status (PID, uptime, socket). |
 | `vesper daemon install` | Install the daemon as a macOS LaunchAgent (starts at login, stays alive). |
 | `vesper daemon uninstall` | Remove the macOS LaunchAgent and stop the daemon. |
-| `vesper ui [--no-open]` | Open Vesper World — a visual, living view of your agents (requires the daemon). |
+| `vesper ui [--no-open] [--theme <id>]` | Open Vesper World — a visual, living view of your agents (requires the daemon). |
 | `vesper schedule list` | List all scheduled tasks in an aligned table. |
 | `vesper schedule show <id>` | Print full details for a single task. |
 | `vesper schedule run <id> [--cli <name>] [--param key=value] [--quiet]` | Manually run a task by id, invoking the resolved CLI and recording a run. |

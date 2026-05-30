@@ -1,8 +1,10 @@
 # Vesper World — the visual UI
 
-A local, pixel-art view of your agents. Not a dashboard — a little living world where each
-pipeline is a character you can watch and run. Built on the Bun/TypeScript/web stack (Canvas 2D),
-served by the daemon on `127.0.0.1`. No Rust/Tauri.
+A local view of your agents. Not a dashboard — a little living world where each pipeline is a
+character you can watch and run, and each live external agent (claude/codex/opencode/gemini/zeroclaw)
+visits carrying its own brand logo. The default look is **Cozy Cottage** (Hearth-Cottage): a warm
+fireside room with soft wool creatures. Built on the Bun/TypeScript/web stack (Canvas 2D), served by
+the daemon on `127.0.0.1`. No Rust/Tauri.
 
 ## Run it
 
@@ -18,10 +20,23 @@ vesper ui             # opens a browser tab at http://127.0.0.1:4317
 
 - **One creature per pipeline**, generated deterministically from this machine (so it's *your*
   world, the same every time). Busier agents are bigger; idle ones rest.
-- A **mood glow** from each agent's last run (calm green = ok, amber = needs a look).
-- **Click an agent** → a plain-language card: what it last did, how many times it has run, and a big
-  **Run** button.
+- A **mood glow** from each agent's last run, plus a gentle, non-alarming "needs a look" state (a
+  soft `?` and a worded chip — never a red alarm).
+- **Click an agent** → a plain-language card with a portrait of who you tapped, what it last did, how
+  many times it has run, and a big **Run** button.
 - The world updates **live** as runs happen (manual or scheduled), over a WebSocket.
+
+## Themes (pluggable renderer)
+
+How the world *looks* is a swappable plugin. Each theme draws the same underlying world; the brand
+logo of every agent is theme-agnostic, so whichever look you choose, you always see who's who.
+
+- **Cozy Cottage** (`hearth`) — the warm fireside default.
+- **Neon City** (`cyberpunk`) — a dark, holographic control-room look (coming next).
+
+Pick a theme by `?theme=<id>` (remembered in the browser), by `vesper ui --theme <id>`, or as the
+machine default via `ui.theme` in `~/.vesper/config.json`. Unknown ids fall back to the default.
+`prefers-reduced-motion` is honored in every theme.
 
 ## How it maps to Vesper
 

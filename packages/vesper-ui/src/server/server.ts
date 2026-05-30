@@ -24,6 +24,8 @@ export interface UiServerDeps {
   readonly detectPresences?: PresenceDetector;
   /** How often to re-scan for running agents (ms). Default 3000. */
   readonly presencePollMs?: number;
+  /** Default Vesper World theme id, stamped into the page for the client to read. */
+  readonly defaultTheme?: string;
 }
 
 /** A running UI server. */
@@ -97,7 +99,17 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   const port = deps.port ?? 4317;
   const modules = new ModuleRegistry(deps.modules ?? []);
 
-  const indexHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  const baseHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  // Stamp the configured default theme into the page (sanitized to [a-z0-9-]) so the
+  // client can read it via <meta name="vesper-theme">. Shell templating only.
+  const themeId = (deps.defaultTheme ?? "").replace(/[^a-z0-9-]/gi, "");
+  const indexHtml =
+    themeId.length > 0
+      ? baseHtml.replace(
+          "</head>",
+          `    <meta name="vesper-theme" content="${themeId}" />\n  </head>`,
+        )
+      : baseHtml;
   const appJs = await buildClientBundle();
 
   // Live presence: the agents running on this machine right now. Detected once at

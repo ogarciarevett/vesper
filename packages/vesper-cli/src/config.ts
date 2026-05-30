@@ -26,6 +26,11 @@ export interface VesperConfig {
     /** How often to re-scan for running agents (ms). */
     readonly pollMs?: number;
   };
+  /** Vesper World UI preferences. */
+  readonly ui?: {
+    /** Default renderer theme id (e.g. "hearth", "cyberpunk"). Unknown ids fall back. */
+    readonly theme?: string;
+  };
 }
 
 /** A fresh config with no default and no overrides. */
@@ -98,6 +103,13 @@ function normalizePresence(raw: unknown): VesperConfig["presence"] | undefined {
   return { pollMs };
 }
 
+/** Coerce untrusted `ui` config; keeps only a string `theme`. */
+function normalizeUi(raw: unknown): VesperConfig["ui"] | undefined {
+  if (!isObject(raw)) return undefined;
+  const theme = asString(raw.theme);
+  return theme !== undefined ? { theme } : undefined;
+}
+
 /** Coerce untrusted parsed JSON into a valid {@link VesperConfig}. */
 export function normalizeConfig(raw: unknown): VesperConfig {
   if (!isObject(raw)) return DEFAULT_CONFIG;
@@ -118,8 +130,12 @@ export function normalizeConfig(raw: unknown): VesperConfig {
       ? { cli, storage: { redactRunSummaries: true } }
       : { cli };
 
+  let result = base;
   const presence = normalizePresence(raw.presence);
-  return presence !== undefined ? { ...base, presence } : base;
+  if (presence !== undefined) result = { ...result, presence };
+  const ui = normalizeUi(raw.ui);
+  if (ui !== undefined) result = { ...result, ui };
+  return result;
 }
 
 /** Load and normalize the config, returning {@link DEFAULT_CONFIG} if absent. */

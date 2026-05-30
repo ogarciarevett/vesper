@@ -83,6 +83,7 @@ export const daemonRunCommand: Command = {
       port: uiPort(),
       detectPresences: presenceDetectorFor(presenceMatchers),
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
+      ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),
     });
 
     // Start the cron tick loop. The scheduler records per-task errors for any
