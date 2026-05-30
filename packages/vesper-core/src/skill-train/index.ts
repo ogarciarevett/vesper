@@ -1,5 +1,13 @@
 // skill-train module public surface — SkillOpt-style skill optimization.
 
+export {
+  type AcceptDeps,
+  type AcceptResult,
+  acceptBest,
+  type RevertDeps,
+  type RevertResult,
+  revertSkill,
+} from "./accept.ts";
 export type { SkillTrainErrorReason } from "./errors.ts";
 export { SkillTrainError } from "./errors.ts";
 export { parseFrontmatter } from "./frontmatter.ts";

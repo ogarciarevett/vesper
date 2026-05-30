@@ -7,6 +7,7 @@ export type SkillTrainErrorReason =
   | "no_tasks"
   | "invalid_tasks"
   | "parse_failed"
+  | "no_candidate"
   | "io_error";
 
 /**

@@ -123,6 +123,8 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--val-fraction F] [--dry-run] [--yes]` | Train a skill against its tasks.json via the skill-train pipeline. |
 | `vesper skill list [--skills-dir <dir>]` | List trainable skills (those with a tasks.json validation harness). |
 | `vesper skill diff <name> [--skills-dir <dir>]` | Diff the committed SKILL.md against the trained best candidate. |
+| `vesper skill accept <name> [--skills-dir <dir>] [--yes]` | Adopt the trained best candidate into the committed SKILL.md (checkpointed; revertible). |
+| `vesper skill revert <name> [--skills-dir <dir>]` | Restore the committed SKILL.md from the latest accept checkpoint. |
 
 <!-- END COMMANDS -->
 

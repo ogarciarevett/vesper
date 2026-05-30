@@ -484,3 +484,36 @@ voice — superseded by `specs/voice-modalities.md`), DEV-36/90/98/99 (M4 extern
 SDK + Hermes adapter), DEV-100 (pre-pivot launch — superseded by `specs/installer-distribution.md`).
 DEV-13 + DEV-48 cancellation was BLOCKED by the permission classifier (auto-cancelling issues the
 agent didn't create) — left in Backlog for Omar. Net: Vesper project is all-terminal except those two.
+
+## Forge design + Slice 4 (evolve-skills accept/revert) — SHIPPED
+
+Omar's vision: "Vesper auto-codes new features by itself + evolves skills and features." Designed via
+two multi-agent workflows: (1) a 6-direction Vesper World UI design panel (Hearth-Cottage chosen —
+see `specs/elder-first-ui-redesign.md`); (2) a 5-facet + security-adversary + architect design of the
+self-build/evolve capability -> `specs/forge-self-build-evolve.md` ("Forge"). Omar's post-SPEC
+decisions: CREATE-local + evolve-skills first; BLOCK forge code-execution until a robust cross-platform
+sandbox exists; NETWORK_FETCH hard-blocked v1; elder = wishes + watch only. The sandbox block gates the
+CREATE execution path (Slices 5-7), so the buildable increment was Slice 4.
+
+- **Built (the deferred skill-train T7):** `vesper skill accept <name>` adopts the trained `best.md`
+  into the committed `.ai/skills/<name>/SKILL.md`, and `vesper skill revert <name>` restores it. Core
+  is a pure, injected-deps `acceptBest`/`revertSkill` (`skill-train/accept.ts`, test-first) over new
+  append-only checkpoint methods on `SkillTrainStore`. No untrusted code execution -> safe under the
+  sandbox block.
+- **Security spine (the must-fix constraints, encoded):** human ack before any overwrite (full diff
+  shown; non-TTY refuses without `--yes`); the prior committed bytes are checkpointed BEFORE the write
+  (git-independent rollback); checkpoints are APPEND-ONLY — written with `wx`, probing the next free
+  integer slot, so a same-ms `Date.now()` or a backward clock can never overwrite history (Hard rule 4,
+  never rm); `skill_promoted`/`skill_reverted` audit events (best-effort, never fails the action);
+  `assertSkillName` enforced at both command entrypoints (path-traversal boundary, not incidental);
+  committed bytes read ONCE (closes the diff->write TOCTOU); cycle-log checkpoint ref is home-relative
+  (no `/Users/<name>` PII in a committed file).
+- **REVIEW:** 3-lens fan-out (code-reviewer + security-auditor + test-engineer). Security + tests =
+  ship; correctness = revise (the checkpoint-overwrite high + audit-kind medium). All fixed, including
+  the test-engineer's coverage gaps: multi-magnitude numeric-sort test (catches lexicographic
+  regression), append-only file-survival assertion, same-`at` collision-keeps-both, stray-file-ignored,
+  and a real-fs accept->revert byte-fidelity round-trip (trailing newline / multibyte / blank line).
+- **DELTA vs spec:** v1 `revert` restores the LATEST checkpoint only (selecting an older one is a
+  follow-up) — noted in the spec. 529 tests / 0 fail (+15 for this slice); Biome clean; no provider SDKs.
+- **Next:** Hearth-Cottage UI build (approved, queued); the robust cross-platform sandbox sub-spec that
+  unblocks Forge CREATE (Slices 5-7).

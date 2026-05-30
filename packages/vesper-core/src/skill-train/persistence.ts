@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SkillTrainError } from "./errors.ts";
 import { assertSkillName } from "./name.ts";
@@ -88,6 +88,68 @@ export class SkillTrainStore {
     return entries;
   }
 
+  /** Directory holding a skill's pre-write SKILL.md snapshots (rollback trail). */
+  checkpointsDir(name: string): string {
+    return join(this.dir(name), "checkpoints");
+  }
+
+  /**
+   * Snapshot a SKILL.md body before it is overwritten by an accepted candidate.
+   * Checkpoints are append-only (one file per timestamp, never overwritten) so a
+   * later `revert` can restore the exact prior bytes — git-independent rollback.
+   * Returns the checkpoint's path.
+   */
+  async writeCheckpoint(name: string, body: string, at: number): Promise<string> {
+    const dir = this.checkpointsDir(name);
+    try {
+      await mkdir(dir, { recursive: true });
+      // Append-only (Hard rule 4): probe for the next free integer slot and write
+      // exclusively (`wx`). A same-millisecond `at` or a backward clock can then
+      // NEVER overwrite an existing checkpoint. Pure-integer names keep the numeric
+      // sort in `listCheckpoints` / `readLatestCheckpoint` correct.
+      for (let stamp = Math.max(1, Math.trunc(at)); ; stamp += 1) {
+        const path = join(dir, `${stamp}.md`);
+        try {
+          await writeFile(path, body, { flag: "wx" });
+          return path;
+        } catch (cause) {
+          if (!isAlreadyExists(cause)) throw cause;
+        }
+      }
+    } catch (cause) {
+      throw new SkillTrainError("io_error", `failed to write checkpoint for "${name}"`, { cause });
+    }
+  }
+
+  /** Checkpoint timestamps for a skill, oldest first. `[]` when none exist. */
+  async listCheckpoints(name: string): Promise<number[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.checkpointsDir(name));
+    } catch (cause) {
+      if (isNotFound(cause)) return [];
+      throw new SkillTrainError("io_error", `failed to list checkpoints for "${name}"`, { cause });
+    }
+    return names
+      .filter((n) => n.endsWith(".md"))
+      .map((n) => Number(n.slice(0, -".md".length)))
+      .filter((n) => Number.isInteger(n) && n > 0)
+      .sort((a, b) => a - b);
+  }
+
+  /** Read the most recent checkpoint body, or `null` when nothing was ever accepted. */
+  async readLatestCheckpoint(name: string): Promise<string | null> {
+    const stamps = await this.listCheckpoints(name);
+    const latest = stamps.at(-1);
+    if (latest === undefined) return null;
+    try {
+      return await readFile(join(this.checkpointsDir(name), `${latest}.md`), "utf8");
+    } catch (cause) {
+      if (isNotFound(cause)) return null;
+      throw new SkillTrainError("io_error", `failed to read checkpoint for "${name}"`, { cause });
+    }
+  }
+
   async #ensureDir(name: string): Promise<void> {
     try {
       await mkdir(this.dir(name), { recursive: true });
@@ -99,10 +161,19 @@ export class SkillTrainStore {
 
 /** True when an error is a Node "file not found" (ENOENT). */
 function isNotFound(error: unknown): boolean {
+  return hasCode(error, "ENOENT");
+}
+
+/** True when an error is a Node "file already exists" (EEXIST) — exclusive-write collision. */
+function isAlreadyExists(error: unknown): boolean {
+  return hasCode(error, "EEXIST");
+}
+
+function hasCode(error: unknown, code: string): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
+    (error as { code?: unknown }).code === code
   );
 }
