@@ -7,8 +7,8 @@ served by the daemon on `127.0.0.1`. No Rust/Tauri.
 ## Run it
 
 ```sh
-vesper daemon     # required — the daemon hosts the UI in-process
-vesper ui         # opens a browser tab at http://127.0.0.1:4317
+vesper daemon start   # required — the daemon hosts the UI in-process
+vesper ui             # opens a browser tab at http://127.0.0.1:4317
 ```
 
 `vesper ui` refuses if the daemon isn't running (it tells you to start it). Override the port with

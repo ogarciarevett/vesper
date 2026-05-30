@@ -446,3 +446,41 @@ pipeline runs (Omar: "the echo of agents running into this PC should appear ther
   config override is NOT yet wired into the server (the engine accepts custom matchers + is tested;
   only the config read is pending) — logged as the next follow-up. GOTCHA (still true): a running
   daemon caches the build at startup, so picking up new matchers (e.g. zeroclaw) needs a daemon restart.
+
+## presence.matchers config override — SHIPPED
+
+Closed the echo follow-up: `presence.matchers` (+ `pollMs`) in `~/.vesper/config.json` are validated
+(drop bad `kind`/uncompilable regex; reject non-positive poll) and merged with the built-in allowlist
+in the daemon (`presenceDetectorFor(matchers)`). Users add agents without code. Proven live (a temp
+config's custom matcher surfaced the running daemon; bad-regex entry dropped). README documented. 1 commit.
+
+## DEV-89 — daemon lifecycle — SHIPPED (completed, not the original spec)
+
+The Linear issue predates the bring-your-own-CLI pivot (assumed an `llm_router`, `vesper ask`,
+vault-over-IPC JSON-RPC, `packages/daemon`). Built the ALIGNED core, adapted the rest away:
+- `vesper daemon` is now a command GROUP: `run` (foreground; the launchd/managed target),
+  `start`/`stop`/`restart` (detached lifecycle via a PID file + single-instance guard),
+  `status` (IPC ping + PID/uptime/version), `install`/`uninstall` (macOS launchd LaunchAgent).
+- Pure logic TDD'd: `daemon-lifecycle.ts` (PID read/write/remove, `resolveDaemonState` with injectable
+  liveness probe → running/stale/stopped) + `launchd.ts` (`renderLaunchAgentPlist`, XML-escaped,
+  RunAtLoad+KeepAlive). Audit: `daemon_started`/`daemon_stopped` reuse the existing `events` table
+  (no new "audit log" subsystem — the issue's separate audit file was unnecessary).
+- ADAPTED AWAY (pre-pivot, N/A): JSON-RPC `ask`/`vault.*` IPC methods, llm_router, `packages/daemon`.
+  Kept the existing newline-JSON ping IPC + the in-process scheduler/UI host. CLI shape changed:
+  bare `vesper daemon` → `vesper daemon run`/`start` (better UX, no `&`); README + docs/ui.md + the
+  `vesper ui` hint updated; command table regenerated.
+- Verified live end-to-end: status(stopped)→start(PID, detached)→status(running,uptime,version)→
+  pidfile@0600+socket→stop(SIGTERM,cleanup)→status(stopped); single-instance guard ("already running");
+  audit events confirmed in the events table.
+- DEFERRED gate (noted on the issue): live `launchctl load` + reboot-survival NOT run autonomously —
+  a KeepAlive LaunchAgent pointing at a relative dev entrypoint would crash-loop; a real install needs
+  an absolute `vesper` path (`bun link`). Plist generation is unit-tested. 514 tests / 0 fail; biome clean.
+
+## Linear backlog triage (Omar goal: "all issues completed or cancelled")
+
+DEV-89 completed (above). Cancelled as superseded by the bring-your-own-CLI + elder-first pivot
+(reversible, per-issue reasons on each): DEV-93 (macOS-Shortcuts capture), DEV-94 (Whisper/@xenova
+voice — superseded by `specs/voice-modalities.md`), DEV-36/90/98/99 (M4 external-adapter platform +
+SDK + Hermes adapter), DEV-100 (pre-pivot launch — superseded by `specs/installer-distribution.md`).
+DEV-13 + DEV-48 cancellation was BLOCKED by the permission classifier (auto-cancelling issues the
+agent didn't create) — left in Backlog for Omar. Net: Vesper project is all-terminal except those two.

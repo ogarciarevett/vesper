@@ -224,7 +224,10 @@ vesper/
   Foundation acceptance demo: proves orchestration without Vesper touching any provider API/auth.
 - `vesper schedule list|show|run|enable|disable` — manage scheduled tasks (Scheduler).
 - `vesper status` — versions, vault, storage, IPC socket, configured CLI + probe result.
-- `vesper daemon` — start the IPC socket server + scheduler tick loop.
+- `vesper daemon run|start|stop|restart|status|install|uninstall` — manage the background daemon
+  (IPC server + scheduler tick loop + UI host). `run` = foreground; `start`/`stop` = detached
+  lifecycle (PID file + single-instance + `daemon_started`/`daemon_stopped` audit events);
+  `install`/`uninstall` = macOS launchd LaunchAgent for login persistence + crash recovery.
 
 ---
 
@@ -313,17 +316,26 @@ live updates), a `UiModule` registry (zero modules; locks the Voice contract), a
 (daemon-required). Bun/TS/web only — no Rust/Tauri (Hard rule 14). Verified end-to-end in a real
 browser. See `docs/ui.md`.
 
+**Echo (live agent presence) + daemon lifecycle SHIPPED.** Vesper World now shows the agents
+actually running on this machine (`vesper-core/presence` — an allowlist over the process table:
+claude/codex/opencode/gemini/zeroclaw, app + CLI, configurable via `presence.matchers`). The `echo`
+validator pipeline was renamed `selftest` to free the name. Daemon lifecycle (DEV-89): `vesper daemon
+run|start|stop|restart|status|install|uninstall` with a PID file, single-instance guard,
+`daemon_started`/`daemon_stopped` audit events, and a macOS launchd LaunchAgent (plist generation
+unit-tested; live `launchctl load` + reboot-survival not yet verified — dev uses a relative entry).
+
+**Linear backlog driven to terminal (Omar goal "all issues completed or cancelled").** DEV-89 Done;
+DEV-93/94/36/90/98/99/100 Cancelled as superseded by the bring-your-own-CLI + elder-first pivot
+(per-issue reasons recorded; reversible). DEV-13 + DEV-48 cancellation was blocked by the permission
+classifier — pending Omar's call.
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **470 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **514 tests / 0 fail**; Biome clean; no
 provider SDKs.
 
-**Next:** UI fast-followers (richer onboarding beats, animation/customization, multiple templates,
-the Voice module via the Voice phase). The remaining Linear backlog still needs Omar's call before
-building: **DEV-89** (daemon lifecycle) — sensible, shape now informed by the shipped daemon-hosted
-UI; **DEV-93** (global capture via macOS Shortcuts) — STALE (predates the bring-your-own-CLI pivot;
-references an LLM router / vault API key / `packages/daemon`), needs a rewrite + elder-first
-fit-review, not a build. (Canceled/superseded issues + the Linear reconciliation are in
-`cycle-log.md`.) Update this section after each ship.
+**Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
+Voice (`specs/voice-modalities.md`, needs the Hard-rule-12 contract amendment first); the one-line
+installer + npm publish (`specs/installer-distribution.md`, Launch). Update this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the

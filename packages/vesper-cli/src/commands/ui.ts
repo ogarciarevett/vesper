@@ -28,7 +28,7 @@ export const uiCommand: Command = {
       await ipcRequest(socketPath(), "ping", { timeoutMs: 500 });
     } catch {
       errorLine("the daemon isn't running — start it first, then retry:");
-      line(dim("    vesper daemon"));
+      line(dim("    vesper daemon start"));
       return 1;
     }
 

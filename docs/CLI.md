@@ -16,7 +16,13 @@ Every `vesper` command, generated from the command registry
 | `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
 | `vesper status` | Show versions and the health of every subsystem. |
-| `vesper daemon` | Run the Vesper IPC server and scheduler loop. Foreground; Ctrl-C to stop. |
+| `vesper daemon run` | Run the daemon in the foreground (IPC + scheduler + UI). Ctrl-C to stop. |
+| `vesper daemon start` | Start the daemon in the background (detached). |
+| `vesper daemon stop` | Stop the running daemon. |
+| `vesper daemon restart` | Restart the daemon (stop, then start). |
+| `vesper daemon status` | Show the daemon's lifecycle status (PID, uptime, socket). |
+| `vesper daemon install` | Install the daemon as a macOS LaunchAgent (starts at login, stays alive). |
+| `vesper daemon uninstall` | Remove the macOS LaunchAgent and stop the daemon. |
 | `vesper ui [--no-open]` | Open Vesper World — a visual, living view of your agents (requires the daemon). |
 | `vesper schedule list` | List all scheduled tasks in an aligned table. |
 | `vesper schedule show <id>` | Print full details for a single task. |

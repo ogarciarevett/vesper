@@ -35,6 +35,24 @@ export function socketPath(): string {
   return join(runDir(), "vesper.sock");
 }
 
+/** Path to the daemon PID file (written by `vesper daemon run`). */
+export function pidPath(): string {
+  return join(runDir(), "vesperd.pid");
+}
+
+/** Path to the daemon's detached stdout/stderr log (used by `vesper daemon start`). */
+export function daemonLogPath(): string {
+  return join(runDir(), "daemon.log");
+}
+
+/** macOS LaunchAgent label for the daemon. */
+export const LAUNCH_AGENT_LABEL = "com.ogarciarevett.vesper";
+
+/** Path to the macOS LaunchAgent plist (`vesper daemon install`). */
+export function launchAgentPath(): string {
+  return join(homedir(), "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+}
+
 /** Localhost port the daemon serves the Vesper World UI on (override: `VESPER_UI_PORT`). */
 export function uiPort(): number {
   const raw = process.env.VESPER_UI_PORT;

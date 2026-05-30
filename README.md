@@ -38,8 +38,8 @@ pixel-art world: tap one to see, in plain language, what it just did — or to p
 ## Vesper World
 
 ```sh
-vesper daemon     # hosts the runtime + the UI
-vesper ui         # opens a browser tab — http://127.0.0.1:4317
+vesper daemon start   # hosts the runtime + the UI (background)
+vesper ui             # opens a browser tab — http://127.0.0.1:4317
 ```
 
 <p align="center">
@@ -81,7 +81,7 @@ cd packages/vesper-cli && bun link    # make `vesper` global (or run from the re
 vesper init          # create ~/.vesper, initialize storage, detect installed CLIs
 vesper cli list      # show each CLI + probe status (ok / not-authenticated / not-installed)
 vesper hello         # ask your configured CLI to reply — proves orchestration works
-vesper daemon &      # start the runtime + UI
+vesper daemon start  # start the runtime + UI (background)
 vesper ui            # open Vesper World in your browser
 ```
 
@@ -106,7 +106,13 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
 | `vesper status` | Show versions and the health of every subsystem. |
-| `vesper daemon` | Run the Vesper IPC server and scheduler loop. Foreground; Ctrl-C to stop. |
+| `vesper daemon run` | Run the daemon in the foreground (IPC + scheduler + UI). Ctrl-C to stop. |
+| `vesper daemon start` | Start the daemon in the background (detached). |
+| `vesper daemon stop` | Stop the running daemon. |
+| `vesper daemon restart` | Restart the daemon (stop, then start). |
+| `vesper daemon status` | Show the daemon's lifecycle status (PID, uptime, socket). |
+| `vesper daemon install` | Install the daemon as a macOS LaunchAgent (starts at login, stays alive). |
+| `vesper daemon uninstall` | Remove the macOS LaunchAgent and stop the daemon. |
 | `vesper ui [--no-open]` | Open Vesper World — a visual, living view of your agents (requires the daemon). |
 | `vesper schedule list` | List all scheduled tasks in an aligned table. |
 | `vesper schedule show <id>` | Print full details for a single task. |
