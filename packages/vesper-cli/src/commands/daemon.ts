@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
+  DEFAULT_AGENT_MATCHERS,
   detectAvailableCLIs,
   HandlerRegistry,
   openStore,
@@ -8,7 +9,7 @@ import {
   startIpcServer,
 } from "@vesper/core";
 import { grantedCapabilities, PIPELINES, registerPipelines } from "@vesper/pipelines";
-import { startUiServer } from "@vesper/ui";
+import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
 import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
@@ -53,12 +54,18 @@ export const daemonCommand: Command = {
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
     // scheduler + storage directly and gets live run events off its EventBus.
+    // Agent-presence detection uses the built-in allowlist plus any matchers
+    // the user added under `presence.matchers` in config; `presence.pollMs`
+    // overrides the scan interval.
     const uiStore = openStore(dbPath());
+    const presenceMatchers = [...DEFAULT_AGENT_MATCHERS, ...(config.presence?.matchers ?? [])];
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
       seed: machineFingerprint(),
       port: uiPort(),
+      detectPresences: presenceDetectorFor(presenceMatchers),
+      ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
     });
 
     // Start the cron tick loop. The scheduler records per-task errors for any

@@ -1,3 +1,4 @@
+import type { AgentMatcherSpec } from "@vesper/core";
 import { configPath } from "./paths.ts";
 
 /** Per-adapter overrides for a CLI tool's headless invocation. */
@@ -17,6 +18,13 @@ export interface VesperConfig {
   readonly storage?: {
     /** When true, run summaries are stored as size-only metadata (no raw CLI output). */
     readonly redactRunSummaries?: boolean;
+  };
+  /** Tuning for the Vesper World live agent-presence ("echo") detector. */
+  readonly presence?: {
+    /** Extra agent matchers, appended to the built-in allowlist. */
+    readonly matchers?: readonly AgentMatcherSpec[];
+    /** How often to re-scan for running agents (ms). */
+    readonly pollMs?: number;
   };
 }
 
@@ -42,6 +50,54 @@ function normalizeAdapter(raw: unknown): AdapterConfig {
   return adapter;
 }
 
+/** Compile-check a regex source; true if `new RegExp(source)` succeeds. */
+function isValidRegex(source: string): boolean {
+  try {
+    new RegExp(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate one untrusted agent-matcher spec from config. Returns the spec only
+ * when it is fully well-formed (required string fields, a known kind, and
+ * compilable `pattern`/`exclude` regexes); otherwise undefined so the caller can
+ * drop it. Never throws on bad input.
+ */
+function normalizeMatcher(raw: unknown): AgentMatcherSpec | undefined {
+  if (!isObject(raw)) return undefined;
+  const id = asString(raw.id);
+  const label = asString(raw.label);
+  const pattern = asString(raw.pattern);
+  const kind = raw.kind;
+  if (id === undefined || label === undefined || pattern === undefined) return undefined;
+  if (kind !== "cli" && kind !== "app") return undefined;
+  if (!isValidRegex(pattern)) return undefined;
+  const exclude = asString(raw.exclude);
+  if (exclude !== undefined && !isValidRegex(exclude)) return undefined;
+  return exclude !== undefined
+    ? { id, label, kind, pattern, exclude }
+    : { id, label, kind, pattern };
+}
+
+/** Coerce untrusted `presence` config; drops invalid matchers and out-of-range polls. */
+function normalizePresence(raw: unknown): VesperConfig["presence"] | undefined {
+  if (!isObject(raw)) return undefined;
+  const matchers = Array.isArray(raw.matchers)
+    ? raw.matchers.map(normalizeMatcher).filter((m): m is AgentMatcherSpec => m !== undefined)
+    : [];
+  const pollMs =
+    typeof raw.pollMs === "number" && Number.isFinite(raw.pollMs) && raw.pollMs > 0
+      ? raw.pollMs
+      : undefined;
+  if (matchers.length === 0 && pollMs === undefined) return undefined;
+  if (matchers.length > 0 && pollMs !== undefined) return { matchers, pollMs };
+  if (matchers.length > 0) return { matchers };
+  return { pollMs };
+}
+
 /** Coerce untrusted parsed JSON into a valid {@link VesperConfig}. */
 export function normalizeConfig(raw: unknown): VesperConfig {
   if (!isObject(raw)) return DEFAULT_CONFIG;
@@ -57,10 +113,13 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   const cli = defaultName !== undefined ? { default: defaultName, adapters } : { adapters };
 
   const storageRaw = isObject(raw.storage) ? raw.storage : {};
-  if (storageRaw.redactRunSummaries === true) {
-    return { cli, storage: { redactRunSummaries: true } };
-  }
-  return { cli };
+  const base: VesperConfig =
+    storageRaw.redactRunSummaries === true
+      ? { cli, storage: { redactRunSummaries: true } }
+      : { cli };
+
+  const presence = normalizePresence(raw.presence);
+  return presence !== undefined ? { ...base, presence } : base;
 }
 
 /** Load and normalize the config, returning {@link DEFAULT_CONFIG} if absent. */

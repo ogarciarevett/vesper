@@ -5,6 +5,7 @@ export type { AgentAddon, AgentAffordance, AgentDecoration, UiModule } from "./m
 export {
   defaultPresenceDetector,
   type PresenceDetector,
+  presenceDetectorFor,
   presenceSignature,
 } from "./server/presence.ts";
 export { startUiServer, type UiServerDeps, type UiServerHandle } from "./server/server.ts";

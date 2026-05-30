@@ -35,6 +35,61 @@ describe("normalizeConfig", () => {
     expect(normalizeConfig({ cli: { adapters: {} } }).storage).toBeUndefined();
     expect(normalizeConfig({ storage: { redactRunSummaries: "yes" } }).storage).toBeUndefined();
   });
+
+  describe("presence", () => {
+    test("keeps a well-formed custom matcher", () => {
+      const cfg = normalizeConfig({
+        presence: {
+          matchers: [
+            { id: "mytool", label: "My Tool", kind: "cli", pattern: "(?:^|/)mytool(?:\\s|$)" },
+          ],
+        },
+      });
+      expect(cfg.presence?.matchers).toEqual([
+        { id: "mytool", label: "My Tool", kind: "cli", pattern: "(?:^|/)mytool(?:\\s|$)" },
+      ]);
+    });
+
+    test("keeps a valid exclude and drops matchers with a bad regex", () => {
+      const cfg = normalizeConfig({
+        presence: {
+          matchers: [
+            { id: "ok", label: "OK", kind: "app", pattern: "/Foo\\.app/", exclude: "--type=" },
+            { id: "bad", label: "Bad", kind: "cli", pattern: "(unclosed" }, // invalid regex
+          ],
+        },
+      });
+      expect(cfg.presence?.matchers).toEqual([
+        { id: "ok", label: "OK", kind: "app", pattern: "/Foo\\.app/", exclude: "--type=" },
+      ]);
+    });
+
+    test("drops matchers missing fields or with an unknown kind", () => {
+      const cfg = normalizeConfig({
+        presence: {
+          matchers: [
+            { id: "x", label: "X", pattern: "x" }, // missing kind
+            { id: "y", label: "Y", kind: "gui", pattern: "y" }, // bad kind
+            { label: "Z", kind: "cli", pattern: "z" }, // missing id
+            42, // not an object
+          ],
+        },
+      });
+      expect(cfg.presence).toBeUndefined(); // all dropped, no pollMs => no presence block
+    });
+
+    test("validates pollMs (positive finite number only)", () => {
+      expect(normalizeConfig({ presence: { pollMs: 5000 } }).presence).toEqual({ pollMs: 5000 });
+      expect(normalizeConfig({ presence: { pollMs: 0 } }).presence).toBeUndefined();
+      expect(normalizeConfig({ presence: { pollMs: -1 } }).presence).toBeUndefined();
+      expect(normalizeConfig({ presence: { pollMs: "fast" } }).presence).toBeUndefined();
+    });
+
+    test("omits presence entirely when absent or empty", () => {
+      expect(normalizeConfig({ cli: { adapters: {} } }).presence).toBeUndefined();
+      expect(normalizeConfig({ presence: { matchers: [] } }).presence).toBeUndefined();
+    });
+  });
 });
 
 describe("loadConfig / saveConfig", () => {

@@ -130,13 +130,26 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
     "default": "claude",
     "adapters": { "claude": { "command": "claude", "args": ["-p"] } }
   },
-  "storage": { "redactRunSummaries": false }
+  "storage": { "redactRunSummaries": false },
+  "presence": {
+    "pollMs": 3000,
+    "matchers": [
+      { "id": "mytool", "label": "My Tool", "kind": "cli", "pattern": "(?:^|/)mytool(?:\\s|$)" }
+    ]
+  }
 }
 ```
 
 `cli.default` selects which CLI pipelines use; per-adapter `command`/`args` override the headless
 invocation if a tool changes its flags. `storage.redactRunSummaries` (opt-in) stores run summaries as
 size-only metadata instead of raw CLI output.
+
+`presence` tunes the live agent view in Vesper World (the running agents it "echoes"). Vesper ships an
+allowlist for `claude`, `codex`, `opencode`, `gemini`, and `zeroclaw`; `presence.matchers` **adds**
+your own without touching code. Each matcher is `{ id, label, kind: "cli" | "app", pattern, exclude? }`,
+where `pattern`/`exclude` are regexes matched (case-insensitively) against a process's full command
+line — match the tool's binary, not its install path, to avoid false positives. `presence.pollMs` sets
+the re-scan interval (default 3000). Malformed matchers (bad `kind`, uncompilable regex) are ignored.
 
 ## How it works
 
