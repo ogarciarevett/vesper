@@ -4,30 +4,49 @@ import { seededUnit } from "../world/hash.ts";
 export const SPRITE_W = 9;
 export const SPRITE_H = 9;
 
-/** A deterministic little pixel creature: a filled-cell mask + a seeded palette. */
+/**
+ * A deterministic little WOOLEN companion — a knitted hearth-creature (felt
+ * cat/owl/bun feel), not a cold pixel blob. Same seed => same creature.
+ */
 export interface Sprite {
   readonly cells: readonly (readonly boolean[])[]; // [H][W], left/right mirrored
-  readonly body: string;
-  readonly bodyLight: string;
-  readonly bodyEdge: string;
-  readonly eye: string;
+  readonly body: string; // wool base
+  readonly bodyLight: string; // top-lit band
+  readonly bodyEdge: string; // warm brown felt edge
+  readonly eye: string; // sleepy dark-brown eye
+  readonly catchlight: string; // ember-gold eye glint
+  readonly rim: string; // ember-gold fire-facing rim light
+  readonly stipple: readonly (readonly [number, number])[]; // knit flecks (cell coords)
 }
 
 const cx0 = (SPRITE_W - 1) / 2;
 const cy0 = (SPRITE_H - 1) / 2;
 
+/** Hearth wheel: warm seeded hue bands (amber/tan/rust, soft sage, dusty mauve). */
+function woolHue(s: string): number {
+  const pick = seededUnit(`${s}:band`);
+  const t = seededUnit(`${s}:hue`);
+  if (pick < 0.6) return 18 + t * (55 - 18); // amber / tan / rust (most common)
+  if (pick < 0.82) return 95 + t * (130 - 95); // soft sage
+  return 320 + t * (350 - 320); // dusty mauve
+}
+
 /**
- * Generate a stable creature for an agent seed: a solid elliptical body plus
- * seeded "extremities" (antennae / ears / feet), mirrored for symmetry, with a
- * hue-rotated palette. Same seed always yields the same creature.
+ * Generate a stable wool creature for a seed: a soft elliptical body + seeded
+ * ears/tufts/paws (mirrored), a constrained warm palette (low saturation so it
+ * reads as felt, never neon), a warm-brown felt edge, and seeded knit flecks.
  */
 export function spriteFor(seed: number): Sprite {
   const s = String(seed);
-  const hue = Math.floor(seededUnit(`${s}:hue`) * 360);
-  const body = `hsl(${hue}, 70%, 62%)`;
-  const bodyLight = `hsl(${hue}, 80%, 76%)`;
-  const bodyEdge = `hsl(${hue}, 55%, 30%)`;
-  const eye = `hsl(${(hue + 185) % 360}, 92%, 74%)`;
+  const hue = Math.round(woolHue(s));
+  const sat = 30 + Math.round(seededUnit(`${s}:sat`) * 15); // 30-45%
+  const light = 58 + Math.round(seededUnit(`${s}:light`) * 10); // 58-68%
+  const body = `hsl(${hue}, ${sat}%, ${light}%)`;
+  const bodyLight = `hsl(${hue}, ${sat}%, ${Math.min(88, light + 12)}%)`;
+  const bodyEdge = "#3a2a22"; // warm dark brown felt edge — NOT a hue-derived dark
+  const eye = "#2e211a";
+  const catchlight = "#ffd98a";
+  const rim = "#ffce7a";
 
   const half = Math.ceil(SPRITE_W / 2);
   const cells: boolean[][] = [];
@@ -43,10 +62,21 @@ export function spriteFor(seed: number): Sprite {
     }
     cells.push(row);
   }
-  return { cells, body, bodyLight, bodyEdge, eye };
+
+  // Seeded knit flecks: a handful of filled cells get a darker stipple dot.
+  const stipple: [number, number][] = [];
+  for (let y = 1; y < SPRITE_H - 1; y++) {
+    for (let x = 1; x < SPRITE_W - 1; x++) {
+      if (cells[y]?.[x] === true && seededUnit(`${s}:knit:${x}:${y}`) < 0.16) {
+        stipple.push([x, y]);
+      }
+    }
+  }
+
+  return { cells, body, bodyLight, bodyEdge, eye, catchlight, rim, stipple };
 }
 
-/** Draw a sprite centered at (cx, cy) with the given pixel size. */
+/** Draw a wool sprite centered at (cx, cy) with the given pixel size. */
 export function drawSprite(
   ctx: CanvasRenderingContext2D,
   sprite: Sprite,
@@ -60,7 +90,7 @@ export function drawSprite(
   const filled = (x: number, y: number): boolean =>
     x >= 0 && y >= 0 && x < SPRITE_W && y < SPRITE_H && cells[y]?.[x] === true;
 
-  // 1) Solid body fill.
+  // 1) Solid wool body.
   ctx.fillStyle = sprite.body;
   for (let y = 0; y < SPRITE_H; y++) {
     for (let x = 0; x < SPRITE_W; x++) {
@@ -68,8 +98,8 @@ export function drawSprite(
     }
   }
 
-  // 2) Top highlight — a lighter band on cells whose top neighbor is empty (light from above).
-  const hi = Math.max(1, Math.round(pixel * 0.24));
+  // 2) Top highlight — lighter band where the cell above is empty (soft daylight).
+  const hi = Math.max(1, Math.round(pixel * 0.26));
   ctx.fillStyle = sprite.bodyLight;
   for (let y = 0; y < SPRITE_H; y++) {
     for (let x = 0; x < SPRITE_W; x++) {
@@ -78,7 +108,19 @@ export function drawSprite(
     }
   }
 
-  // 3) Crisp silhouette outline — a darker line only on edges facing empty space.
+  // 3) Knit flecks — a darker stipple dot inside seeded cells (hand-knitted texture).
+  const fleck = Math.max(1, Math.round(pixel * 0.3));
+  ctx.fillStyle = "rgba(58, 42, 34, 0.35)";
+  for (const [x, y] of sprite.stipple) {
+    ctx.fillRect(
+      x0 + x * pixel + Math.round((pixel - fleck) / 2),
+      y0 + y * pixel + Math.round((pixel - fleck) / 2),
+      fleck,
+      fleck,
+    );
+  }
+
+  // 4) Warm-brown felt outline on edges facing empty space.
   const ow = Math.max(1, Math.round(pixel * 0.16));
   ctx.fillStyle = sprite.bodyEdge;
   for (let y = 0; y < SPRITE_H; y++) {
@@ -92,13 +134,29 @@ export function drawSprite(
     }
   }
 
-  // 4) Eyes — symmetric, on the body's middle band, with a soft dark socket.
+  // 5) Ember rim-light on the fire-facing (bottom-left) edge cells.
+  ctx.fillStyle = sprite.rim;
+  for (let y = 0; y < SPRITE_H; y++) {
+    for (let x = 0; x < SPRITE_W; x++) {
+      if (!filled(x, y)) continue;
+      const px = x0 + x * pixel;
+      const py = y0 + y * pixel;
+      if (!filled(x - 1, y) && !filled(x, y + 1)) ctx.fillRect(px, py + pixel - ow, ow, ow); // bottom-left corner glow
+    }
+  }
+
+  // 6) Sleepy eyes — soft dark-brown dots with an ember catchlight.
   const eyeY = y0 + 3 * pixel;
-  const inset = Math.max(1, Math.round(pixel * 0.16));
+  const inset = Math.max(1, Math.round(pixel * 0.18));
   for (const ex of [x0 + 2 * pixel, x0 + (SPRITE_W - 3) * pixel]) {
-    ctx.fillStyle = sprite.bodyEdge;
-    ctx.fillRect(ex, eyeY, pixel, pixel);
     ctx.fillStyle = sprite.eye;
-    ctx.fillRect(ex + inset, eyeY + inset, pixel - inset * 2, pixel - inset * 2);
+    ctx.fillRect(ex, eyeY, pixel, pixel);
+    ctx.fillStyle = sprite.catchlight;
+    ctx.fillRect(
+      ex + inset,
+      eyeY + inset,
+      Math.max(1, Math.round(pixel * 0.28)),
+      Math.max(1, Math.round(pixel * 0.28)),
+    );
   }
 }

@@ -6,121 +6,125 @@
     <title>Vesper</title>
     <style>
       :root {
-        --bg-0: #0b1020;
-        --bg-1: #131a33;
-        --ink: #e8ecff;
-        --ink-dim: #8a93c2;
-        --accent: #7cf3d0;
-        --accent-warm: #ffd479;
-        --ok: #7CF3A0;
-        --err: #ff9a8b;
-        --panel: rgba(18, 24, 48, 0.86);
-        --panel-edge: rgba(124, 243, 208, 0.25);
-        --shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
-        --font: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+        --hearth: #3a2a22;      /* deepest warm brown ink */
+        --wood: #6b4a35;        /* beams / frame / muted text */
+        --plaster: #c89a6a;     /* lit wall + card body */
+        --firelight: #ffb454;   /* fire, all-good, Run button */
+        --ember: #ffd98a;       /* highlights / hover */
+        --rug: #a8504a;         /* needs-a-look halo */
+        --dusk: #5a6b8c;        /* the one cool note */
+        --cream: #fff4e2;       /* high-contrast warm white */
+        --ok: #ffb454;
+        --err: #a8504a;
+        --shadow: 0 18px 50px rgba(46, 33, 26, 0.5);
+        --serif: Georgia, "Times New Roman", serif;
+        --sans: "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0; height: 100%; overflow: hidden;
-        background: var(--bg-0); color: var(--ink); font-family: var(--font);
+        background: #2e211a; color: var(--cream); font-family: var(--sans);
         -webkit-font-smoothing: antialiased;
       }
-      #scene { position: fixed; inset: 0; display: block; image-rendering: pixelated; cursor: pointer; }
+      #scene { position: fixed; inset: 0; display: block; cursor: pointer; }
 
       .header {
-        position: fixed; top: 0; left: 0; right: 0; padding: 22px 28px;
+        position: fixed; top: 0; left: 0; right: 0; padding: 20px 26px;
         display: flex; align-items: baseline; gap: 14px; pointer-events: none;
-        background: linear-gradient(180deg, rgba(11,16,32,0.7), rgba(11,16,32,0));
       }
       .header h1 {
-        margin: 0; font-size: 22px; letter-spacing: 6px; font-weight: 700;
-        text-transform: uppercase; color: var(--ink);
-        text-shadow: 0 0 18px rgba(124, 243, 208, 0.35);
+        margin: 0; font-family: var(--serif); font-size: 30px; font-weight: 700;
+        color: var(--cream); text-shadow: 0 1px 10px rgba(46, 33, 26, 0.6);
       }
-      .header .sub { font-size: 13px; color: var(--ink-dim); letter-spacing: 1px; }
+      .header .sub { font-size: 15px; color: var(--ember); font-style: italic; }
 
       .hint {
         position: fixed; left: 0; right: 0; bottom: 18px; text-align: center;
-        font-size: 13px; color: var(--ink-dim); letter-spacing: 1px; pointer-events: none;
-        transition: opacity .4s ease;
+        font-size: 15px; color: var(--ember); pointer-events: none;
+        text-shadow: 0 1px 6px rgba(46, 33, 26, 0.7); transition: opacity .4s ease;
       }
 
-      /* Inspect card */
+      /* Inspect card — a warm "note left by the fire". */
       .card {
-        position: fixed; right: 22px; top: 50%; transform: translateY(-50%) translateX(24px);
-        width: min(360px, calc(100vw - 44px)); max-height: 80vh; overflow: auto;
-        background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 18px;
-        box-shadow: var(--shadow); backdrop-filter: blur(10px);
-        padding: 22px; opacity: 0; pointer-events: none;
-        transition: opacity .25s ease, transform .25s ease;
+        position: fixed; right: 22px; top: 50%; transform: translateY(-50%) translateX(26px);
+        width: min(380px, calc(100vw - 44px)); max-height: 84vh; overflow: auto;
+        background: var(--plaster); border: 3px solid var(--wood); border-radius: 18px;
+        box-shadow: var(--shadow); padding: 22px; opacity: 0; pointer-events: none;
+        color: var(--hearth); transition: opacity .25s ease, transform .25s ease;
       }
       .card.open { opacity: 1; transform: translateY(-50%) translateX(0); pointer-events: auto; }
-      .card .name { font-size: 20px; font-weight: 700; letter-spacing: 1px; margin: 0 0 4px; }
-      .card .status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
-        color: var(--ink-dim); margin-bottom: 16px; }
-      .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--ink-dim); }
-      .dot.ok { background: var(--ok); box-shadow: 0 0 12px var(--ok); }
-      .dot.error { background: var(--err); box-shadow: 0 0 12px var(--err); }
-      .dot.working { background: var(--accent); box-shadow: 0 0 12px var(--accent); animation: pulse 1s infinite; }
-      .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: var(--ink-dim); margin: 14px 0 6px; }
-      .card .summary { font-size: 15px; line-height: 1.5; color: var(--ink);
-        background: rgba(0,0,0,0.22); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; }
-      .card .meta { font-size: 12px; color: var(--ink-dim); margin-top: 10px; }
-      .runbtn {
-        margin-top: 20px; width: 100%; padding: 16px; border: none; border-radius: 14px;
-        font-family: var(--font); font-size: 17px; font-weight: 700; letter-spacing: 1px;
-        color: #08210f; background: linear-gradient(180deg, var(--accent), #46c9a6);
-        cursor: pointer; transition: transform .12s ease, filter .12s ease;
-        box-shadow: 0 8px 24px rgba(124, 243, 208, 0.35);
+      .card .top { display: flex; align-items: center; gap: 14px; }
+      .card .portrait {
+        width: 64px; height: 64px; border-radius: 50%; background: rgba(46, 33, 26, 0.12);
+        border: 2px solid var(--wood); flex: none; image-rendering: pixelated;
       }
-      .runbtn:hover { filter: brightness(1.07); transform: translateY(-1px); }
+      .card .name { font-family: var(--serif); font-size: 26px; font-weight: 700; margin: 0; }
+      .card .status { display: inline-flex; align-items: center; gap: 8px; font-size: 20px;
+        color: var(--wood); margin: 14px 0 4px; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--wood); }
+      .dot.ok { background: var(--firelight); box-shadow: 0 0 10px var(--firelight); }
+      .dot.error { background: var(--err); box-shadow: 0 0 10px var(--err); }
+      .dot.working { background: var(--ember); box-shadow: 0 0 10px var(--ember); animation: pulse 1s infinite; }
+      .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--wood); margin: 16px 0 6px; }
+      .card .summary { font-size: 18px; line-height: 1.55; color: var(--hearth);
+        background: rgba(46, 33, 26, 0.08); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; }
+      .card .meta { font-size: 14px; color: var(--wood); margin-top: 10px; }
+      .runbtn {
+        margin-top: 20px; width: 100%; min-height: 56px; padding: 14px; border: none; border-radius: 14px;
+        font-family: var(--sans); font-size: 20px; font-weight: 700; letter-spacing: .5px;
+        color: var(--hearth); background: var(--firelight); cursor: pointer;
+        transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
+        box-shadow: 0 8px 20px rgba(168, 80, 74, 0.3);
+      }
+      .runbtn:hover { background: var(--ember); transform: translateY(-1px); box-shadow: 0 10px 26px rgba(255, 180, 84, 0.45); }
       .runbtn:active { transform: translateY(1px); }
-      .runbtn:disabled { filter: grayscale(0.6) brightness(0.8); cursor: default; transform: none; }
+      .runbtn:disabled { filter: grayscale(0.5) brightness(0.92); cursor: default; transform: none; }
 
-      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
       .toast {
         position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%) translateY(16px);
-        background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 12px;
-        padding: 12px 20px; font-size: 14px; box-shadow: var(--shadow);
+        background: var(--plaster); color: var(--hearth); border: 2px solid var(--wood); border-radius: 12px;
+        padding: 12px 20px; font-size: 15px; box-shadow: var(--shadow);
         opacity: 0; pointer-events: none; transition: opacity .3s ease, transform .3s ease;
       }
       .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-      /* First-launch welcome */
+      /* First-launch welcome. */
       .welcome-scrim {
         position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-        background: rgba(7, 10, 22, 0.72); backdrop-filter: blur(6px); z-index: 10;
+        background: rgba(28, 18, 12, 0.72); z-index: 10;
       }
       .welcome-scrim.show { display: flex; }
       .welcome {
-        width: min(440px, calc(100vw - 48px)); text-align: center;
-        background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 22px;
+        width: min(440px, calc(100vw - 48px)); text-align: center; color: var(--hearth);
+        background: var(--plaster); border: 3px solid var(--wood); border-radius: 22px;
         box-shadow: var(--shadow); padding: 36px 32px;
       }
-      .welcome h2 {
-        margin: 0 0 14px; font-size: 24px; letter-spacing: 3px; text-transform: uppercase;
-        text-shadow: 0 0 18px rgba(124, 243, 208, 0.35);
-      }
-      .welcome p { margin: 0 0 12px; font-size: 16px; line-height: 1.6; color: var(--ink); }
-      .welcome p.dim { color: var(--ink-dim); font-size: 14px; }
+      .welcome h2 { margin: 0 0 14px; font-family: var(--serif); font-size: 28px; }
+      .welcome p { margin: 0 0 12px; font-size: 17px; line-height: 1.6; }
+      .welcome p.dim { color: var(--wood); font-size: 15px; }
       .welcome .go {
-        margin-top: 22px; padding: 15px 34px; border: none; border-radius: 14px;
-        font-family: var(--font); font-size: 17px; font-weight: 700; letter-spacing: 1px;
-        color: #08210f; background: linear-gradient(180deg, var(--accent), #46c9a6);
-        cursor: pointer; box-shadow: 0 8px 24px rgba(124, 243, 208, 0.35);
-        transition: transform .12s ease, filter .12s ease;
+        margin-top: 22px; min-height: 56px; padding: 15px 34px; border: none; border-radius: 14px;
+        font-family: var(--sans); font-size: 19px; font-weight: 700;
+        color: var(--hearth); background: var(--firelight); cursor: pointer;
+        box-shadow: 0 8px 20px rgba(168, 80, 74, 0.3); transition: transform .12s ease, background .12s ease;
       }
-      .welcome .go:hover { filter: brightness(1.07); transform: translateY(-1px); }
+      .welcome .go:hover { background: var(--ember); transform: translateY(-1px); }
       .welcome .go:active { transform: translateY(1px); }
+
+      @media (prefers-reduced-motion: reduce) {
+        .card, .toast, .runbtn, .welcome .go { transition: none; }
+        .dot.working { animation: none; }
+      }
     </style>
   </head>
   <body>
     <canvas id="scene"></canvas>
     <div class="welcome-scrim" id="welcome">
       <div class="welcome">
-        <h2>Welcome</h2>
-        <p>These little characters are your agents. They quietly do things for you.</p>
+        <h2>Welcome home</h2>
+        <p>These little friends by the fire are your helpers. They quietly do things for you.</p>
         <p>Tap one to see what it just did — or tap <strong>Run</strong> to put it to work.</p>
         <p class="dim">That's it. Nothing to set up.</p>
         <button type="button" class="go" id="welcome-go">Let's go</button>
@@ -128,12 +132,17 @@
     </div>
     <div class="header">
       <h1>Vesper</h1>
-      <span class="sub">your agents</span>
+      <span class="sub">your helpers, by the fire</span>
     </div>
-    <div class="hint" id="hint">tap an agent to see what it's doing</div>
+    <div class="hint" id="hint">tap a helper to see what it's doing</div>
     <div class="card" id="card">
-      <div class="name" id="card-name"></div>
-      <div class="status"><span class="dot" id="card-dot"></span><span id="card-status"></span></div>
+      <div class="top">
+        <canvas class="portrait" id="card-portrait" width="64" height="64"></canvas>
+        <div>
+          <div class="name" id="card-name"></div>
+          <div class="status"><span class="dot" id="card-dot"></span><span id="card-status"></span></div>
+        </div>
+      </div>
       <div class="label">last result</div>
       <div class="summary" id="card-summary"></div>
       <div class="meta" id="card-meta"></div>

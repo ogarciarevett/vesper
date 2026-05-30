@@ -517,3 +517,32 @@ CREATE execution path (Slices 5-7), so the buildable increment was Slice 4.
   follow-up) — noted in the spec. 529 tests / 0 fail (+15 for this slice); Biome clean; no provider SDKs.
 - **Next:** Hearth-Cottage UI build (approved, queued); the robust cross-platform sandbox sub-spec that
   unblocks Forge CREATE (Slices 5-7).
+
+## Vesper World redesign (Hearth-Cottage) + pluggable renderer + logo registry — SHIPPED
+
+Two design workflows drove this: a 6-direction elder-first UI design panel (Hearth-Cottage chosen,
+`specs/elder-first-ui-redesign.md`) and a render-plugin/cyberpunk design (`specs/pluggable-renderer.md`).
+Omar then redirected: the UI must be a PLUGGABLE renderer (pick how you see your agents) where EVERY
+agent shows its real brand logo; Hearth-Cottage is theme #1, cyberpunk is theme #2 (prompt in the spec,
+to be generated via claude.ai then ported). Decisions: per-theme logo framing (Hearth keeps wool
+creatures for pipelines, logo on the live lantern; cyberpunk shows a logo for every node); cyberpunk
+ships dev-only until an a11y/contrast review.
+
+- **Hearth-Cottage look** (presentation-layer only; buildWorld/server/127.0.0.1/SceneGraph FROZEN):
+  cottage room baked offscreen (60fps win), animated fire + embers, braided rug, dusk window; the 9x9
+  sprite re-skinned as warm WOOL creatures; gentle non-alarming error (a "?" + a color-INDEPENDENT
+  "needs a look" chip); a live visitor carries a LANTERN with its brand emblem; warm "note by the fire"
+  inspect card with a 64px portrait well + 56px Run; Georgia serif title; prefers-reduced-motion honored.
+  Verified end-to-end in a real browser.
+- **Slice 1 — brand/logo registry** (`client/brand/`): a TOTAL `resolveMark()` that never returns null
+  (presence-prefix -> exact -> prefix -> substring -> Vesper-default), so the always-a-logo invariant is
+  structural. Built-ins claude/codex(OpenAI knot)/gemini/opencode/zeroclaw + hermes/ironclaw + the
+  Vesper "V" fallback. `emblems.ts` retired; `render.ts` lantern resolves through it.
+- **Slice 2 — WorldTheme plugin seam** (`client/theme/` + `client/themes/`): the `WorldTheme` contract
+  (id, displayName, the existing drawScene signature), a `THEME_REGISTRY` mirroring ModuleRegistry +
+  `resolveTheme` (unknown -> default, never throws), Hearth registered as the default theme, `main.ts`
+  renders via `activeTheme.drawScene`. Behavior-preserving (verified no visual regression live).
+- DEFERRED: Slice 3 (theme switching UX — config `ui.theme` + `?theme=` + elder picker) and Slice 4
+  (port the cyberpunk theme once its index.html is generated from the prompt). 544 tests / 0 fail
+  (+10: brand + theme registries); Biome clean; bundles; no provider SDKs. docs/ui.md update folded
+  into Slice 3 (themes documented there).

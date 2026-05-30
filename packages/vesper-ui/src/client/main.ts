@@ -1,6 +1,13 @@
 /// <reference lib="dom" />
 import type { Inhabitant, SceneGraph } from "../world/types.ts";
-import { drawScene, type HitRegion } from "./render.ts";
+import type { HitRegion } from "./render.ts";
+import { drawSprite, SPRITE_W, spriteFor } from "./sprite.ts";
+import { resolveTheme } from "./theme/registry.ts";
+import "./themes/index.ts"; // registers the built-in themes (hearth = default)
+
+// The active renderer. Themes are a pure client concern over the same /api/world
+// data; Slice 3 adds config/URL/picker selection — for now resolve the default.
+const activeTheme = resolveTheme(null);
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -20,7 +27,13 @@ const cardStatus = el("card-status");
 const cardSummary = el("card-summary");
 const cardMeta = el("card-meta");
 const cardRun = el<HTMLButtonElement>("card-run");
+const cardPortrait = el<HTMLCanvasElement>("card-portrait");
 const hint = el("hint");
+
+/** Honor the OS "reduce motion" setting — a near-still, fully-legible scene. */
+const REDUCED_MOTION =
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const toastEl = el("toast");
 const welcome = el("welcome");
 const welcomeGo = el<HTMLButtonElement>("welcome-go");
@@ -63,7 +76,8 @@ function resize(): void {
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = false;
+  // Smooth the soft baked room; sprites use fillRect so they stay crisp regardless.
+  ctx.imageSmoothingEnabled = true;
 }
 window.addEventListener("resize", resize);
 resize();
@@ -96,9 +110,20 @@ function statusWord(inh: Inhabitant): string {
   }
 }
 
+/** Draw the tapped creature's own sprite into the card's portrait well. */
+function renderPortrait(avatarSeed: number): void {
+  const pctx = cardPortrait.getContext("2d");
+  if (pctx === null) return;
+  const size = cardPortrait.width;
+  pctx.clearRect(0, 0, size, size);
+  const pixel = Math.max(2, Math.floor(size / (SPRITE_W + 2)));
+  drawSprite(pctx, spriteFor(avatarSeed), size / 2, size / 2, pixel);
+}
+
 function renderCard(): void {
   const inh = inhabitant(selectedId);
   if (inh === null) return;
+  renderPortrait(inh.avatarSeed);
   cardName.textContent = inh.label;
 
   // A live presence is an external agent running on this machine — read-only:
@@ -219,7 +244,13 @@ function connectLive(): void {
 }
 
 function frame(t: number): void {
-  if (scene !== null) hits = drawScene(ctx, scene, w, h, t, { hoverId, workingIds, pops });
+  if (scene !== null)
+    hits = activeTheme.drawScene(ctx, scene, w, h, t, {
+      hoverId,
+      workingIds,
+      pops,
+      reducedMotion: REDUCED_MOTION,
+    });
   requestAnimationFrame(frame);
 }
 
