@@ -19,6 +19,38 @@ export interface RunInfo {
 }
 
 /**
+ * A single live-trace step of a run, as the activity panel needs it — the
+ * UI-facing shape of a `@vesper/core` `RunEventRow` (server-serialized; the client
+ * stays a thin renderer). `kind` is one of `step|log|progress|spawn|complete`.
+ */
+export interface RunEventInfo {
+  readonly id: string;
+  readonly runId: string;
+  /** Unix ms. */
+  readonly ts: number;
+  readonly kind: string;
+  readonly message: string;
+  readonly data?: Record<string, unknown>;
+}
+
+/**
+ * The run hierarchy (a parent run and its spawned children), assembled server-side
+ * from a `@vesper/core` `RunTreeNode` so the activity panel renders it directly.
+ */
+export interface RunTreeInfo {
+  readonly run: {
+    readonly id: string;
+    readonly pipeline: string;
+    readonly status: string;
+    readonly summary: string;
+    /** Unix ms. */
+    readonly ts: number;
+    readonly parentRunId: string | null;
+  };
+  readonly children: readonly RunTreeInfo[];
+}
+
+/**
  * A live agent process detected on this machine (the "echo" of agents running) —
  * the world-facing shape of a `@vesper/core` `AgentPresence`. These are NOT Vesper
  * pipelines; they are external agents (a `claude`/`codex` CLI, a desktop app) seen

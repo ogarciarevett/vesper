@@ -11,6 +11,15 @@ export type EventListener = (payload?: unknown) => void;
 export const RUN_COMPLETED = "vesper:run:completed";
 
 /**
+ * High-volume topic the runtime emits a per-step live-trace event on whenever a
+ * handler calls `ctx.emitProgress` or a sub-agent is spawned/completes. Payload
+ * shape: `{ runId, parentRunId, kind, message, data? }`. Separate from
+ * {@link RUN_COMPLETED} (which fires once per top-level run); a single run emits
+ * many `RUN_EVENT`s. Subscribe via `scheduler.eventBus.on(...)`.
+ */
+export const RUN_EVENT = "vesper:run:event";
+
+/**
  * Thin in-process event bus wrapping Node.js `EventEmitter`.
  *
  * Topics are plain strings; payloads are untyped (`unknown`).

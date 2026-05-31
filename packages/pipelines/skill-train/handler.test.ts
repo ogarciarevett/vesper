@@ -33,10 +33,16 @@ function makeCtx(params: Record<string, unknown>): {
     task: { ...baseTask },
     now: new Date("2026-05-28T00:00:00.000Z"),
     params,
+    runId: "run-id",
+    parentRunId: null,
     complete,
     recordRun({ status, summary }) {
       recorded.push({ status, summary });
       return "run-id";
+    },
+    emitProgress() {},
+    spawn() {
+      throw new Error("spawn is not supported in this fake context");
     },
   };
   return { ctx, recorded };

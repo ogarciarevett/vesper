@@ -1,10 +1,10 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RunOutcome, Scheduler, Store } from "@vesper/core";
-import { RUN_COMPLETED, SchedulerError } from "@vesper/core";
+import type { RunOutcome, RunTreeNode, Scheduler, Store } from "@vesper/core";
+import { RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
-import type { PresenceInfo } from "../world/types.ts";
+import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
 import { defaultPresenceDetector, type PresenceDetector, presenceSignature } from "./presence.ts";
 import { buildSnapshot } from "./snapshot.ts";
 
@@ -40,6 +40,46 @@ const json = (body: unknown, status = 200): Response =>
 
 /** Local hostnames the server accepts (single-user local runtime). */
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * RFC-4122 UUID shape. Run ids are server-allocated UUIDs (`store.startRun` ->
+ * `crypto.randomUUID`); the trace routes + WS subscribe topic accept ONLY this
+ * shape so a client cannot craft a wildcard/path-traversal topic to subscribe to.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** The wire shape of a `RUN_EVENT` bus payload (see scheduler `emitProgress`). */
+interface RunEventPayload {
+  /** Persisted `run_events` row id — matches the backfilled {@link RunEventInfo}.id so a live frame de-dupes against its replayed twin. */
+  readonly id: string;
+  readonly runId: string;
+  readonly parentRunId: string | null;
+  /** Unix ms the event was emitted. */
+  readonly ts: number;
+  readonly kind: string;
+  readonly message: string;
+  readonly data?: Record<string, unknown>;
+}
+
+/** Narrow an `unknown` to a plain record (for optional event `data`). */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Map a core `RunTreeNode` into the thin UI-facing {@link RunTreeInfo} (recursive). */
+function mapTreeToInfo(node: RunTreeNode): RunTreeInfo {
+  return {
+    run: {
+      id: node.run.id,
+      pipeline: node.run.pipeline,
+      status: node.run.status,
+      summary: node.run.summary,
+      ts: node.run.ts,
+      parentRunId: node.run.parentRunId,
+    },
+    children: node.children.map(mapTreeToInfo),
+  };
+}
 
 /** Extract the host (no port) from a `Host` header value or an `Origin` URL. */
 function hostOf(value: string | null): string | null {
@@ -89,9 +129,15 @@ async function buildClientBundle(): Promise<string> {
  *
  * Routes: `GET /` (client shell), `GET /app.js` (bundled client), `GET /api/world`
  * (current {@link import("../world/types.ts").SceneGraph}), `POST /api/pipelines/:id/run`
- * (run a pipeline -> {@link RunOutcome}), and `WS /api/live` (pushes `run:completed`).
+ * (run a pipeline -> {@link RunOutcome}), `GET /api/runs/:runId/events?afterTs=`
+ * (replay a run's persisted live trace), `GET /api/runs/:runId/tree` (the run +
+ * sub-agent hierarchy), and `WS /api/live` (pushes `run:completed`, `presence`,
+ * `run:event:lite`; a `{type:'subscribe'|'unsubscribe', runId}` frame joins/leaves a
+ * single run's `run:event` stream).
  *
- * Bound to localhost only — single-user local runtime, no auth.
+ * Bound to localhost only — single-user local runtime, no auth. The trace routes and
+ * the WS subscribe topic both require a UUID-shaped `runId` and sit behind the same
+ * local-origin guard as every other route.
  */
 export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle> {
   const { scheduler, store, seed } = deps;
@@ -146,6 +192,41 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         return json(buildSnapshot(scheduler, store, seed, presences));
       }
 
+      // GET /api/runs/:runId/events?afterTs= — replay/backfill the persisted
+      // live-trace for one run (the durable analogue of /api/world; a late or
+      // reconnecting client reads this before joining the live stream).
+      const eventsMatch = pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
+      if (req.method === "GET" && eventsMatch) {
+        const runId = decodeURIComponent(eventsMatch[1] ?? "");
+        if (!UUID_RE.test(runId)) return json({ error: "invalid runId" }, 400);
+        const afterRaw = url.searchParams.get("afterTs");
+        const afterTs = afterRaw === null ? undefined : Number(afterRaw);
+        const rows = store.listRunEvents({
+          runId,
+          ...(afterTs !== undefined && Number.isFinite(afterTs) ? { afterTs } : {}),
+          limit: 500,
+        });
+        const events: RunEventInfo[] = rows.map((r) => ({
+          id: r.id,
+          runId: r.runId,
+          ts: r.ts,
+          kind: r.kind,
+          message: typeof r.payload.message === "string" ? r.payload.message : "",
+          ...(isRecord(r.payload.data) ? { data: r.payload.data } : {}),
+        }));
+        return json(events);
+      }
+
+      // GET /api/runs/:runId/tree — the run hierarchy (parent + spawned children),
+      // assembled server-side so the activity panel stays a thin renderer.
+      const treeMatch = pathname.match(/^\/api\/runs\/([^/]+)\/tree$/);
+      if (req.method === "GET" && treeMatch) {
+        const runId = decodeURIComponent(treeMatch[1] ?? "");
+        if (!UUID_RE.test(runId)) return json({ error: "invalid runId" }, 400);
+        const tree = store.runTree(runId);
+        return tree === null ? json({ error: "unknown run" }, 404) : json(mapTreeToInfo(tree));
+      }
+
       // POST /api/pipelines/:id/run
       const runMatch = pathname.match(/^\/api\/pipelines\/([^/]+)\/run$/);
       if (req.method === "POST" && runMatch) {
@@ -167,8 +248,21 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       open(ws) {
         ws.subscribe("world");
       },
-      message() {
-        // The client only listens; inbound messages are ignored.
+      message(ws, raw) {
+        // Control protocol: {type:'subscribe'|'unsubscribe', runId}. A client follows
+        // one run's live trace by subscribing to its agent:<runId> topic. The runId is
+        // guarded by UUID shape (rejects crafted/wildcard topics); malformed frames are
+        // ignored silently — the connection is already local-origin (upgrade is guarded).
+        try {
+          const msg: unknown = JSON.parse(typeof raw === "string" ? raw : raw.toString());
+          if (!isRecord(msg)) return;
+          const { type, runId } = msg;
+          if (typeof runId !== "string" || !UUID_RE.test(runId)) return;
+          if (type === "subscribe") ws.subscribe(`agent:${runId}`);
+          else if (type === "unsubscribe") ws.unsubscribe(`agent:${runId}`);
+        } catch {
+          // Non-JSON / unexpected payload — ignore.
+        }
       },
       close() {
         // Bun auto-unsubscribes on close.
@@ -183,6 +277,20 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
     void modules.dispatchRunCompleted(outcome);
   };
   scheduler.eventBus.on(RUN_COMPLETED, onRun);
+
+  // Push every live-trace step to clients following that exact run (agent:<runId>),
+  // plus a cheap lite pulse on the 'world' topic so the home view can react without
+  // subscribing to a specific run.
+  const onRunEvent = (payload?: unknown): void => {
+    if (!isRecord(payload) || typeof payload.runId !== "string") return;
+    const event = payload as unknown as RunEventPayload;
+    server.publish(`agent:${event.runId}`, JSON.stringify({ type: "run:event", event }));
+    server.publish(
+      "world",
+      JSON.stringify({ type: "run:event:lite", runId: event.runId, kind: event.kind }),
+    );
+  };
+  scheduler.eventBus.on(RUN_EVENT, onRunEvent);
 
   // Re-scan running agents on an interval; push a refresh only when the set
   // actually changes (an agent started/stopped), so idle ticks are silent.
@@ -205,6 +313,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
     stop() {
       clearInterval(pollTimer);
       scheduler.eventBus.off(RUN_COMPLETED, onRun);
+      scheduler.eventBus.off(RUN_EVENT, onRunEvent);
       server.stop(true);
     },
   };

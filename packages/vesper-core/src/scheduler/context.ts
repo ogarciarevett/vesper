@@ -1,7 +1,19 @@
 import { assertCapabilities } from "../capabilities/assert.ts";
+import type { Capability } from "../capabilities/index.ts";
 import { CLIError } from "../cli/errors.ts";
 import type { Store } from "../storage/types.ts";
-import type { CompleteFn, PipelineContext, RunOptions, ScheduledTask } from "./types.ts";
+import { SchedulerError } from "./errors.ts";
+import type { EventBus } from "./events.ts";
+import { RUN_EVENT } from "./events.ts";
+import type { HandlerRegistry } from "./registry.ts";
+import type {
+  CompleteFn,
+  PipelineContext,
+  RunOptions,
+  ScheduledTask,
+  SubAgentDescriptor,
+  SubAgentHandle,
+} from "./types.ts";
 
 /**
  * Replace a run summary with size-only metadata, so raw CLI output is never
@@ -16,7 +28,11 @@ export function redactSummary(summary: string): string {
 export interface BuildContextDeps {
   readonly task: ScheduledTask;
   readonly now: Date;
-  /** Storage used by {@link PipelineContext.recordRun}. */
+  /** Id of this run's `runs` row — allocated up front by the scheduler via `startRun`. */
+  readonly runId: string;
+  /** Parent run id for a sub-agent invocation; null for a top-level run. */
+  readonly parentRunId: string | null;
+  /** Storage used by {@link PipelineContext.recordRun}/`emitProgress`. */
   readonly store: Store;
   /**
    * Resolver that shells out to a CLI adapter. Injected by the host (CLI layer)
@@ -34,6 +50,22 @@ export interface BuildContextDeps {
   readonly onRecordRun?: (record: { runId: string; status: string; summary: string }) => void;
   /** When true, the run summary is stored as size-only metadata (see {@link redactSummary}). */
   readonly redactSummaries?: boolean;
+  /** Event bus used by `emitProgress` to publish the live-trace step. Optional. */
+  readonly events?: EventBus;
+  /** Handler registry — handed through to the spawn fn (see {@link import("./subagent.ts")}). */
+  readonly registry?: HandlerRegistry;
+  /** Host capability ceiling — the absolute upper bound for any spawned sub-agent. */
+  readonly grants?: readonly Capability[];
+  /** This task's grant subset — the upper bound a spawned descriptor is checked against. */
+  readonly parentTaskCapabilities?: readonly Capability[];
+  /**
+   * Spawn implementation injected by the scheduler/sub-agent layer. Kept as a
+   * function (not an import) so `context.ts` has no dependency cycle on
+   * `subagent.ts`. When absent, `ctx.spawn` throws `spawn_unavailable`.
+   */
+  readonly spawn?: (descriptor: SubAgentDescriptor, parent: PipelineContext) => SubAgentHandle;
+  /** Cap on the number of sub-agents one parent may spawn. */
+  readonly maxFanout?: number;
 }
 
 /**
@@ -52,13 +84,17 @@ export interface BuildContextDeps {
  * (`options.cli`) -> the injected resolver's configured default.
  */
 export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
-  const { task, now, store, complete, options, onRecordRun, redactSummaries } = deps;
+  const { task, now, runId, parentRunId, store, complete, options, onRecordRun, redactSummaries } =
+    deps;
   const params = options?.params ?? {};
 
-  return {
+  // Built first so `spawn` can hand the parent context to the injected spawn fn.
+  const self: PipelineContext = {
     task,
     now,
     params,
+    runId,
+    parentRunId,
 
     async complete(prompt, opts) {
       assertCapabilities(["CLI_INVOKE"], task.required_capabilities);
@@ -75,9 +111,42 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
     recordRun({ status, summary }) {
       assertCapabilities(["WRITE_STORAGE"], task.required_capabilities);
       const stored = redactSummaries === true ? redactSummary(summary) : summary;
-      const runId = store.recordRun({ pipeline: task.handler_id, status, summary: stored });
+      // The run row already exists (startRun, status 'running'); transition it to
+      // terminal here instead of inserting a fresh row. The id is the up-front runId.
+      store.finishRun({ runId, status, summary: stored });
       onRecordRun?.({ runId, status, summary: stored });
       return runId;
     },
+
+    emitProgress(event) {
+      assertCapabilities(["WRITE_STORAGE"], task.required_capabilities);
+      const payload: Record<string, unknown> = { message: event.message };
+      if (event.data !== undefined) payload.data = event.data;
+      // Ride the persisted row's id + ts on the bus payload so a live frame
+      // de-dupes against its backfilled twin (same id) on the client.
+      const eventId = store.appendRunEvent({ runId, kind: event.kind, payload });
+      deps.events?.emit(RUN_EVENT, {
+        id: eventId,
+        ts: Date.now(),
+        runId,
+        parentRunId,
+        kind: event.kind,
+        message: event.message,
+        ...(event.data !== undefined ? { data: event.data } : {}),
+      });
+    },
+
+    spawn(descriptor) {
+      assertCapabilities(["SPAWN_SUBAGENT"], task.required_capabilities);
+      if (deps.spawn === undefined) {
+        throw new SchedulerError(
+          "spawn_unavailable",
+          "this context was built without a spawn implementation (no registry/events wired)",
+        );
+      }
+      return deps.spawn(descriptor, self);
+    },
   };
+
+  return self;
 }

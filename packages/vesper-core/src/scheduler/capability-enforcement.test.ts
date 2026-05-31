@@ -15,6 +15,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CapabilityError } from "../capabilities/errors.ts";
 import { SqliteStore } from "../storage/store.ts";
+import { SchedulerError } from "./errors.ts";
 import { HandlerRegistry } from "./registry.ts";
 import { Scheduler } from "./scheduler.ts";
 
@@ -121,19 +122,26 @@ describe("Capability enforcement — deny-by-default", () => {
     db.close();
   });
 
-  test("manual run throws CapabilityError when grants is empty and cap is required", async () => {
+  test("manual run throws CapabilityError when the per-task grant lacks the required cap", async () => {
     let ran = false;
     registry.register("noop", () => {
       ran = true;
     });
 
-    const scheduler = new Scheduler({ db, registry, grants: [] });
+    // The host union COVERS the cap (so register passes the ceiling), but the
+    // per-task grant is then emptied — the per-task grant, not the union, gates run.
+    const scheduler = new Scheduler({ db, registry, grants: ["READ_VAULT"] });
     scheduler.register({
       id: "cap-task",
       kind: "manual",
       schedule_expr: "",
       handler_id: "noop",
       required_capabilities: ["READ_VAULT"],
+    });
+    new SqliteStore(db).upsertTaskGrant({
+      handler_id: "noop",
+      capabilities: [],
+      granted_by: "test",
     });
 
     const error = await scheduler.run("cap-task").catch((e: unknown) => e);
@@ -142,7 +150,7 @@ describe("Capability enforcement — deny-by-default", () => {
     expect(ran).toBe(false);
   });
 
-  test("scheduled tick records denial and disables task when grants is empty", async () => {
+  test("scheduled tick records denial and disables task when the per-task grant is empty", async () => {
     let ran = false;
     registry.register("noop", () => {
       ran = true;
@@ -152,7 +160,7 @@ describe("Capability enforcement — deny-by-default", () => {
       db,
       registry,
       clock: fakeClock(MATCH_DATE),
-      grants: [],
+      grants: ["WRITE_VAULT"],
     });
     scheduler.register({
       id: "sched-cap-task",
@@ -160,6 +168,11 @@ describe("Capability enforcement — deny-by-default", () => {
       schedule_expr: "30 9 15 1 3",
       handler_id: "noop",
       required_capabilities: ["WRITE_VAULT"],
+    });
+    new SqliteStore(db).upsertTaskGrant({
+      handler_id: "noop",
+      capabilities: [],
+      granted_by: "test",
     });
 
     await scheduler.tick(MATCH_DATE);
@@ -172,24 +185,32 @@ describe("Capability enforcement — deny-by-default", () => {
     expect(task?.last_run_at).toBe(MATCH_DATE.getTime());
   });
 
-  test("scheduler with no grants option also denies capability-requiring tasks", async () => {
+  test("scheduler with no grants option refuses registration of capability-requiring tasks", () => {
     let ran = false;
     registry.register("noop", () => {
       ran = true;
     });
 
-    // No grants option at all (defaults to [])
+    // No grants option at all (defaults to []). The host union is the ceiling, so a
+    // task requiring a cap the host never granted is refused at registration time.
     const scheduler = new Scheduler({ db, registry });
-    scheduler.register({
-      id: "default-deny-task",
-      kind: "manual",
-      schedule_expr: "",
-      handler_id: "noop",
-      required_capabilities: ["FS_WRITE"],
-    });
 
-    const error = await scheduler.run("default-deny-task").catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(CapabilityError);
+    let thrown: unknown;
+    try {
+      scheduler.register({
+        id: "default-deny-task",
+        kind: "manual",
+        schedule_expr: "",
+        handler_id: "noop",
+        required_capabilities: ["FS_WRITE"],
+      });
+    } catch (e: unknown) {
+      thrown = e;
+    }
+
+    expect(thrown).toBeInstanceOf(SchedulerError);
+    expect((thrown as SchedulerError).reason).toBe("grant_exceeds_ceiling");
+    expect(scheduler.list()).toHaveLength(0);
     expect(ran).toBe(false);
   });
 });
@@ -303,13 +324,15 @@ describe("Capability enforcement — partial denial", () => {
     db.close();
   });
 
-  test("throws CapabilityError listing only the denied capabilities", async () => {
+  test("throws CapabilityError listing only the per-task-denied capabilities", async () => {
     registry.register("noop", () => {});
 
+    // Host union covers both caps (register passes the ceiling). The per-task grant
+    // is then narrowed to READ_VAULT only, so the run denies just WRITE_VAULT.
     const scheduler = new Scheduler({
       db,
       registry,
-      grants: ["READ_VAULT"],
+      grants: ["READ_VAULT", "WRITE_VAULT"],
     });
     scheduler.register({
       id: "partial-deny",
@@ -317,6 +340,11 @@ describe("Capability enforcement — partial denial", () => {
       schedule_expr: "",
       handler_id: "noop",
       required_capabilities: ["READ_VAULT", "WRITE_VAULT"],
+    });
+    new SqliteStore(db).upsertTaskGrant({
+      handler_id: "noop",
+      capabilities: ["READ_VAULT"],
+      granted_by: "test",
     });
 
     const error = await scheduler.run("partial-deny").catch((e: unknown) => e);
@@ -351,7 +379,7 @@ describe("Capability enforcement — denial does not trigger backoff", () => {
       db,
       registry,
       clock: fakeClock(MATCH_DATE),
-      grants: [],
+      grants: ["NETWORK_FETCH"],
     });
     scheduler.register({
       id: "deny-no-backoff",
@@ -359,6 +387,11 @@ describe("Capability enforcement — denial does not trigger backoff", () => {
       schedule_expr: "30 9 15 1 3",
       handler_id: "noop",
       required_capabilities: ["NETWORK_FETCH"],
+    });
+    new SqliteStore(db).upsertTaskGrant({
+      handler_id: "noop",
+      capabilities: [],
+      granted_by: "test",
     });
 
     await scheduler.tick(MATCH_DATE);
@@ -380,7 +413,8 @@ describe("Persistence — required_capabilities round-trip", () => {
     const registry = new HandlerRegistry();
     registry.register("noop", () => {});
 
-    const scheduler = new Scheduler({ db, registry });
+    // Host union must cover the required caps so registration passes the ceiling.
+    const scheduler = new Scheduler({ db, registry, grants: ["READ_VAULT", "FS_WRITE"] });
     scheduler.register({
       id: "persist-caps",
       kind: "manual",
@@ -433,7 +467,9 @@ describe("Capability enforcement — tick isolation", () => {
       db,
       registry,
       clock: fakeClock(MATCH_DATE),
-      grants: ["FS_READ"], // only FS_READ granted
+      // Host union covers both caps so both tasks register; the per-task grant for
+      // the network task is then emptied so it (only) is denied at tick.
+      grants: ["FS_READ", "NETWORK_FETCH"],
     });
 
     scheduler.register({
@@ -441,7 +477,7 @@ describe("Capability enforcement — tick isolation", () => {
       kind: "cron",
       schedule_expr: "30 9 15 1 3",
       handler_id: "denied-handler",
-      required_capabilities: ["NETWORK_FETCH"], // not granted
+      required_capabilities: ["NETWORK_FETCH"],
     });
 
     scheduler.register({
@@ -450,6 +486,14 @@ describe("Capability enforcement — tick isolation", () => {
       schedule_expr: "30 9 15 1 3",
       handler_id: "ok-handler",
       required_capabilities: ["FS_READ"], // granted
+    });
+
+    // Revoke the network task's per-task grant — it must be denied while the
+    // FS_READ task (whose grant is intact) still runs.
+    new SqliteStore(db).upsertTaskGrant({
+      handler_id: "denied-handler",
+      capabilities: [],
+      granted_by: "test",
     });
 
     await scheduler.tick(MATCH_DATE);

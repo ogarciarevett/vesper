@@ -1,6 +1,10 @@
 import type { Capability } from "../capabilities/index.ts";
 import type { CompleteResult } from "../cli/types.ts";
 
+// Re-exported so scheduler consumers (and tests) can import the capability type
+// from the scheduler surface without reaching into the capabilities module.
+export type { Capability };
+
 /** The kind of trigger that activates a scheduled task. */
 export type TaskKind = "cron" | "event" | "manual";
 
@@ -98,17 +102,64 @@ export interface RunOutcome {
 }
 
 /**
+ * Describes a sub-agent a handler asks the runtime to spawn via
+ * {@link PipelineContext.spawn}. The requested `capabilities` must be a subset of
+ * the parent task's grant AND of the host ceiling (two-sided gate); they become
+ * the child context's `required_capabilities`.
+ */
+export interface SubAgentDescriptor {
+  /** Registered handler id to run as the child (resolved via the registry — no eval). */
+  readonly handlerId: string;
+  /** Human-readable label surfaced in the live trace. */
+  readonly label: string;
+  /** Transient params handed to the child context. */
+  readonly params?: RunParams;
+  /** Capabilities the child requires. Empty/omitted means none. */
+  readonly capabilities?: readonly Capability[];
+  /** Per-child duration cap (ms). Intersected (Math.min) with the parent's remaining budget. */
+  readonly maxDurationMs?: number;
+}
+
+/** Handle returned by {@link PipelineContext.spawn} for an in-flight sub-agent. */
+export interface SubAgentHandle {
+  /** Id of the child `runs` row (allocated up front, status `running`). */
+  readonly runId: string;
+  readonly handlerId: string;
+  readonly label: string;
+  /** Resolves with the child {@link RunOutcome}, or rejects if the child failed. */
+  readonly done: Promise<RunOutcome>;
+}
+
+/** The kind of a live-trace {@link ProgressEvent}. Structurally mirrors storage `RunEventKind`. */
+export type ProgressKind = "step" | "log" | "progress" | "spawn" | "complete";
+
+/** A single live-trace step a handler emits via {@link PipelineContext.emitProgress}. */
+export interface ProgressEvent {
+  readonly kind: ProgressKind;
+  readonly message: string;
+  /** Optional structured detail (e.g. percentage, child run id). */
+  readonly data?: Record<string, unknown>;
+}
+
+/**
  * Capability-gated context handed to a pipeline handler on each invocation.
  *
- * Beyond the task metadata (`task`, `now`, `params`) it exposes two
- * side-effecting methods, each gated on a capability the task must declare:
- * `complete` (`CLI_INVOKE`) and `recordRun` (`WRITE_STORAGE`).
+ * Beyond the task metadata (`task`, `now`, `params`, `runId`, `parentRunId`) it
+ * exposes side-effecting methods, each gated on a capability the task must declare:
+ * - `complete` (`CLI_INVOKE`)
+ * - `recordRun` (`WRITE_STORAGE`)
+ * - `emitProgress` (`WRITE_STORAGE`) — persists a live-trace step and publishes it
+ * - `spawn` (`SPAWN_SUBAGENT`) — runs a registered handler as an in-process child
  */
 export interface PipelineContext {
   readonly task: ScheduledTask;
   readonly now: Date;
   /** Transient run params (empty object for scheduled runs). */
   readonly params: RunParams;
+  /** Id of this run's `runs` row, allocated up front by the scheduler. */
+  readonly runId: string;
+  /** Parent run id when this is a sub-agent invocation; null for top-level runs. */
+  readonly parentRunId: string | null;
   /**
    * Send `prompt` through the resolved CLI adapter. Requires the task to declare
    * `CLI_INVOKE`. Resolution order: `opts.cli` -> run-override -> default.
@@ -116,6 +167,18 @@ export interface PipelineContext {
   complete(prompt: string, opts?: { readonly cli?: string }): Promise<CompleteResult>;
   /** Write a `runs` row for this pipeline. Requires the task to declare `WRITE_STORAGE`. */
   recordRun(input: { readonly status: string; readonly summary: string }): string;
+  /**
+   * Persist a live-trace step and publish it on the event bus. Requires the task
+   * to declare `WRITE_STORAGE`.
+   */
+  emitProgress(event: ProgressEvent): void;
+  /**
+   * Spawn a registered handler as an in-process sub-agent. Requires the task to
+   * declare `SPAWN_SUBAGENT`. The descriptor's capabilities must be a subset of
+   * this task's grant and of the host ceiling. Sub-agents cannot spawn
+   * sub-agents (depth = 1).
+   */
+  spawn(descriptor: SubAgentDescriptor): SubAgentHandle;
 }
 
 /**

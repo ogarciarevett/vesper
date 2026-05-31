@@ -94,6 +94,32 @@ describe("Scheduler — pipeline runtime context", () => {
     expect(task?.last_error).toBeNull();
   });
 
+  test("a handler that records a run then throws keeps the recorded status (no error clobber)", async () => {
+    registry.register("recorder", async (ctx) => {
+      ctx.recordRun({ status: "partial", summary: "committed before failure" });
+      throw new Error("boom after record");
+    });
+
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "recorder",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "recorder",
+      required_capabilities: ["WRITE_STORAGE"],
+    });
+
+    // The manual run propagates the handler error.
+    await expect(scheduler.run("recorder")).rejects.toThrow("boom after record");
+
+    // The run row keeps the handler-committed status: the catch path must NOT
+    // overwrite an already-finalized row with status 'error'.
+    const runs = new SqliteStore(db).listRuns({ pipeline: "recorder" });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("partial");
+    expect(runs[0]?.summary).toBe("committed before failure");
+  });
+
   test("emits a run:completed event carrying the RunOutcome", async () => {
     const { fn } = recordingComplete("pong");
     registry.register("echo", async (ctx) => {

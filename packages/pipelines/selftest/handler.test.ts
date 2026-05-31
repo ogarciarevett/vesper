@@ -61,6 +61,8 @@ function makeFakeContext(options: {
     },
     now: new Date(2025, 0, 1, 0, 0, 0, 0),
     params: options.params ?? {},
+    runId: "run-id",
+    parentRunId: null,
     async complete(prompt) {
       completeCalls.push({ prompt });
       return {
@@ -74,6 +76,10 @@ function makeFakeContext(options: {
     recordRun({ status, summary }) {
       recordedRuns.push({ status, summary });
       return "run-id";
+    },
+    emitProgress() {},
+    spawn() {
+      throw new Error("spawn is not supported in this fake context");
     },
   };
 
@@ -189,7 +195,9 @@ describe("registerPipelines", () => {
 
   test("registers the selftest handler and a manual selftest task with the right capabilities", () => {
     const registry = new HandlerRegistry();
-    const scheduler = new Scheduler({ db, registry });
+    // Match the production wiring (daemon-run.ts): the host union is the grant
+    // ceiling, so built-ins register cleanly (their caps are a subset by construction).
+    const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities() });
 
     registerPipelines(scheduler, registry);
 
@@ -203,7 +211,7 @@ describe("registerPipelines", () => {
 
   test("is idempotent — calling twice does not throw and yields a single selftest task", () => {
     const registry = new HandlerRegistry();
-    const scheduler = new Scheduler({ db, registry });
+    const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities() });
 
     registerPipelines(scheduler, registry);
     expect(() => registerPipelines(scheduler, registry)).not.toThrow();
@@ -217,7 +225,7 @@ describe("grantedCapabilities", () => {
   test("is the deduplicated union of every registered pipeline's required capabilities", () => {
     const granted = grantedCapabilities();
     // Every registered pipeline's declared capability must be covered by the grant.
-    for (const cap of selftestTaskInput.required_capabilities) {
+    for (const cap of selftestTaskInput.required_capabilities ?? []) {
       expect(granted).toContain(cap);
     }
     // No duplicates.

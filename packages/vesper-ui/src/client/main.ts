@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import type { Inhabitant, SceneGraph } from "../world/types.ts";
+import type { Inhabitant, RunEventInfo, RunTreeInfo, SceneGraph } from "../world/types.ts";
 import { resolveMark } from "./brand/index.ts";
 import type { HitRegion } from "./render.ts";
 import { drawSprite, SPRITE_W, spriteFor } from "./sprite.ts";
@@ -46,8 +46,13 @@ const cardStatus = el("card-status");
 const cardSummary = el("card-summary");
 const cardMeta = el("card-meta");
 const cardRun = el<HTMLButtonElement>("card-run");
+const cardWatch = el<HTMLButtonElement>("card-watch");
 const cardPortrait = el<HTMLCanvasElement>("card-portrait");
 const hint = el("hint");
+const activity = el("activity");
+const activityTitle = el("activity-title");
+const activityTree = el("activity-tree");
+const activityClose = el<HTMLButtonElement>("activity-close");
 
 /** Honor the OS "reduce motion" setting — a near-still, fully-legible scene. */
 const REDUCED_MOTION =
@@ -197,6 +202,10 @@ let hoverId: string | null = null;
 let selectedId: string | null = null;
 const workingIds = new Set<string>();
 const pops = new Map<string, number>();
+/** Latest run id seen for a pipeline (from a manual run outcome or a completed run). */
+const latestRunByPipeline = new Map<string, string>();
+/** The run id whose live trace the activity panel is currently following (or null). */
+let activityRunId: string | null = null;
 let w = 0;
 let h = 0;
 
@@ -267,6 +276,7 @@ function renderCard(): void {
     cardSummary.textContent = "This agent is running on your computer right now.";
     cardMeta.textContent = inh.liveSince !== null ? `up ${inh.liveSince}` : "running";
     cardRun.style.display = "none";
+    cardWatch.hidden = true;
     return;
   }
 
@@ -278,6 +288,8 @@ function renderCard(): void {
   cardMeta.textContent = `${inh.runCount} run${inh.runCount === 1 ? "" : "s"} · ${timeAgo(inh.lastRunAt)}`;
   cardRun.disabled = workingIds.has(inh.id);
   cardRun.textContent = workingIds.has(inh.id) ? "Running…" : "Run";
+  // Offer the live trace only once this pipeline has a run we can follow.
+  cardWatch.hidden = !latestRunByPipeline.has(inh.id);
 }
 
 function openCard(id: string): void {
@@ -314,11 +326,17 @@ async function runAgent(id: string): Promise<void> {
   renderCard();
   try {
     const res = await fetch(`/api/pipelines/${encodeURIComponent(id)}/run`, { method: "POST" });
-    const body = (await res.json()) as { summary?: string; status?: string; error?: string };
+    const body = (await res.json()) as {
+      summary?: string;
+      status?: string;
+      error?: string;
+      runId?: string | null;
+    };
     if (!res.ok) {
       toast(body.error ?? "run failed");
     } else {
       pops.set(id, performance.now());
+      if (typeof body.runId === "string") latestRunByPipeline.set(id, body.runId);
       toast(body.summary ?? `${id} ran`);
     }
   } catch {
@@ -332,6 +350,11 @@ async function runAgent(id: string): Promise<void> {
 
 cardRun.addEventListener("click", () => {
   if (selectedId !== null) void runAgent(selectedId);
+});
+cardWatch.addEventListener("click", () => {
+  if (selectedId === null) return;
+  const runId = latestRunByPipeline.get(selectedId);
+  if (runId !== undefined) void openActivity(runId);
 });
 
 function pick(x: number, y: number): HitRegion | null {
@@ -354,26 +377,184 @@ canvas.addEventListener("pointerdown", (e) => {
   else closeCard();
 });
 
-// Live channel: refresh + pop on every completed run.
+// ── Live activity panel ───────────────────────────────────────────────────────
+// The server assembles the run tree (GET /tree) and per-run trace (GET /events);
+// the client is a thin renderer that backfills via replay then appends live frames.
+
+let socket: WebSocket | null = null;
+
+/** Send a control frame to the live socket when it is open (no-op otherwise). */
+function wsSend(payload: Record<string, unknown>): void {
+  if (socket !== null && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(payload));
+  }
+}
+
+/** Render a small brand mark for a pipeline into an inline canvas (mirrors logoCanvas). */
+function markCanvas(id: string, px: number): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = px;
+  c.height = px;
+  const mctx = c.getContext("2d");
+  if (mctx !== null) resolveMark(id).draw(mctx, px / 2, px / 2, px * 0.38);
+  return c;
+}
+
+/** Append one trace event to a run row's scrolling log (newest at the bottom). */
+function appendEventRow(log: HTMLElement, ev: RunEventInfo): void {
+  const empty = log.querySelector(".empty");
+  if (empty !== null) empty.remove();
+  const row = document.createElement("div");
+  row.className = "aevent";
+  row.dataset.eventId = ev.id;
+  const kind = document.createElement("span");
+  kind.className = "akind";
+  kind.textContent = ev.kind;
+  const msg = document.createElement("span");
+  msg.className = "amsg";
+  msg.textContent = ev.message;
+  row.append(kind, msg);
+  log.append(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+/** Build one run row (header + step log) for the activity tree. */
+function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = isChild ? "arow child" : "arow";
+  row.dataset.runId = node.run.id;
+
+  const top = document.createElement("div");
+  top.className = "atop";
+  const mark = markCanvas(node.run.pipeline, 26);
+  mark.className = "amark";
+  const name = document.createElement("span");
+  name.className = "aname";
+  name.textContent = node.run.pipeline;
+  const status = document.createElement("span");
+  status.className = "astatus";
+  status.textContent = node.run.status;
+  top.append(mark, name, status);
+
+  const log = document.createElement("div");
+  log.className = "alog";
+  log.dataset.runId = node.run.id;
+  const own = events.filter((e) => e.runId === node.run.id);
+  if (own.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "no steps yet";
+    log.append(empty);
+  } else {
+    for (const ev of own) appendEventRow(log, ev);
+  }
+
+  row.append(top, log);
+  return row;
+}
+
+/** Find the open log element for a run id, if the activity panel is showing it. */
+function logFor(runId: string): HTMLElement | null {
+  return activityTree.querySelector<HTMLElement>(`.alog[data-run-id="${runId}"]`);
+}
+
+/** Render the full tree (root + children), backfilling each run's known events. */
+function renderActivity(tree: RunTreeInfo, events: RunEventInfo[]): void {
+  activityTree.replaceChildren();
+  activityTitle.textContent = tree.run.pipeline;
+  activityTree.append(buildRunRow(tree, false, events));
+  for (const child of tree.children) {
+    activityTree.append(buildRunRow(child, true, events));
+  }
+}
+
+/** Open the live activity panel for a run: subscribe, backfill via replay, render. */
+async function openActivity(runId: string): Promise<void> {
+  activityRunId = runId;
+  wsSend({ type: "subscribe", runId });
+  activity.classList.add("open");
+  activity.setAttribute("aria-hidden", "false");
+  try {
+    const [treeRes, eventsRes] = await Promise.all([
+      fetch(`/api/runs/${encodeURIComponent(runId)}/tree`),
+      fetch(`/api/runs/${encodeURIComponent(runId)}/events`),
+    ]);
+    if (!treeRes.ok) {
+      activityTree.replaceChildren();
+      activityTitle.textContent = "Activity";
+      return;
+    }
+    const tree = (await treeRes.json()) as RunTreeInfo;
+    const events = eventsRes.ok ? ((await eventsRes.json()) as RunEventInfo[]) : [];
+    if (activityRunId === runId) renderActivity(tree, events);
+  } catch {
+    // transient; live frames still append as they arrive.
+  }
+}
+
+function closeActivity(): void {
+  if (activityRunId !== null) wsSend({ type: "unsubscribe", runId: activityRunId });
+  activityRunId = null;
+  activity.classList.remove("open");
+  activity.setAttribute("aria-hidden", "true");
+}
+
+activityClose.addEventListener("click", closeActivity);
+
+/** A live trace frame arrived for the run the panel is following — append it. */
+function onLiveEvent(ev: RunEventInfo): void {
+  if (activityRunId === null) return;
+  const log = logFor(ev.runId);
+  if (log === null) return; // a child row we haven't backfilled yet — refresh the tree.
+  if (log.querySelector(`[data-event-id="${ev.id}"]`) !== null) return; // de-dupe replay overlap.
+  appendEventRow(log, ev);
+}
+
+// Live channel: refresh + pop on every completed run, and stream live trace frames.
 function connectLive(): void {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${window.location.host}/api/live`);
+  socket = ws;
+  ws.addEventListener("open", () => {
+    // Re-subscribe to any run the panel is still following after a reconnect.
+    if (activityRunId !== null) wsSend({ type: "subscribe", runId: activityRunId });
+  });
   ws.addEventListener("message", (ev) => {
     try {
-      const msg = JSON.parse(String(ev.data)) as { type?: string; outcome?: { taskId?: string } };
+      const msg = JSON.parse(String(ev.data)) as {
+        type?: string;
+        runId?: string;
+        kind?: string;
+        event?: RunEventInfo;
+        outcome?: { taskId?: string; runId?: string | null };
+      };
       if (msg.type === "run:completed" && msg.outcome?.taskId !== undefined) {
         pops.set(msg.outcome.taskId, performance.now());
+        if (typeof msg.outcome.runId === "string") {
+          latestRunByPipeline.set(msg.outcome.taskId, msg.outcome.runId);
+        }
         void refreshWorld();
       } else if (msg.type === "presence") {
         // An agent started or stopped on this machine — refresh the live echoes.
         void refreshWorld();
+      } else if (msg.type === "run:event:lite" && typeof msg.runId === "string") {
+        // A run stepped. If the panel follows it but the child row is missing, the
+        // tree gained a sub-agent — re-fetch the tree to backfill the new branch.
+        if (activityRunId !== null && logFor(msg.runId) === null) {
+          void openActivity(activityRunId);
+        }
+      } else if (msg.type === "run:event" && msg.event !== undefined) {
+        onLiveEvent(msg.event);
       }
     } catch {
       /* ignore */
     }
   });
   // Reconnect on drop (daemon restart, etc.).
-  ws.addEventListener("close", () => setTimeout(connectLive, 1500));
+  ws.addEventListener("close", () => {
+    socket = null;
+    setTimeout(connectLive, 1500);
+  });
 }
 
 function frame(t: number): void {

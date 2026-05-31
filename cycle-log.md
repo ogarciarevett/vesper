@@ -560,3 +560,42 @@ Theme switching plumbing (selectable themes), per `specs/pluggable-renderer.md`:
 - DEFERRED to Slice 4: the in-page elder theme PICKER overlay (a one-option picker has no value
   until cyberpunk lands as theme #2). 545 tests / 0 fail (+6 theme-store); Biome clean; bundles;
   CLI docs + README regenerated; live smoke green (unknown `?theme=` falls back, no error).
+
+## Sub-agent orchestration backbone — per-task grants (mig 005) + orchestration & live trace (mig 006) — SHIPPED
+
+`specs/vesper-personal-agent.md` umbrella, build slices 1-2 (`per-task-capability-grants.md`,
+`agent-orchestration-and-trace.md`). No Linear issue (workspace issue-capped) -> this entry + the commit
+are the record (Rule 11 fallback). Built by a multi-phase workflow, then verified + hardened by an
+adversarial review workflow whose NEEDS_FIXES verdict drove the fix pass below.
+
+- **Per-task grants (mig 005_task_grants):** `SPAWN_SUBAGENT` added (capability union -> 9, deny-by-default);
+  `scheduler.register()` writes a per-task grant (= declared `required_capabilities`) and enforces a CEILING
+  (grant SHALL be a subset of the host union, else `grant_exceeds_ceiling`); `#invoke` now gates on the
+  per-task grant (deny-by-default when no grant row) IN ADDITION to the host-union ceiling — a low-trust
+  pipeline no longer inherits another's caps. Built-in parity preserved. `store.{upsertTaskGrant,
+  getTaskGrant}` keyed by `(handler_id, content_hash)`.
+- **Orchestration + live trace (mig 006):** `runs.parent_run_id` + `status_updated_at` + `run_events`.
+  `ctx.spawn(descriptor)` runs registered handlers as in-process depth-1 children (two-sided cap gate:
+  descriptor caps ⊆ parent grant AND ⊆ host ceiling; `subagent_depth` + `maxFanout` guards); the run row
+  opens UP FRONT (`startRun` "running") so the tree is live the instant a child spawns. `ctx.emitProgress`
+  + `RUN_EVENT` bus -> `server.publish("agent:<runId>")` + a lite `world` pulse; `withTimeout`/
+  `remainingBudgetMs` factored into `timeout.ts`. UI: WS subscribe/unsubscribe (UUID-guarded) + replay
+  routes `GET /api/runs/:id/{events,tree}` (local-origin guarded) + a client activity-panel renderer.
+- **Review-and-fix pass:** (a) strict-`tsc` compile — a closure-mutated `let recorded` narrowed to `never`
+  (suite was green only because `bun:test`/CI don't run `tsc`); fixed via a ref object + `startRun` query
+  tuple + test-mock completeness. (b) double-finalize that clobbered a handler-committed run status on a
+  later throw -> `rowFinalized` gate (scheduler + subagent). (c) live `RUN_EVENT` frames now carry the
+  persisted `id` + `ts` (were undefined, so the client de-dupe dropped every step after the first); the
+  `complete` trace event is now persisted/replayable. (d) write-side `appendRunEvent` kind guard. Added
+  regression tests for the load-bearing UNTESTED invariants: child RUNTIME capability narrowing (a mutation
+  letting a child inherit the parent grant previously left all tests green), record-then-throw status
+  preservation, and a genuine pre-006 row reading back `parent_run_id` NULL.
+- VERIFIED FALSE POSITIVE: the capability-denial early return runs BEFORE `startRun`, so no "running" row
+  is stranded (the review's must-fix #6 did not hold against the actual code).
+- 613 tests / 0 fail (+4 over the as-built 609); Biome clean; no NEW tsc errors (16 PRE-EXISTING
+  Bun-vs-tsc friction errors remain in unrelated files; CI runs biome + bun test, not tsc); no provider SDKs.
+- DEFERRED (need Omar's call / tied to the chatbot-home UI redesign): client per-CHILD trace backfill +
+  `agent:<childRunId>` subscribe (the server contract is correct; only the canvas renderer fetches
+  root-only); `task_grants` keyed by handler_id vs task id (two tasks sharing a handler collide — a
+  design + migration decision); `emitProgress` redaction under `redactSummaries` (no spec SHALL); the
+  `/events` oldest-500 backfill cap.

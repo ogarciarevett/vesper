@@ -76,6 +76,11 @@ export function grantedCapabilities(): Capability[] {
  * `handler_id`), then register the task. Idempotent — an already-registered task
  * surfaces `duplicate_task`, which is swallowed; any other {@link SchedulerError}
  * (e.g. `unknown_handler`, `invalid_cron`) is re-thrown.
+ *
+ * `scheduler.register()` writes each pipeline's per-task capability grant (equal to
+ * its `required_capabilities`) — including on the swallowed `duplicate_task` path —
+ * so a daemon restart backfills grants for tasks persisted before per-task grants
+ * existed. No grant writing happens here; that would duplicate the ceiling check.
  */
 export function registerPipelines(scheduler: Scheduler, registry: HandlerRegistry): void {
   for (const descriptor of PIPELINES) {

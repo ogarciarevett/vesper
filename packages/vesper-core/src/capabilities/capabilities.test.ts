@@ -20,8 +20,8 @@ import { CapabilityError } from "./errors.ts";
 // ---------------------------------------------------------------------------
 
 describe("CAPABILITIES", () => {
-  test("contains all 8 capability values", () => {
-    expect(CAPABILITIES).toHaveLength(8);
+  test("contains all 9 capability values", () => {
+    expect(CAPABILITIES).toHaveLength(9);
     expect(CAPABILITIES).toContain("READ_VAULT");
     expect(CAPABILITIES).toContain("WRITE_VAULT");
     expect(CAPABILITIES).toContain("READ_STORAGE");
@@ -30,11 +30,17 @@ describe("CAPABILITIES", () => {
     expect(CAPABILITIES).toContain("NETWORK_FETCH");
     expect(CAPABILITIES).toContain("FS_READ");
     expect(CAPABILITIES).toContain("FS_WRITE");
+    expect(CAPABILITIES).toContain("SPAWN_SUBAGENT");
   });
 
   test("all values are unique", () => {
     const unique = new Set(CAPABILITIES);
     expect(unique.size).toBe(CAPABILITIES.length);
+  });
+
+  test("SPAWN_SUBAGENT is a recognised capability (deny-by-default: nothing grants it)", () => {
+    expect(isCapability("SPAWN_SUBAGENT")).toBe(true);
+    expect(CAPABILITIES).toContain("SPAWN_SUBAGENT");
   });
 });
 

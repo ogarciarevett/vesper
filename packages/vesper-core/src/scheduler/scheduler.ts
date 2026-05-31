@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { assertCapabilities } from "../capabilities/assert.ts";
+import { assertCapabilities, isGranted } from "../capabilities/assert.ts";
 import { CapabilityError } from "../capabilities/errors.ts";
 import type { Capability } from "../capabilities/index.ts";
 import { SqliteStore } from "../storage/store.ts";
@@ -11,12 +11,17 @@ import { SchedulerError } from "./errors.ts";
 import { EventBus, RUN_COMPLETED } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
+import { runSubAgent } from "./subagent.ts";
+import { withTimeout } from "./timeout.ts";
 import type {
   CompleteFn,
+  PipelineContext,
   RegisterTaskInput,
   RunOptions,
   RunOutcome,
   ScheduledTask,
+  SubAgentDescriptor,
+  SubAgentHandle,
 } from "./types.ts";
 
 /** Mutable sink the success path of `#invoke` fills so `run()` can return a {@link RunOutcome}. */
@@ -49,6 +54,12 @@ export interface SchedulerOptions {
    * is never stored in cleartext). Host policy from `~/.vesper/config.json`.
    */
   readonly redactSummaries?: boolean;
+  /**
+   * Maximum number of sub-agents a single parent run may spawn. Defaults to 8.
+   * Clamped to a minimum of 1. The (cap+1)th `ctx.spawn` throws
+   * `SchedulerError("fanout_exceeded")`.
+   */
+  readonly maxFanout?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +72,9 @@ const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_MAX_MS = 3_600_000;
 /** Number of consecutive failures before a task is dead-lettered and disabled. */
 const MAX_ATTEMPTS = 5;
+
+/** Default cap on the number of sub-agents a single parent run may spawn. */
+const DEFAULT_MAX_FANOUT = 8;
 
 /**
  * Compute exponential backoff delay for attempt number `attempt` (1-based).
@@ -97,6 +111,13 @@ export class Scheduler {
   readonly #store: Store;
   readonly #complete: CompleteFn | undefined;
   readonly #redactSummaries: boolean;
+  readonly #maxFanout: number;
+
+  /**
+   * Per-parent-run sub-agent counter, keyed by the top-level run id. Drives the
+   * fan-out cap; entries are short-lived (one parent invocation).
+   */
+  readonly #childCounts: Map<string, number> = new Map();
 
   /**
    * Map of task id -> bound event listener, so event tasks can be cleanly
@@ -119,6 +140,7 @@ export class Scheduler {
     this.#store = new SqliteStore(options.db);
     this.#complete = options.complete;
     this.#redactSummaries = options.redactSummaries ?? false;
+    this.#maxFanout = Math.max(1, options.maxFanout ?? DEFAULT_MAX_FANOUT);
 
     // Load all persisted tasks and wire up event subscriptions.
     const tasks = this.#persistence.list();
@@ -136,22 +158,52 @@ export class Scheduler {
   /**
    * Register a new task.
    *
+   * - Enforces the capability CEILING: `required_capabilities` must be a subset
+   *   of the host union (`grants`); otherwise nothing is persisted.
    * - Validates the cron expression for `kind = "cron"` tasks.
+   * - Persists the task and writes its per-task capability grant (the grant equals
+   *   the declared `required_capabilities`).
    * - Subscribes the handler to the event bus for `kind = "event"` tasks.
-   * - Persists the task to the database.
+   *
+   * The grant is upserted even when the task already exists (the daemon-restart
+   * path through `registerPipelines`), so an already-persisted built-in task that
+   * predates per-task grants gets its grant backfilled before `duplicate_task` is
+   * surfaced — without a grant the task would be silently denied at run time.
    *
    * Throws:
-   * - `SchedulerError("duplicate_task")` if `input.id` is already registered.
-   * - `SchedulerError("invalid_cron")` if `kind = "cron"` and the expression is invalid.
    * - `SchedulerError("unknown_handler")` if `handler_id` is not in the registry.
+   * - `SchedulerError("grant_exceeds_ceiling")` if a required capability is not in
+   *   the host union (persists nothing — no task row, no grant row).
+   * - `SchedulerError("invalid_cron")` if `kind = "cron"` and the expression is invalid.
+   * - `SchedulerError("duplicate_task")` if `input.id` is already registered (the
+   *   grant is still backfilled before this throw).
    */
   register(input: RegisterTaskInput): ScheduledTask {
     // Verify the handler exists before persisting.
     this.#registry.get(input.handler_id);
 
-    // Duplicate check.
+    const required = input.required_capabilities ?? [];
+
+    // Capability CEILING: a grant can never exceed the host union. Checked BEFORE
+    // any persistence so a ceiling failure leaves no task row and no grant row.
+    if (required.length > 0 && !isGranted(required, this.#grants)) {
+      const exceeded = required.filter((cap) => !this.#grants.includes(cap));
+      throw new SchedulerError(
+        "grant_exceeds_ceiling",
+        `task "${input.id}" requires capabilities outside the host grant ceiling: ${exceeded.join(", ")}`,
+      );
+    }
+
+    // Duplicate check. Even when the task already exists we backfill its grant
+    // (idempotent upsert) so a daemon restart against a pre-grant DB does not
+    // leave built-in tasks ungranted and therefore silently denied.
     const existing = this.#persistence.get(input.id);
     if (existing !== null) {
+      this.#store.upsertTaskGrant({
+        handler_id: input.handler_id,
+        capabilities: required,
+        granted_by: "register",
+      });
       throw new SchedulerError("duplicate_task", `task "${input.id}" is already registered`);
     }
 
@@ -175,10 +227,19 @@ export class Scheduler {
       runs_today_date: null,
       attempt_count: 0,
       next_attempt_at: null,
-      required_capabilities: input.required_capabilities ?? [],
+      required_capabilities: required,
     };
 
     this.#persistence.insert(task);
+
+    // Write the per-task grant atomically with the task. The grant equals the
+    // declared required_capabilities (built-in parity); enforcement reads THIS,
+    // not the host union, so a task can be denied a capability another task holds.
+    this.#store.upsertTaskGrant({
+      handler_id: input.handler_id,
+      capabilities: required,
+      granted_by: "register",
+    });
 
     // Wire up event subscription after successful persist.
     if (task.kind === "event" && task.enabled) {
@@ -372,9 +433,17 @@ export class Scheduler {
     }
 
     // -- capability enforcement (AFTER guardrail checks, BEFORE handler invocation) --
+    // Defense-in-depth: the host union (#grants) is the absolute CEILING, then the
+    // per-task grant is the tightening that actually gates this task. Both must
+    // pass. Deny-by-default is free: a task with no grant row reads as [] caps, so
+    // any required capability is denied (matches the unknown-handler refuse posture).
     if (current.required_capabilities.length > 0) {
+      const grant = this.#store.getTaskGrant(current.handler_id);
+      const granted = grant?.capabilities ?? [];
       try {
+        // Ceiling first so its error message attributes union-denied caps correctly.
         assertCapabilities(current.required_capabilities, this.#grants);
+        assertCapabilities(current.required_capabilities, granted);
       } catch (capErr) {
         if (capErr instanceof CapabilityError) {
           const errorMsg = capErr.message;
@@ -397,49 +466,66 @@ export class Scheduler {
     // -- track in-flight --
     this.#inFlight.set(current.id, (this.#inFlight.get(current.id) ?? 0) + 1);
 
+    // Allocate the run row up front (status 'running') so the live tree shows the
+    // run while it is still in flight, and sub-agents can attach to a real id.
+    const runId = this.#store.startRun({ pipeline: current.handler_id, parentRunId: null });
+    const startedAt = performance.now();
+    // Tracks whether the run row has reached a terminal status. Declared outside
+    // the try so the catch path can tell whether the handler already finalized the
+    // row via recordRun (and therefore must NOT be clobbered with status 'error').
+    let rowFinalized = false;
+
     try {
       const handler = this.#registry.get(current.handler_id);
-      let recorded: { runId: string; status: string; summary: string } | null = null;
+      // Hold the handler's recorded outcome in a ref object: the closure mutation
+      // in `onRecordRun` is invisible to control-flow narrowing, so reading
+      // `.current` after the awaited handler call yields the full `... | null` type
+      // (a bare `let` narrows to `never` here).
+      const recordedRef: { current: { runId: string; status: string; summary: string } | null } = {
+        current: null,
+      };
       const ctx = buildPipelineContext({
         task: current,
         now,
+        runId,
+        parentRunId: null,
         store: this.#store,
+        events: this.#events,
+        registry: this.#registry,
+        grants: this.#grants,
+        parentTaskCapabilities: current.required_capabilities,
+        maxFanout: this.#maxFanout,
+        spawn: this.#makeSpawn(runId, current, startedAt),
         onRecordRun: (record) => {
-          recorded = record;
+          recordedRef.current = record;
+          rowFinalized = true;
         },
         redactSummaries: this.#redactSummaries,
         ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
         ...(options !== undefined ? { options } : {}),
       });
 
-      // -- duration cap: race handler against timeout --
-      // The timer handle is cleared in `finally` so a fast handler never leaves a
-      // pending timer keeping the event loop alive up to max_duration_ms.
-      const startedAt = performance.now();
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      try {
-        if (current.max_duration_ms !== null) {
-          const timeoutMs = current.max_duration_ms;
-          const timeoutPromise = new Promise<never>((_resolve, reject) => {
-            timeoutHandle = setTimeout(
-              () =>
-                reject(new Error(`task "${current.id}" exceeded max_duration_ms (${timeoutMs}ms)`)),
-              timeoutMs,
-            );
-          });
-          await Promise.race([Promise.resolve(handler(ctx)), timeoutPromise]);
-        } else {
-          await Promise.resolve(handler(ctx));
-        }
-      } finally {
-        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-      }
+      // -- duration cap: race the handler against the shared timeout helper. --
+      await withTimeout(
+        () => handler(ctx),
+        current.max_duration_ms,
+        `task "${current.id}" exceeded max_duration_ms (${current.max_duration_ms}ms)`,
+      );
       const durationMs = Math.round(performance.now() - startedAt);
+      const recorded = recordedRef.current;
+
+      // Finalize the row even when the handler never called recordRun, so no
+      // dangling 'running' row is left behind.
+      if (recorded === null) {
+        this.#store.finishRun({ runId, status: "ok", summary: "" });
+        rowFinalized = true;
+      }
 
       // Build the outcome once — for the manual caller AND the run:completed event.
+      // runId is always the up-front allocated id (never null now).
       const outcome: RunOutcome = {
         taskId: current.id,
-        runId: recorded?.runId ?? null,
+        runId,
         status: recorded?.status ?? null,
         summary: recorded?.summary ?? null,
         cli: options?.cli ?? null,
@@ -476,6 +562,11 @@ export class Scheduler {
     } catch (cause) {
       const errorMsg = cause instanceof Error ? cause.message : String(cause);
       this.#persistence.updateLastRun(current.id, now.getTime(), errorMsg);
+      // Transition the up-front run row to a terminal 'error' state — UNLESS the
+      // handler already finalized it via recordRun (don't clobber its status).
+      if (!rowFinalized) {
+        this.#store.finishRun({ runId, status: "error", summary: errorMsg });
+      }
 
       if (isScheduled) {
         // Increment attempt_count and compute backoff.
@@ -515,7 +606,52 @@ export class Scheduler {
       } else {
         this.#inFlight.set(current.id, current_in_flight - 1);
       }
+      // Drop this run's fan-out counter (entry is per-invocation).
+      this.#childCounts.delete(runId);
     }
+  }
+
+  /**
+   * Build the `spawn` function injected into a top-level run's context. Each call
+   * increments the per-parent fan-out counter and delegates to {@link runSubAgent},
+   * which enforces the two-sided capability gate, depth, and fan-out, allocates the
+   * child row, and runs the registered child handler in-process.
+   *
+   * `parentRemainingMs` is computed at spawn time from the parent's
+   * `max_duration_ms` minus elapsed wall-clock, so a child inherits (never
+   * exceeds) the parent's remaining budget.
+   */
+  #makeSpawn(
+    parentRunId: string,
+    parentTask: ScheduledTask,
+    parentStartedAt: number,
+  ): (descriptor: SubAgentDescriptor, parent: PipelineContext) => SubAgentHandle {
+    return (descriptor, parent) => {
+      const parentRemainingMs =
+        parentTask.max_duration_ms === null
+          ? null
+          : Math.max(0, parentTask.max_duration_ms - (performance.now() - parentStartedAt));
+
+      const handle = runSubAgent({
+        descriptor,
+        parent,
+        store: this.#store,
+        events: this.#events,
+        registry: this.#registry,
+        grants: this.#grants,
+        parentTaskCapabilities: parentTask.required_capabilities,
+        ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
+        redactSummaries: this.#redactSummaries,
+        parentRemainingMs,
+        depth: 0,
+        maxFanout: this.#maxFanout,
+        childCount: () => this.#childCounts.get(parentRunId) ?? 0,
+      });
+
+      // Count this child only after runSubAgent accepted it (gates passed).
+      this.#childCounts.set(parentRunId, (this.#childCounts.get(parentRunId) ?? 0) + 1);
+      return handle;
+    };
   }
 
   #subscribeEvent(task: ScheduledTask): void {

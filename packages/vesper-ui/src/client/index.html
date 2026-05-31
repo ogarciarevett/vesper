@@ -105,6 +105,58 @@
 
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+      /* "See it work" — opens the live activity panel for a running agent. */
+      .watchbtn {
+        margin-top: 12px; width: 100%; min-height: 48px; padding: 12px; border-radius: 14px;
+        font-family: var(--sans); font-size: 17px; font-weight: 600; letter-spacing: .2px;
+        color: var(--ink); background: var(--surface-strong); border: 1px solid var(--border);
+        -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+        cursor: pointer; transition: transform .12s ease, background .12s ease;
+      }
+      .watchbtn:hover { transform: translateY(-1px); background: var(--surface); }
+      .watchbtn:active { transform: translateY(1px); }
+
+      /* Live activity panel — a frosted-glass tree of the run + its sub-agents, each
+         with a scrolling step log. Slides in from the left so it never overlaps the
+         right-hand inspect card. */
+      .activity {
+        position: fixed; left: 22px; top: 50%; transform: translateY(-50%) translateX(-26px);
+        width: min(420px, calc(100vw - 44px)); max-height: 84vh; overflow: auto;
+        background: var(--surface); border: 1px solid var(--border); border-radius: 22px;
+        -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+        box-shadow: var(--shadow); padding: 20px; opacity: 0; pointer-events: none;
+        color: var(--ink); transition: opacity .25s ease, transform .25s ease; z-index: 15;
+      }
+      .activity.open { opacity: 1; transform: translateY(-50%) translateX(0); pointer-events: auto; }
+      .activity .ahead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .activity .atitle { font-family: var(--display); font-size: 22px; font-weight: 700; margin: 0; }
+      .activity .aclose {
+        flex: none; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
+        background: var(--tint); color: var(--ink); font-size: 18px; line-height: 1; cursor: pointer;
+        transition: background .12s ease;
+      }
+      .activity .aclose:hover { background: var(--surface-strong); }
+      .activity .atree { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .arow {
+        border: 1px solid var(--border); border-radius: 16px; background: var(--tint); padding: 12px 14px;
+      }
+      .arow.child { margin-left: 18px; }
+      .arow .atop { display: flex; align-items: center; gap: 10px; }
+      .arow .amark { width: 26px; height: 26px; flex: none; image-rendering: pixelated; }
+      .arow .aname { font-size: 16px; font-weight: 600; }
+      .arow .astatus { font-size: 13px; color: var(--ink-soft); margin-left: auto; }
+      .arow .alog {
+        margin-top: 10px; display: flex; flex-direction: column; gap: 6px;
+        max-height: 180px; overflow-y: auto;
+      }
+      .alog .aevent { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+      .alog .akind {
+        flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+        color: var(--accent); min-width: 64px;
+      }
+      .alog .amsg { color: var(--ink); word-break: break-word; }
+      .alog .empty { font-size: 14px; color: var(--ink-soft); font-style: italic; }
+
       .toast {
         position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%) translateY(16px);
         background: var(--surface-strong); color: var(--ink); border: 1px solid var(--border); border-radius: 14px;
@@ -193,7 +245,7 @@
       .wizard .primary:active { transform: translateY(1px); }
 
       @media (prefers-reduced-motion: reduce) {
-        .card, .toast, .runbtn, .wizard-scrim, .wizard .primary, .wizard .ghost, .gcard, .chip, .dot-i { transition: none; }
+        .card, .toast, .runbtn, .watchbtn, .activity, .wizard-scrim, .wizard .primary, .wizard .ghost, .gcard, .chip, .dot-i { transition: none; }
         .dot.working, .step.active { animation: none; }
       }
     </style>
@@ -259,7 +311,17 @@
       <div class="summary" id="card-summary"></div>
       <div class="meta" id="card-meta"></div>
       <button type="button" class="runbtn" id="card-run">Run</button>
+      <button type="button" class="watchbtn" id="card-watch" hidden>See it work</button>
     </div>
+
+    <aside class="activity" id="activity" aria-hidden="true" aria-label="Live activity">
+      <div class="ahead">
+        <h2 class="atitle" id="activity-title">Activity</h2>
+        <button type="button" class="aclose" id="activity-close" aria-label="Close activity">&times;</button>
+      </div>
+      <div class="atree" id="activity-tree"></div>
+    </aside>
+
     <div class="toast" id="toast"></div>
     <script type="module" src="/app.js"></script>
   </body>

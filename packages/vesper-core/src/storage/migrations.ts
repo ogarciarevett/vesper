@@ -79,4 +79,33 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE scheduled_tasks ADD COLUMN required_capabilities TEXT NOT NULL DEFAULT '[]';
     `,
   },
+  {
+    id: "005_task_grants",
+    sql: `
+      CREATE TABLE IF NOT EXISTS task_grants (
+        handler_id        TEXT    NOT NULL,
+        content_hash      TEXT    NOT NULL DEFAULT '',
+        capabilities_json TEXT    NOT NULL DEFAULT '[]',
+        granted_at        INTEGER NOT NULL,
+        granted_by        TEXT    NOT NULL,
+        PRIMARY KEY (handler_id, content_hash)
+      );
+    `,
+  },
+  {
+    id: "006_agent_orchestration_and_trace",
+    sql: `
+      ALTER TABLE runs ADD COLUMN parent_run_id TEXT;
+      ALTER TABLE runs ADD COLUMN status_updated_at INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id);
+      CREATE TABLE IF NOT EXISTS run_events (
+        id           TEXT    PRIMARY KEY NOT NULL,
+        run_id       TEXT    NOT NULL,
+        ts           INTEGER NOT NULL,
+        kind         TEXT    NOT NULL,
+        payload_json TEXT    NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, ts);
+    `,
+  },
 ];

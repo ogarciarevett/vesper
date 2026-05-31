@@ -6,7 +6,11 @@ export type SchedulerErrorReason =
   | "duplicate_task"
   | "invalid_cron"
   | "unknown_handler"
-  | "cap_exceeded";
+  | "cap_exceeded"
+  | "grant_exceeds_ceiling"
+  | "subagent_depth"
+  | "fanout_exceeded"
+  | "spawn_unavailable";
 
 /** Raised by every scheduler operation, discriminated by {@link SchedulerError.reason}. */
 export class SchedulerError extends VesperError {

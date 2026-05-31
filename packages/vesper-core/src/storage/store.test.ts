@@ -4,8 +4,17 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StorageError } from "./errors.ts";
+import { MIGRATIONS } from "./migrations.ts";
 import { openStore, SqliteStore } from "./store.ts";
-import type { Store } from "./types.ts";
+import type { RunEventKind, Store } from "./types.ts";
+
+/** Split a migration's `sql` into individual statements (mirrors the runner). */
+function statementsOf(sql: string): string[] {
+  return sql
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
 
 /** Create a unique temp file path for each test; cleaned up in afterEach. */
 function tempDbPath(): string {
@@ -426,5 +435,457 @@ describe("SqliteStore (in-memory)", () => {
     expect(rows.length).toBe(countAfterFirst);
 
     store.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task_grants (migration 005) — per-task capability grants
+// ---------------------------------------------------------------------------
+
+describe("task_grants round-trip", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("upsertTaskGrant then getTaskGrant returns the grant with defaulted content_hash", () => {
+    store.upsertTaskGrant({ handler_id: "h", capabilities: ["FS_READ"], granted_by: "register" });
+
+    const grant = store.getTaskGrant("h");
+    expect(grant).not.toBeNull();
+    expect(grant?.handler_id).toBe("h");
+    expect(grant?.content_hash).toBe("");
+    expect(grant?.capabilities).toEqual(["FS_READ"]);
+    expect(grant?.granted_by).toBe("register");
+    expect(typeof grant?.granted_at).toBe("number");
+  });
+
+  test("getTaskGrant returns null for a missing handler", () => {
+    expect(store.getTaskGrant("missing")).toBeNull();
+  });
+
+  test("upsert again with different caps UPDATES the row (ON CONFLICT), no duplicate", () => {
+    store.upsertTaskGrant({ handler_id: "h", capabilities: ["FS_READ"], granted_by: "register" });
+    store.upsertTaskGrant({
+      handler_id: "h",
+      capabilities: ["FS_READ", "WRITE_STORAGE"],
+      granted_by: "forge",
+    });
+
+    const grant = store.getTaskGrant("h");
+    expect(grant?.capabilities).toEqual(["FS_READ", "WRITE_STORAGE"]);
+    expect(grant?.granted_by).toBe("forge");
+
+    // Composite PK (handler_id, '') means exactly one row for this handler+hash.
+    const db = new Database(path, { readonly: true });
+    const countRow = db
+      .query<{ c: number }, [string]>(
+        "SELECT count(*) AS c FROM task_grants WHERE handler_id = ? AND content_hash = ''",
+      )
+      .get("h");
+    db.close();
+    expect(countRow?.c).toBe(1);
+  });
+
+  test("content_hash variant is a SEPARATE row (composite PK)", () => {
+    store.upsertTaskGrant({ handler_id: "h", capabilities: ["FS_READ"], granted_by: "register" });
+    store.upsertTaskGrant({
+      handler_id: "h",
+      content_hash: "abc",
+      capabilities: ["NETWORK_FETCH"],
+      granted_by: "forge",
+    });
+
+    const empty = store.getTaskGrant("h");
+    const hashed = store.getTaskGrant("h", "abc");
+    expect(empty?.capabilities).toEqual(["FS_READ"]);
+    expect(hashed?.capabilities).toEqual(["NETWORK_FETCH"]);
+    expect(hashed?.content_hash).toBe("abc");
+  });
+
+  test("explicit granted_at is preserved on the row", () => {
+    store.upsertTaskGrant({
+      handler_id: "h",
+      capabilities: ["CLI_INVOKE"],
+      granted_by: "register",
+      granted_at: 12345,
+    });
+    expect(store.getTaskGrant("h")?.granted_at).toBe(12345);
+  });
+
+  test("empty capabilities round-trips as an empty array", () => {
+    store.upsertTaskGrant({ handler_id: "empty", capabilities: [], granted_by: "register" });
+    expect(store.getTaskGrant("empty")?.capabilities).toEqual([]);
+  });
+});
+
+describe("migration 005_task_grants idempotency", () => {
+  let path: string;
+
+  beforeEach(() => {
+    path = tempDbPath();
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("schema_migrations records 005_task_grants and reopen is a no-op", () => {
+    const first = openStore(path);
+    first.close();
+
+    // Reopen the same file — migrate() runs again and must not throw.
+    const second = openStore(path);
+    second.close();
+
+    const db = new Database(path, { readonly: true });
+    const ids = db
+      .query<{ id: string }, []>("SELECT id FROM schema_migrations")
+      .all()
+      .map((r) => r.id);
+    // The task_grants table must exist (querying it must not throw).
+    expect(() => db.query("SELECT count(*) FROM task_grants").get()).not.toThrow();
+    db.close();
+
+    expect(ids).toContain("005_task_grants");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migration 006 — agent orchestration + trace (forward-only)
+// ---------------------------------------------------------------------------
+
+describe("migration 006 — agent orchestration and trace", () => {
+  let path: string;
+
+  beforeEach(() => {
+    path = tempDbPath();
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("legacy recordRun rows read back with parentRunId null and statusUpdatedAt set", () => {
+    const store = openStore(path);
+    store.recordRun({ pipeline: "echo", status: "ok", summary: "legacy" });
+    store.close();
+
+    // Reopen and read it back through listRuns — the new columns must default
+    // safely (parent_run_id NULL; status_updated_at set by recordRun).
+    const reopened = openStore(path);
+    const runs = reopened.listRuns({ pipeline: "echo" });
+    reopened.close();
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.parentRunId).toBeNull();
+    expect(runs[0]?.statusUpdatedAt).not.toBeNull();
+    expect(typeof runs[0]?.statusUpdatedAt).toBe("number");
+  });
+
+  test("a runs row written BEFORE migration 006 reads back parent_run_id/status_updated_at NULL", () => {
+    // Forward-compat acceptance: a genuine pre-006 row (written before the
+    // ALTER TABLE runs ADD COLUMN) must read back with the new columns NULL.
+    // The old "legacy recordRun" test opens an ALL-migrations store first, so it
+    // never exercises this — here we apply 001..005, insert, THEN apply 006.
+    const db = new Database(":memory:");
+    const idx006 = MIGRATIONS.findIndex((m) => m.id.startsWith("006"));
+    expect(idx006).toBeGreaterThan(0);
+
+    for (const m of MIGRATIONS.slice(0, idx006)) {
+      for (const stmt of statementsOf(m.sql)) db.run(stmt);
+    }
+    // A pre-006 row: only the original five columns exist at this point.
+    db.run(
+      "INSERT INTO runs (id, ts, pipeline, status, summary) VALUES ('legacy-1', 1000, 'echo', 'ok', 'pre-006')",
+    );
+    // Now apply migration 006 (the ALTER TABLE ADD COLUMN + run_events).
+    for (const stmt of statementsOf(MIGRATIONS[idx006]?.sql ?? "")) db.run(stmt);
+
+    const runs = new SqliteStore(db).listRuns({ pipeline: "echo" });
+    db.close();
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe("legacy-1");
+    expect(runs[0]?.parentRunId).toBeNull();
+    expect(runs[0]?.statusUpdatedAt).toBeNull();
+  });
+
+  test("schema_migrations records 006 and reopen is idempotent (run_events queryable)", () => {
+    const first = openStore(path);
+    first.close();
+    const second = openStore(path);
+    second.close();
+
+    const db = new Database(path, { readonly: true });
+    const ids = db
+      .query<{ id: string }, []>("SELECT id FROM schema_migrations")
+      .all()
+      .map((r) => r.id);
+    expect(() => db.query("SELECT count(*) FROM run_events").get()).not.toThrow();
+    db.close();
+
+    expect(ids).toContain("006_agent_orchestration_and_trace");
+    // 006 applied exactly once even across two opens.
+    expect(ids.filter((id) => id === "006_agent_orchestration_and_trace")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startRun / finishRun
+// ---------------------------------------------------------------------------
+
+describe("startRun and finishRun", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("startRun inserts a running row with parentRunId and statusUpdatedAt set", () => {
+    const id = store.startRun({ pipeline: "p", parentRunId: "parent-1" });
+    const runs = store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe(id);
+    expect(runs[0]?.status).toBe("running");
+    expect(runs[0]?.summary).toBe("");
+    expect(runs[0]?.parentRunId).toBe("parent-1");
+    expect(runs[0]?.statusUpdatedAt).not.toBeNull();
+  });
+
+  test("startRun without parentRunId is a top-level run", () => {
+    store.startRun({ pipeline: "p" });
+    const top = store.listRuns({ parentRunId: null });
+    expect(top).toHaveLength(1);
+    expect(top[0]?.parentRunId).toBeNull();
+  });
+
+  test("startRun honors an explicit runId", () => {
+    const explicit = "11111111-2222-4333-8444-555555555555";
+    const id = store.startRun({ pipeline: "p", runId: explicit });
+    expect(id).toBe(explicit);
+    expect(store.listRuns()[0]?.id).toBe(explicit);
+  });
+
+  test("finishRun updates the same row to terminal status without duplicating", () => {
+    const id = store.startRun({ pipeline: "p" });
+    store.finishRun({ runId: id, status: "ok", summary: "done" });
+
+    const runs = store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe(id);
+    expect(runs[0]?.status).toBe("ok");
+    expect(runs[0]?.summary).toBe("done");
+  });
+
+  test("finishRun bumps status_updated_at", () => {
+    const id = store.startRun({ pipeline: "p" });
+    const started = store.listRuns()[0]?.statusUpdatedAt ?? 0;
+    Bun.sleepSync(2);
+    store.finishRun({ runId: id, status: "ok", summary: "" });
+    const finished = store.listRuns()[0]?.statusUpdatedAt ?? 0;
+    expect(finished).toBeGreaterThanOrEqual(started);
+  });
+
+  test("finishRun on an unknown runId throws StorageError query_failed", () => {
+    expect(() => store.finishRun({ runId: "nope", status: "ok", summary: "" })).toThrow(
+      StorageError,
+    );
+    try {
+      store.finishRun({ runId: "nope", status: "ok", summary: "" });
+    } catch (err) {
+      expect((err as StorageError).reason).toBe("query_failed");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendRunEvent / listRunEvents
+// ---------------------------------------------------------------------------
+
+describe("appendRunEvent and listRunEvents", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("appendRunEvent then listRunEvents returns the row with parsed payload + kind", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    const evtId = store.appendRunEvent({
+      runId,
+      kind: "step",
+      payload: { message: "doing a thing", data: { pct: 25 } },
+    });
+    expect(typeof evtId).toBe("string");
+
+    const events = store.listRunEvents({ runId });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.id).toBe(evtId);
+    expect(events[0]?.runId).toBe(runId);
+    expect(events[0]?.kind).toBe("step");
+    expect(events[0]?.payload).toEqual({ message: "doing a thing", data: { pct: 25 } });
+  });
+
+  test("an unknown kind column value throws StorageError", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    // Insert a corrupt row directly, bypassing the typed API.
+    const db = new Database(path);
+    db.query(
+      "INSERT INTO run_events (id, run_id, ts, kind, payload_json) VALUES (?, ?, ?, ?, ?)",
+    ).run(crypto.randomUUID(), runId, Date.now(), "bogus_kind", "{}");
+    db.close();
+
+    expect(() => store.listRunEvents({ runId })).toThrow(StorageError);
+  });
+
+  test("afterTs filters strictly (ts > afterTs) and orders ascending", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.appendRunEvent({ runId, kind: "step", payload: { n: 1 } });
+    Bun.sleepSync(2);
+    const cutoff = Date.now();
+    Bun.sleepSync(2);
+    store.appendRunEvent({ runId, kind: "step", payload: { n: 2 } });
+
+    const after = store.listRunEvents({ runId, afterTs: cutoff });
+    expect(after).toHaveLength(1);
+    expect(after[0]?.payload).toEqual({ n: 2 });
+
+    const all = store.listRunEvents({ runId });
+    expect(all).toHaveLength(2);
+    expect(all[0]?.payload).toEqual({ n: 1 });
+    expect(all[1]?.payload).toEqual({ n: 2 });
+  });
+
+  test("limit caps the number of returned events", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    for (let i = 0; i < 5; i++) {
+      store.appendRunEvent({ runId, kind: "log", payload: { i } });
+    }
+    expect(store.listRunEvents({ runId, limit: 2 })).toHaveLength(2);
+  });
+
+  test("appendRunEvent refuses an out-of-allowlist kind (write-side guard)", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    expect(() =>
+      // Cast past the typed boundary to simulate a JS caller or a future bad cast.
+      store.appendRunEvent({ runId, kind: "bogus_kind" as RunEventKind, payload: {} }),
+    ).toThrow(StorageError);
+    // The bad write was rejected, so the run's trace stays readable.
+    expect(store.listRunEvents({ runId })).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listRuns parentRunId three-way filter + runTree
+// ---------------------------------------------------------------------------
+
+describe("listRuns parentRunId filter and runTree", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("three-way parentRunId distinction (omitted vs null vs string)", () => {
+    const parent = store.startRun({ pipeline: "parent" });
+    const c1 = store.startRun({ pipeline: "child", parentRunId: parent });
+    const c2 = store.startRun({ pipeline: "child", parentRunId: parent });
+    const c3 = store.startRun({ pipeline: "child", parentRunId: parent });
+
+    // omitted = all rows
+    expect(store.listRuns()).toHaveLength(4);
+    // null = only top-level
+    const top = store.listRuns({ parentRunId: null });
+    expect(top).toHaveLength(1);
+    expect(top[0]?.id).toBe(parent);
+    // string = only that parent's children
+    const children = store.listRuns({ parentRunId: parent });
+    expect(children.map((r) => r.id).sort()).toEqual([c1, c2, c3].sort());
+  });
+
+  test("runTree assembles parent with its children", () => {
+    const parent = store.startRun({ pipeline: "parent" });
+    const c1 = store.startRun({ pipeline: "child", parentRunId: parent });
+    const c2 = store.startRun({ pipeline: "child", parentRunId: parent });
+    const c3 = store.startRun({ pipeline: "child", parentRunId: parent });
+
+    const tree = store.runTree(parent);
+    expect(tree).not.toBeNull();
+    expect(tree?.run.id).toBe(parent);
+    expect(tree?.children).toHaveLength(3);
+    const childIds = tree?.children.map((node) => node.run.id).sort();
+    expect(childIds).toEqual([c1, c2, c3].sort());
+    // Children are leaves (no grandchildren by spawn rules).
+    expect(tree?.children.every((node) => node.children.length === 0)).toBe(true);
+  });
+
+  test("runTree of an unknown id returns null", () => {
+    expect(store.runTree("does-not-exist")).toBeNull();
   });
 });

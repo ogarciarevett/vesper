@@ -2,9 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { CapabilityError } from "../capabilities/errors.ts";
 import { CLIError } from "../cli/errors.ts";
 import type { CompleteResult } from "../cli/types.ts";
-import type { RecordRunInput, Store } from "../storage/types.ts";
+import type { AppendRunEventInput, FinishRunInput, RunEventRow, Store } from "../storage/types.ts";
 import { buildPipelineContext, redactSummary } from "./context.ts";
-import type { Capability, CompleteFn, ScheduledTask } from "./types.ts";
+import { EventBus, RUN_EVENT } from "./events.ts";
+import type {
+  Capability,
+  CompleteFn,
+  PipelineContext,
+  ScheduledTask,
+  SubAgentHandle,
+} from "./types.ts";
+
+const RUN_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 // ---------------------------------------------------------------------------
 // Test doubles
@@ -34,9 +43,18 @@ function makeResult(text: string): CompleteResult {
   return { text, exit_code: 0, raw_stdout: text, raw_stderr: "", duration_ms: 1 };
 }
 
-/** Store double that captures recordRun calls. */
-function makeStore(): { store: Store; recorded: RecordRunInput[] } {
-  const recorded: RecordRunInput[] = [];
+/**
+ * Store double that captures the writes the context performs. The scheduler now
+ * drives the context through `startRun` + `finishRun` (not `recordRun`), so the
+ * double records `finishRun` and `appendRunEvent` calls.
+ */
+function makeStore(): {
+  store: Store;
+  finished: FinishRunInput[];
+  events: AppendRunEventInput[];
+} {
+  const finished: FinishRunInput[] = [];
+  const events: AppendRunEventInput[] = [];
   const store: Store = {
     migrate() {},
     appendEvent() {
@@ -45,19 +63,46 @@ function makeStore(): { store: Store; recorded: RecordRunInput[] } {
     listEvents() {
       return [];
     },
-    recordRun(input) {
-      recorded.push(input);
+    recordRun() {
       return "run-id";
+    },
+    startRun() {
+      return RUN_ID;
+    },
+    finishRun(input) {
+      finished.push(input);
+    },
+    appendRunEvent(input) {
+      events.push(input);
+      return "evt-id";
+    },
+    listRunEvents(): RunEventRow[] {
+      return [];
+    },
+    runTree() {
+      return null;
     },
     listRuns() {
       return [];
     },
+    upsertTaskGrant() {},
+    getTaskGrant() {
+      return null;
+    },
     close() {},
   };
-  return { store, recorded };
+  return { store, finished, events };
 }
 
 const NOW = new Date("2026-05-28T12:00:00.000Z");
+
+/**
+ * Thin wrapper that injects the now-required `runId`/`parentRunId` deps so the
+ * existing tests stay focused on the gated method under test.
+ */
+function build(deps: Omit<Parameters<typeof buildPipelineContext>[0], "runId" | "parentRunId">) {
+  return buildPipelineContext({ runId: RUN_ID, parentRunId: null, ...deps });
+}
 
 // ---------------------------------------------------------------------------
 // params
@@ -66,7 +111,7 @@ const NOW = new Date("2026-05-28T12:00:00.000Z");
 describe("buildPipelineContext params", () => {
   test("defaults to an empty object when no options given", () => {
     const { store } = makeStore();
-    const ctx = buildPipelineContext({ task: makeTask([]), now: NOW, store });
+    const ctx = build({ task: makeTask([]), now: NOW, store });
     expect(ctx.params).toEqual({});
     expect(ctx.now).toBe(NOW);
     expect(ctx.task.id).toBe("echo");
@@ -74,7 +119,7 @@ describe("buildPipelineContext params", () => {
 
   test("surfaces transient run params", () => {
     const { store } = makeStore();
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask([]),
       now: NOW,
       store,
@@ -91,7 +136,7 @@ describe("buildPipelineContext params", () => {
 describe("buildPipelineContext.complete", () => {
   test("throws CapabilityError when CLI_INVOKE is not declared", async () => {
     const { store } = makeStore();
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask(["WRITE_STORAGE"]),
       now: NOW,
       store,
@@ -107,14 +152,14 @@ describe("buildPipelineContext.complete", () => {
       calls++;
       return makeResult("x");
     };
-    const ctx = buildPipelineContext({ task: makeTask([]), now: NOW, store, complete });
+    const ctx = build({ task: makeTask([]), now: NOW, store, complete });
     await expect(ctx.complete("hi")).rejects.toBeInstanceOf(CapabilityError);
     expect(calls).toBe(0);
   });
 
   test("throws CLIError when no resolver is configured", async () => {
     const { store } = makeStore();
-    const ctx = buildPipelineContext({ task: makeTask(["CLI_INVOKE"]), now: NOW, store });
+    const ctx = build({ task: makeTask(["CLI_INVOKE"]), now: NOW, store });
     await expect(ctx.complete("hi")).rejects.toBeInstanceOf(CLIError);
   });
 
@@ -125,7 +170,7 @@ describe("buildPipelineContext.complete", () => {
       seen = prompt;
       return makeResult("pong");
     };
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask(["CLI_INVOKE"]),
       now: NOW,
       store,
@@ -143,7 +188,7 @@ describe("buildPipelineContext.complete", () => {
       resolvedCli = opts?.cli;
       return makeResult("ok");
     };
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask(["CLI_INVOKE"]),
       now: NOW,
       store,
@@ -161,7 +206,7 @@ describe("buildPipelineContext.complete", () => {
       resolvedCli = opts?.cli;
       return makeResult("ok");
     };
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask(["CLI_INVOKE"]),
       now: NOW,
       store,
@@ -179,7 +224,7 @@ describe("buildPipelineContext.complete", () => {
       opts = o;
       return makeResult("ok");
     };
-    const ctx = buildPipelineContext({
+    const ctx = build({
       task: makeTask(["CLI_INVOKE"]),
       now: NOW,
       store,
@@ -196,27 +241,28 @@ describe("buildPipelineContext.complete", () => {
 
 describe("buildPipelineContext.recordRun", () => {
   test("throws CapabilityError when WRITE_STORAGE is not declared", () => {
-    const { store, recorded } = makeStore();
-    const ctx = buildPipelineContext({ task: makeTask(["CLI_INVOKE"]), now: NOW, store });
+    const { store, finished } = makeStore();
+    const ctx = build({ task: makeTask(["CLI_INVOKE"]), now: NOW, store });
     expect(() => ctx.recordRun({ status: "ok", summary: "s" })).toThrow(CapabilityError);
-    expect(recorded).toHaveLength(0);
+    expect(finished).toHaveLength(0);
   });
 
-  test("records a run keyed by the task handler id", () => {
-    const { store, recorded } = makeStore();
-    const ctx = buildPipelineContext({
+  test("finishes the up-front run row and returns its id", () => {
+    const { store, finished } = makeStore();
+    const ctx = build({
       task: makeTask(["WRITE_STORAGE"]),
       now: NOW,
       store,
     });
     const id = ctx.recordRun({ status: "ok", summary: "done" });
-    expect(id).toBe("run-id");
-    expect(recorded).toEqual([{ pipeline: "echo", status: "ok", summary: "done" }]);
+    // The returned id is the scheduler-allocated up-front runId.
+    expect(id).toBe(RUN_ID);
+    expect(finished).toEqual([{ runId: RUN_ID, status: "ok", summary: "done" }]);
   });
 
   test("redacts the summary to size-only metadata when redactSummaries is set", () => {
-    const { store, recorded } = makeStore();
-    const ctx = buildPipelineContext({
+    const { store, finished } = makeStore();
+    const ctx = build({
       task: makeTask(["WRITE_STORAGE"]),
       now: NOW,
       store,
@@ -224,9 +270,108 @@ describe("buildPipelineContext.recordRun", () => {
     });
     ctx.recordRun({ status: "ok", summary: "sensitive raw output" });
     // Status kept verbatim; only the free-text summary is redacted.
-    expect(recorded[0]?.status).toBe("ok");
-    expect(recorded[0]?.summary).toBe("[redacted: 20 chars]");
-    expect(recorded[0]?.summary).not.toContain("sensitive");
+    expect(finished[0]?.status).toBe("ok");
+    expect(finished[0]?.summary).toBe("[redacted: 20 chars]");
+    expect(finished[0]?.summary).not.toContain("sensitive");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// emitProgress — capability gate + persist + publish
+// ---------------------------------------------------------------------------
+
+describe("buildPipelineContext.emitProgress", () => {
+  test("throws CapabilityError when WRITE_STORAGE is not declared", () => {
+    const { store, events } = makeStore();
+    const ctx = build({ task: makeTask(["CLI_INVOKE"]), now: NOW, store });
+    expect(() => ctx.emitProgress({ kind: "step", message: "x" })).toThrow(CapabilityError);
+    expect(events).toHaveLength(0);
+  });
+
+  test("persists a run_event and publishes a RUN_EVENT carrying runId/parentRunId", () => {
+    const { store, events } = makeStore();
+    const bus = new EventBus();
+    const published: unknown[] = [];
+    bus.on(RUN_EVENT, (p) => published.push(p));
+
+    const ctx = buildPipelineContext({
+      task: makeTask(["WRITE_STORAGE"]),
+      now: NOW,
+      runId: RUN_ID,
+      parentRunId: "parent-7",
+      store,
+      events: bus,
+    });
+    ctx.emitProgress({ kind: "step", message: "doing", data: { pct: 50 } });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.runId).toBe(RUN_ID);
+    expect(events[0]?.kind).toBe("step");
+    expect(events[0]?.payload).toEqual({ message: "doing", data: { pct: 50 } });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      runId: RUN_ID,
+      parentRunId: "parent-7",
+      kind: "step",
+      message: "doing",
+      data: { pct: 50 },
+    });
+  });
+
+  test("omits the data key when no data is supplied", () => {
+    const { store, events } = makeStore();
+    const ctx = build({ task: makeTask(["WRITE_STORAGE"]), now: NOW, store });
+    ctx.emitProgress({ kind: "log", message: "hi" });
+    expect(events[0]?.payload).toEqual({ message: "hi" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spawn — capability gate + injection
+// ---------------------------------------------------------------------------
+
+describe("buildPipelineContext.spawn", () => {
+  test("throws CapabilityError when SPAWN_SUBAGENT is not declared", () => {
+    const { store } = makeStore();
+    const ctx = build({ task: makeTask(["WRITE_STORAGE"]), now: NOW, store });
+    expect(() => ctx.spawn({ handlerId: "child", label: "x" })).toThrow(CapabilityError);
+  });
+
+  test("throws spawn_unavailable when no spawn fn is injected", () => {
+    const { store } = makeStore();
+    const ctx = build({ task: makeTask(["SPAWN_SUBAGENT"]), now: NOW, store });
+    expect(() => ctx.spawn({ handlerId: "child", label: "x" })).toThrow(/spawn_unavailable|spawn/);
+  });
+
+  test("delegates to the injected spawn fn passing the parent context", () => {
+    const { store } = makeStore();
+    let seenParent: PipelineContext | undefined;
+    const handle: SubAgentHandle = {
+      runId: "child-1",
+      handlerId: "child",
+      label: "x",
+      done: Promise.resolve({
+        taskId: "child",
+        runId: "child-1",
+        status: "ok",
+        summary: "",
+        cli: null,
+        durationMs: 0,
+      }),
+    };
+    const ctx = build({
+      task: makeTask(["SPAWN_SUBAGENT"]),
+      now: NOW,
+      store,
+      spawn: (_descriptor, parent) => {
+        seenParent = parent;
+        return handle;
+      },
+    });
+    const result = ctx.spawn({ handlerId: "child", label: "x" });
+    expect(result).toBe(handle);
+    expect(seenParent).toBe(ctx);
   });
 });
 
