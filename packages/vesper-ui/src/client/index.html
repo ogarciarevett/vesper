@@ -5,134 +5,246 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Vesper</title>
     <style>
+      /* Default surface = Glass (light, wonderful.ai language). Chrome is driven by
+         theme vars; the Hearth theme restores its warm palette under
+         [data-theme="hearth"]. Glass surfaces add a backdrop blur that is a no-op on
+         Hearth's opaque panels. */
       :root {
-        --hearth: #3a2a22;      /* deepest warm brown ink */
-        --wood: #6b4a35;        /* beams / frame / muted text */
-        --plaster: #c89a6a;     /* lit wall + card body */
-        --firelight: #ffb454;   /* fire, all-good, Run button */
-        --ember: #ffd98a;       /* highlights / hover */
-        --rug: #a8504a;         /* needs-a-look halo */
-        --dusk: #5a6b8c;        /* the one cool note */
-        --cream: #fff4e2;       /* high-contrast warm white */
-        --ok: #ffb454;
-        --err: #a8504a;
+        --ink: #2a2740;            /* primary text on the light field */
+        --ink-soft: #6b6880;       /* muted text / borders */
+        --surface: rgba(255, 255, 255, 0.62);   /* frosted card body */
+        --surface-strong: rgba(255, 255, 255, 0.8);
+        --border: rgba(255, 255, 255, 0.85);     /* hairline edge */
+        --accent: #7c5cff;         /* violet — primary action / all-good */
+        --accent-2: #9a7dff;       /* hover / highlight */
+        --rose: #ff6b8b;           /* needs-a-look */
+        --on-accent: #ffffff;      /* text on the accent button */
+        --bg: linear-gradient(160deg, #f4f3fe 0%, #eef2fe 52%, #fdeef5 100%);
+        --shadow: 0 18px 50px rgba(80, 70, 140, 0.18);
+        --display: system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --sans: system-ui, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --blur: blur(18px) saturate(1.15);
+        --tint: rgba(124, 92, 255, 0.08);
+      }
+      [data-theme="hearth"] {
+        --ink: #3a2a22;
+        --ink-soft: #6b4a35;
+        --surface: #c89a6a;
+        --surface-strong: #c89a6a;
+        --border: #6b4a35;
+        --accent: #ffb454;
+        --accent-2: #ffd98a;
+        --rose: #a8504a;
+        --on-accent: #3a2a22;
+        --bg: #2e211a;
         --shadow: 0 18px 50px rgba(46, 33, 26, 0.5);
-        --serif: Georgia, "Times New Roman", serif;
-        --sans: "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+        --display: Georgia, "Times New Roman", serif;
+        --blur: none;
+        --tint: rgba(46, 33, 26, 0.08);
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0; height: 100%; overflow: hidden;
-        background: #2e211a; color: var(--cream); font-family: var(--sans);
+        background: var(--bg); color: var(--ink); font-family: var(--sans);
         -webkit-font-smoothing: antialiased;
       }
       #scene { position: fixed; inset: 0; display: block; cursor: pointer; }
 
       .header {
-        position: fixed; top: 0; left: 0; right: 0; padding: 20px 26px;
+        position: fixed; top: 0; left: 0; right: 0; padding: 22px 28px;
         display: flex; align-items: baseline; gap: 14px; pointer-events: none;
       }
       .header h1 {
-        margin: 0; font-family: var(--serif); font-size: 30px; font-weight: 700;
-        color: var(--cream); text-shadow: 0 1px 10px rgba(46, 33, 26, 0.6);
+        margin: 0; font-family: var(--display); font-size: 30px; font-weight: 700;
+        letter-spacing: -0.01em; color: var(--ink);
       }
-      .header .sub { font-size: 15px; color: var(--ember); font-style: italic; }
+      .header .sub { font-size: 15px; color: var(--accent); }
 
       .hint {
         position: fixed; left: 0; right: 0; bottom: 18px; text-align: center;
-        font-size: 15px; color: var(--ember); pointer-events: none;
-        text-shadow: 0 1px 6px rgba(46, 33, 26, 0.7); transition: opacity .4s ease;
+        font-size: 15px; color: var(--ink-soft); pointer-events: none;
+        transition: opacity .4s ease;
       }
 
-      /* Inspect card — a warm "note left by the fire". */
+      /* Inspect card — a frosted glass panel. */
       .card {
         position: fixed; right: 22px; top: 50%; transform: translateY(-50%) translateX(26px);
         width: min(380px, calc(100vw - 44px)); max-height: 84vh; overflow: auto;
-        background: var(--plaster); border: 3px solid var(--wood); border-radius: 18px;
+        background: var(--surface); border: 1px solid var(--border); border-radius: 22px;
+        -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
         box-shadow: var(--shadow); padding: 22px; opacity: 0; pointer-events: none;
-        color: var(--hearth); transition: opacity .25s ease, transform .25s ease;
+        color: var(--ink); transition: opacity .25s ease, transform .25s ease;
       }
       .card.open { opacity: 1; transform: translateY(-50%) translateX(0); pointer-events: auto; }
       .card .top { display: flex; align-items: center; gap: 14px; }
       .card .portrait {
-        width: 64px; height: 64px; border-radius: 50%; background: rgba(46, 33, 26, 0.12);
-        border: 2px solid var(--wood); flex: none; image-rendering: pixelated;
+        width: 64px; height: 64px; border-radius: 50%; background: rgba(124, 92, 255, 0.1);
+        border: 1px solid var(--border); flex: none; image-rendering: pixelated;
       }
-      .card .name { font-family: var(--serif); font-size: 26px; font-weight: 700; margin: 0; }
+      .card .name { font-family: var(--display); font-size: 26px; font-weight: 700; margin: 0; }
       .card .status { display: inline-flex; align-items: center; gap: 8px; font-size: 20px;
-        color: var(--wood); margin: 14px 0 4px; }
-      .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--wood); }
-      .dot.ok { background: var(--firelight); box-shadow: 0 0 10px var(--firelight); }
-      .dot.error { background: var(--err); box-shadow: 0 0 10px var(--err); }
-      .dot.working { background: var(--ember); box-shadow: 0 0 10px var(--ember); animation: pulse 1s infinite; }
-      .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--wood); margin: 16px 0 6px; }
-      .card .summary { font-size: 18px; line-height: 1.55; color: var(--hearth);
-        background: rgba(46, 33, 26, 0.08); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; }
-      .card .meta { font-size: 14px; color: var(--wood); margin-top: 10px; }
+        color: var(--ink-soft); margin: 14px 0 4px; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--ink-soft); }
+      .dot.ok { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+      .dot.error { background: var(--rose); box-shadow: 0 0 10px var(--rose); }
+      .dot.working { background: var(--accent-2); box-shadow: 0 0 10px var(--accent-2); animation: pulse 1s infinite; }
+      .card .label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--ink-soft); margin: 16px 0 6px; }
+      .card .summary { font-size: 18px; line-height: 1.55; color: var(--ink);
+        background: var(--tint); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; }
+      .card .meta { font-size: 14px; color: var(--ink-soft); margin-top: 10px; }
       .runbtn {
         margin-top: 20px; width: 100%; min-height: 56px; padding: 14px; border: none; border-radius: 14px;
-        font-family: var(--sans); font-size: 20px; font-weight: 700; letter-spacing: .5px;
-        color: var(--hearth); background: var(--firelight); cursor: pointer;
+        font-family: var(--sans); font-size: 20px; font-weight: 700; letter-spacing: .3px;
+        color: var(--on-accent); background: var(--accent); cursor: pointer;
         transition: transform .12s ease, background .12s ease, box-shadow .12s ease;
-        box-shadow: 0 8px 20px rgba(168, 80, 74, 0.3);
+        box-shadow: 0 8px 22px rgba(124, 92, 255, 0.32);
       }
-      .runbtn:hover { background: var(--ember); transform: translateY(-1px); box-shadow: 0 10px 26px rgba(255, 180, 84, 0.45); }
+      .runbtn:hover { background: var(--accent-2); transform: translateY(-1px); box-shadow: 0 12px 28px rgba(124, 92, 255, 0.45); }
       .runbtn:active { transform: translateY(1px); }
-      .runbtn:disabled { filter: grayscale(0.5) brightness(0.92); cursor: default; transform: none; }
+      .runbtn:disabled { filter: grayscale(0.4) brightness(0.96); cursor: default; transform: none; }
 
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
       .toast {
         position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%) translateY(16px);
-        background: var(--plaster); color: var(--hearth); border: 2px solid var(--wood); border-radius: 12px;
+        background: var(--surface-strong); color: var(--ink); border: 1px solid var(--border); border-radius: 14px;
+        -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
         padding: 12px 20px; font-size: 15px; box-shadow: var(--shadow);
         opacity: 0; pointer-events: none; transition: opacity .3s ease, transform .3s ease;
       }
       .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-      /* First-launch welcome. */
-      .welcome-scrim {
+      /* First-run onboarding wizard — DARK glass (monopo language), theme-independent:
+         the focused dark setup space that opens over the light room. */
+      .wizard-scrim {
         position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-        background: rgba(28, 18, 12, 0.72); z-index: 10;
+        z-index: 20; padding: 20px;
+        background: radial-gradient(130% 120% at 18% -10%, rgba(46, 34, 92, 0.5), rgba(7, 7, 16, 0.86));
+        -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+        opacity: 0; transition: opacity .4s ease;
       }
-      .welcome-scrim.show { display: flex; }
-      .welcome {
-        width: min(440px, calc(100vw - 48px)); text-align: center; color: var(--hearth);
-        background: var(--plaster); border: 3px solid var(--wood); border-radius: 22px;
-        box-shadow: var(--shadow); padding: 36px 32px;
+      .wizard-scrim.show { display: flex; opacity: 1; }
+      .wizard {
+        position: relative; width: min(540px, calc(100vw - 40px));
+        background: rgba(22, 20, 40, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 30px;
+        -webkit-backdrop-filter: blur(26px) saturate(1.3); backdrop-filter: blur(26px) saturate(1.3);
+        box-shadow: 0 40px 100px rgba(0, 0, 0, 0.55); padding: 40px 40px 26px;
+        color: #f3f0ff; overflow: hidden;
       }
-      .welcome h2 { margin: 0 0 14px; font-family: var(--serif); font-size: 28px; }
-      .welcome p { margin: 0 0 12px; font-size: 17px; line-height: 1.6; }
-      .welcome p.dim { color: var(--wood); font-size: 15px; }
-      .welcome .go {
-        margin-top: 22px; min-height: 56px; padding: 15px 34px; border: none; border-radius: 14px;
-        font-family: var(--sans); font-size: 19px; font-weight: 700;
-        color: var(--hearth); background: var(--firelight); cursor: pointer;
-        box-shadow: 0 8px 20px rgba(168, 80, 74, 0.3); transition: transform .12s ease, background .12s ease;
+      .wizard::before {
+        content: ""; position: absolute; left: 0; right: 0; top: 0; height: 42%;
+        background: linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0));
+        pointer-events: none;
       }
-      .welcome .go:hover { background: var(--ember); transform: translateY(-1px); }
-      .welcome .go:active { transform: translateY(1px); }
+      .w-glow {
+        position: absolute; top: -34%; left: -12%; right: -12%; height: 64%;
+        background: linear-gradient(90deg, rgba(160, 224, 171, 0.5), rgba(255, 172, 46, 0.45) 50%, rgba(165, 45, 37, 0.42));
+        filter: blur(64px); opacity: 0.4; pointer-events: none;
+      }
+      .wizard h2 { margin: 0 0 12px; font-size: 27px; font-weight: 600; letter-spacing: -0.015em; position: relative; }
+      .wizard p { margin: 0 0 10px; font-size: 17px; line-height: 1.62; color: rgba(243, 240, 255, 0.9); position: relative; }
+      .wizard p.dim { color: rgba(243, 240, 255, 0.58); font-size: 15px; }
+      .wizard code { background: rgba(255, 255, 255, 0.12); padding: 2px 8px; border-radius: 7px; font-size: 14px; font-family: ui-monospace, monospace; }
+      .w-mark { font-size: 30px; color: #ffd98a; margin-bottom: 6px; position: relative; }
+      .step { display: none; min-height: 196px; }
+      .step.active { display: block; animation: stepIn .34s ease both; }
+      @keyframes stepIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+      .chips { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 4px; position: relative; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; min-height: 44px;
+        border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.06);
+        color: #f3f0ff; font-size: 15px; cursor: pointer; transition: background .15s ease, border-color .15s ease;
+      }
+      .chip:hover { background: rgba(255, 255, 255, 0.13); }
+      .chip.sel { background: rgba(124, 92, 255, 0.3); border-color: rgba(154, 125, 255, 0.75); }
+      .chip canvas { width: 22px; height: 22px; }
+
+      .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 18px 0 4px; position: relative; }
+      .gcard {
+        display: flex; gap: 12px; align-items: center; padding: 14px; border-radius: 18px; text-align: left;
+        border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.05); cursor: pointer;
+        transition: background .15s ease, border-color .15s ease, transform .12s ease;
+      }
+      .gcard:hover { background: rgba(255, 255, 255, 0.11); transform: translateY(-1px); }
+      .gcard.sel { border-color: rgba(154, 125, 255, 0.8); background: rgba(124, 92, 255, 0.2); }
+      .gcard canvas { width: 40px; height: 40px; flex: none; }
+      .gcard .gname { font-size: 16px; font-weight: 600; }
+      .gcard .gline { font-size: 13px; color: rgba(243, 240, 255, 0.62); margin-top: 2px; }
+
+      .w-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 24px; gap: 16px; position: relative; }
+      .dots { display: flex; gap: 8px; }
+      .dot-i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); transition: width .2s ease, background .2s ease; }
+      .dot-i.on { background: #9a7dff; width: 22px; border-radius: 4px; }
+      .w-nav { display: flex; gap: 10px; }
+      .wizard .ghost {
+        min-height: 48px; padding: 12px 22px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.28);
+        background: transparent; color: #f3f0ff; font-size: 16px; font-weight: 600; cursor: pointer; transition: background .15s ease;
+      }
+      .wizard .ghost:hover { background: rgba(255, 255, 255, 0.1); }
+      .wizard .ghost[hidden] { display: none; }
+      .wizard .primary {
+        min-height: 48px; padding: 12px 30px; border-radius: 999px; border: none;
+        background: linear-gradient(135deg, #9a7dff, #7c5cff); color: #fff; font-size: 16px; font-weight: 700;
+        cursor: pointer; box-shadow: 0 12px 32px rgba(124, 92, 255, 0.42); transition: transform .12s ease, box-shadow .12s ease;
+      }
+      .wizard .primary:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(124, 92, 255, 0.55); }
+      .wizard .primary:active { transform: translateY(1px); }
 
       @media (prefers-reduced-motion: reduce) {
-        .card, .toast, .runbtn, .welcome .go { transition: none; }
-        .dot.working { animation: none; }
+        .card, .toast, .runbtn, .wizard-scrim, .wizard .primary, .wizard .ghost, .gcard, .chip, .dot-i { transition: none; }
+        .dot.working, .step.active { animation: none; }
       }
     </style>
   </head>
   <body>
     <canvas id="scene"></canvas>
-    <div class="welcome-scrim" id="welcome">
-      <div class="welcome">
-        <h2>Welcome home</h2>
-        <p>These little friends by the fire are your helpers. They quietly do things for you.</p>
-        <p>Tap one to see what it just did — or tap <strong>Run</strong> to put it to work.</p>
-        <p class="dim">That's it. Nothing to set up.</p>
-        <button type="button" class="go" id="welcome-go">Let's go</button>
+
+    <div class="wizard-scrim" id="wizard" aria-hidden="true">
+      <div class="wizard" role="dialog" aria-modal="true" aria-label="Set up Vesper">
+        <div class="w-glow"></div>
+
+        <section class="step" data-step="0">
+          <div class="w-mark">&#10022;</div>
+          <h2>Welcome to Vesper</h2>
+          <p>A calm home for the little agents that quietly work for you &mdash; all on your own computer, nothing leaves the machine.</p>
+          <p class="dim">Let's set up your world. Takes about a minute.</p>
+        </section>
+
+        <section class="step" data-step="1">
+          <h2>Connect a helper-runner</h2>
+          <p>Vesper works through an AI assistant you already use. Pick the ones you have:</p>
+          <div class="chips" id="w-clis"></div>
+          <p class="dim">Don't have one yet? Install it in a terminal, e.g. <code>vesper cli install claude</code>.</p>
+        </section>
+
+        <section class="step" data-step="2">
+          <h2>Choose your first helpers</h2>
+          <p>These will live in your world. Tap to add &mdash; you can always add more later.</p>
+          <div class="gallery" id="w-gallery"></div>
+        </section>
+
+        <section class="step" data-step="3">
+          <div class="w-mark">&#10022;</div>
+          <h2>Your world is ready</h2>
+          <p>Tap a helper to see what it's been doing, or press <strong>Run</strong> to put it to work right now.</p>
+          <p class="dim">You can reopen this setup anytime by adding <code>?onboarding=1</code> to the address.</p>
+        </section>
+
+        <div class="w-foot">
+          <div class="dots" id="w-dots"></div>
+          <div class="w-nav">
+            <button type="button" class="ghost" id="w-back" hidden>Back</button>
+            <button type="button" class="primary" id="w-next">Begin</button>
+          </div>
+        </div>
       </div>
     </div>
+
     <div class="header">
       <h1>Vesper</h1>
-      <span class="sub">your helpers, by the fire</span>
+      <span class="sub">your world of helpers</span>
     </div>
     <div class="hint" id="hint">tap a helper to see what it's doing</div>
     <div class="card" id="card">

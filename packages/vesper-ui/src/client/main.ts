@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import type { Inhabitant, SceneGraph } from "../world/types.ts";
+import { resolveMark } from "./brand/index.ts";
 import type { HitRegion } from "./render.ts";
 import { drawSprite, SPRITE_W, spriteFor } from "./sprite.ts";
 import { resolveTheme } from "./theme/registry.ts";
@@ -10,7 +11,7 @@ import {
   readUrlTheme,
   storeTheme,
 } from "./theme-store.ts";
-import "./themes/index.ts"; // registers the built-in themes (hearth = default)
+import "./themes/index.ts"; // registers the built-in themes (glass = default)
 
 // Resolve the active renderer: URL ?theme= > the user's stored choice > the daemon's
 // configured default (<meta name="vesper-theme">) > the registry default. A ?theme=
@@ -24,6 +25,8 @@ const activeTheme = resolveTheme(
     serverDefault: readServerDefaultTheme(),
   }),
 );
+// Drive the DOM chrome palette (header, cards, toast) off the active theme.
+document.body.dataset.theme = activeTheme.id;
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -51,28 +54,142 @@ const REDUCED_MOTION =
   typeof window.matchMedia === "function" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const toastEl = el("toast");
-const welcome = el("welcome");
-const welcomeGo = el<HTMLButtonElement>("welcome-go");
 
-// First-launch welcome — shown once per browser (elder-first onboarding).
+// ── First-run onboarding wizard (dark glass) ──────────────────────────────────
+// Shown on first launch; force it anytime with ?onboarding=1 (so it's testable).
+// Completion is remembered per browser for now — server-side persistence is the
+// onboarding-wizard spec's Slice 1.
 const WELCOMED_KEY = "vesper:welcomed";
-function maybeWelcome(): void {
+
+interface HelperCard {
+  readonly id: string;
+  readonly name: string;
+  readonly line: string;
+}
+const WIZARD_CLIS: readonly string[] = ["claude", "codex", "opencode", "gemini"];
+const WIZARD_HELPERS: readonly HelperCard[] = [
+  { id: "claude", name: "Claude", line: "a careful helper for writing & planning" },
+  { id: "codex", name: "Codex", line: "a hands-on coding companion" },
+  { id: "opencode", name: "opencode", line: "an open coding agent" },
+  { id: "gemini", name: "Gemini", line: "Google's assistant" },
+  { id: "hermes", name: "Hermes", line: "a messenger that runs errands" },
+  { id: "selftest", name: "Self-test", line: "keeps an eye on Vesper's health" },
+];
+
+/** Render an agent's real brand mark (resolveMark is total) into a small canvas. */
+function logoCanvas(id: string, px: number): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = px;
+  c.height = px;
+  const lctx = c.getContext("2d");
+  if (lctx !== null) resolveMark(id).draw(lctx, px / 2, px / 2, px * 0.36);
+  return c;
+}
+
+const wizard = el("wizard");
+const wDots = el("w-dots");
+const wBack = el<HTMLButtonElement>("w-back");
+const wNext = el<HTMLButtonElement>("w-next");
+const wSteps = Array.from(wizard.querySelectorAll<HTMLElement>(".step"));
+const wCount = wSteps.length;
+let wStep = 0;
+const picked = new Set<string>();
+let wizardBuilt = false;
+
+function buildWizardContent(): void {
+  if (wizardBuilt) return;
+  wizardBuilt = true;
+  const clis = el("w-clis");
+  for (const id of WIZARD_CLIS) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "chip";
+    chip.append(logoCanvas(id, 22), document.createTextNode(id));
+    chip.addEventListener("click", () => chip.classList.toggle("sel"));
+    clis.append(chip);
+  }
+  const gallery = el("w-gallery");
+  for (const helper of WIZARD_HELPERS) {
+    const cardEl = document.createElement("button");
+    cardEl.type = "button";
+    cardEl.className = "gcard";
+    const text = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "gname";
+    name.textContent = helper.name;
+    const line = document.createElement("div");
+    line.className = "gline";
+    line.textContent = helper.line;
+    text.append(name, line);
+    cardEl.append(logoCanvas(helper.id, 40), text);
+    cardEl.addEventListener("click", () => {
+      cardEl.classList.toggle("sel");
+      if (picked.has(helper.id)) picked.delete(helper.id);
+      else picked.add(helper.id);
+    });
+    gallery.append(cardEl);
+  }
+  for (let i = 0; i < wCount; i++) {
+    const d = document.createElement("div");
+    d.className = "dot-i";
+    wDots.append(d);
+  }
+}
+
+function renderWizardStep(): void {
+  wSteps.forEach((s, i) => {
+    s.classList.toggle("active", i === wStep);
+  });
+  Array.from(wDots.children).forEach((d, i) => {
+    d.classList.toggle("on", i === wStep);
+  });
+  wBack.hidden = wStep === 0;
+  wNext.textContent = wStep === 0 ? "Begin" : wStep === wCount - 1 ? "Enter your world" : "Next";
+}
+
+function finishWizard(): void {
+  wizard.classList.remove("show");
+  wizard.setAttribute("aria-hidden", "true");
+  try {
+    window.localStorage.setItem(WELCOMED_KEY, "1");
+  } catch {
+    // private mode — selection just won't persist.
+  }
+  if (picked.size > 0) {
+    toast(`Added ${picked.size} helper${picked.size === 1 ? "" : "s"} — welcoming them in`);
+  }
+}
+
+wBack.addEventListener("click", () => {
+  if (wStep > 0) {
+    wStep--;
+    renderWizardStep();
+  }
+});
+wNext.addEventListener("click", () => {
+  if (wStep < wCount - 1) {
+    wStep++;
+    renderWizardStep();
+  } else {
+    finishWizard();
+  }
+});
+
+function startWizard(): void {
+  const forced = /[?&]onboarding=1\b/.test(window.location.search);
   let seen = false;
   try {
     seen = window.localStorage.getItem(WELCOMED_KEY) === "1";
   } catch {
     seen = false; // private mode / storage disabled → just show it.
   }
-  if (!seen) welcome.classList.add("show");
+  if (!forced && seen) return;
+  buildWizardContent();
+  wStep = 0;
+  renderWizardStep();
+  wizard.classList.add("show");
+  wizard.setAttribute("aria-hidden", "false");
 }
-welcomeGo.addEventListener("click", () => {
-  welcome.classList.remove("show");
-  try {
-    window.localStorage.setItem(WELCOMED_KEY, "1");
-  } catch {
-    // ignore
-  }
-});
 
 let scene: SceneGraph | null = null;
 let hits: HitRegion[] = [];
@@ -270,7 +387,7 @@ function frame(t: number): void {
   requestAnimationFrame(frame);
 }
 
-maybeWelcome();
+startWizard();
 void refreshWorld();
 connectLive();
 requestAnimationFrame(frame);
