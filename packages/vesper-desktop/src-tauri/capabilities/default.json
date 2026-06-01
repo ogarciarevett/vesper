@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core permissions for the main window. The window loads the local Vesper World over HTTP and uses no Tauri IPC in Slice 1, so only core defaults are granted.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

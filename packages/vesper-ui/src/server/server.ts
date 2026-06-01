@@ -10,6 +10,30 @@ import { buildSnapshot } from "./snapshot.ts";
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
 
+/**
+ * Prebuilt browser-client assets — the `index.html` shell and the bundled `app.js`.
+ * Supplied when the daemon runs as a `bun build --compile` binary, where the client
+ * source files and the runtime bundler are unavailable (the embedded FS has no
+ * `client/` dir). See {@link setEmbeddedClientAssets}.
+ */
+export interface ClientAssets {
+  readonly indexHtml: string;
+  readonly appJs: string;
+}
+
+/**
+ * Process-wide fallback client assets, set once by a compiled entrypoint before the
+ * daemon starts. `startUiServer` prefers an explicit `deps.clientAssets`, then this,
+ * then a from-disk build (the dev path) — so the compiled sidecar can embed the UI
+ * without threading assets through every daemon caller.
+ */
+let embeddedClientAssets: ClientAssets | null = null;
+
+/** Install process-wide {@link ClientAssets} (used by the compiled daemon sidecar). */
+export function setEmbeddedClientAssets(assets: ClientAssets): void {
+  embeddedClientAssets = assets;
+}
+
 /** Dependencies for {@link startUiServer}. */
 export interface UiServerDeps {
   readonly scheduler: Scheduler;
@@ -33,6 +57,13 @@ export interface UiServerDeps {
    * refused (403) — fail-closed; the chatbot/template surface is then read-only.
    */
   readonly approvalTokens?: ApprovalTokenStore;
+  /**
+   * Prebuilt client assets. When set, the server serves these instead of reading
+   * `client/index.html` and bundling `client/main.ts` from disk — required for the
+   * compiled (`bun build --compile`) daemon. Falls back to {@link setEmbeddedClientAssets},
+   * then to an on-disk build.
+   */
+  readonly clientAssets?: ClientAssets;
 }
 
 /** A running UI server. */
@@ -222,6 +253,25 @@ async function buildClientBundle(): Promise<string> {
 }
 
 /**
+ * Build the raw client assets from disk — the `index.html` shell and the bundled
+ * `app.js`, without theme stamping. Used by the dev path and by the desktop build
+ * step that embeds these into the compiled daemon; theme stamping happens later,
+ * per-process, in {@link startUiServer}.
+ */
+export async function buildClientAssets(): Promise<ClientAssets> {
+  const indexHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  const appJs = await buildClientBundle();
+  return { indexHtml, appJs };
+}
+
+/** Resolve client assets: explicit dep, then process-embedded, then an on-disk build. */
+async function resolveClientAssets(deps: UiServerDeps): Promise<ClientAssets> {
+  if (deps.clientAssets !== undefined) return deps.clientAssets;
+  if (embeddedClientAssets !== null) return embeddedClientAssets;
+  return await buildClientAssets();
+}
+
+/**
  * Start the local Vesper World UI server (HTTP + WebSocket) on `127.0.0.1`.
  *
  * Routes: `GET /` (client shell), `GET /app.js` (bundled client), `GET /api/world`
@@ -242,18 +292,18 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   const port = deps.port ?? 4317;
   const modules = new ModuleRegistry(deps.modules ?? []);
 
-  const baseHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  const assets = await resolveClientAssets(deps);
   // Stamp the configured default theme into the page (sanitized to [a-z0-9-]) so the
   // client can read it via <meta name="vesper-theme">. Shell templating only.
   const themeId = (deps.defaultTheme ?? "").replace(/[^a-z0-9-]/gi, "");
   const indexHtml =
     themeId.length > 0
-      ? baseHtml.replace(
+      ? assets.indexHtml.replace(
           "</head>",
           `    <meta name="vesper-theme" content="${themeId}" />\n  </head>`,
         )
-      : baseHtml;
-  const appJs = await buildClientBundle();
+      : assets.indexHtml;
+  const appJs = assets.appJs;
 
   // Live presence: the agents running on this machine right now. Detected once at
   // startup, then re-scanned on an interval; the latest set feeds every /api/world.

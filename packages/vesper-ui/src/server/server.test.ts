@@ -103,6 +103,38 @@ describe("UI server", () => {
     expect(await res.text()).toContain("Vesper");
   });
 
+  test("serves injected clientAssets verbatim, with runtime theme stamping", async () => {
+    // The compiled (`bun build --compile`) daemon has no client/ dir or bundler, so it
+    // injects prebuilt assets. Provided assets must be served as-is — not the on-disk
+    // build — while per-process theme stamping still applies to the injected shell.
+    const scheduler = new Scheduler({
+      db,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+      complete: fakeComplete,
+    });
+    const injected = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      defaultTheme: "glass",
+      clientAssets: {
+        indexHtml: "<!doctype html><html><head></head><body>INJECTED-SHELL</body></html>",
+        appJs: "/* INJECTED-APP-JS */ globalThis.__vesper_injected = true;",
+      },
+    });
+    try {
+      const html = await fetch(`${injected.url}/`).then((r) => r.text());
+      expect(html).toContain("INJECTED-SHELL");
+      expect(html).toContain('name="vesper-theme" content="glass"');
+      const js = await fetch(`${injected.url}/app.js`).then((r) => r.text());
+      expect(js).toContain("INJECTED-APP-JS");
+    } finally {
+      injected.stop();
+    }
+  });
+
   test("GET /app.js serves the bundled client", async () => {
     const res = await fetch(`${handle.url}/app.js`);
     expect(res.status).toBe(200);

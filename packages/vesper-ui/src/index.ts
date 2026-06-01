@@ -8,7 +8,14 @@ export {
   presenceDetectorFor,
   presenceSignature,
 } from "./server/presence.ts";
-export { startUiServer, type UiServerDeps, type UiServerHandle } from "./server/server.ts";
+export {
+  buildClientAssets,
+  type ClientAssets,
+  setEmbeddedClientAssets,
+  startUiServer,
+  type UiServerDeps,
+  type UiServerHandle,
+} from "./server/server.ts";
 export { buildSnapshot } from "./server/snapshot.ts";
 export { buildWorld } from "./world/build.ts";
 export { fnv1a, seededUnit } from "./world/hash.ts";
