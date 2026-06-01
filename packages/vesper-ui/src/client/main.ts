@@ -468,32 +468,54 @@ function renderActivity(tree: RunTreeInfo, events: RunEventInfo[]): void {
   }
 }
 
-/** Open the live activity panel for a run: subscribe, backfill via replay, render. */
+/** Every run id in a tree (root first, then descendants) — what we subscribe + backfill. */
+function collectRunIds(node: RunTreeInfo, into: string[]): void {
+  into.push(node.run.id);
+  for (const child of node.children) collectRunIds(child, into);
+}
+
+/** Run ids the panel is currently subscribed to (root + every sub-agent). */
+let subscribedRunIds: string[] = [];
+
+/**
+ * Open the live activity panel for a run: fetch the tree, then subscribe to AND
+ * backfill EVERY node (the root and each sub-agent) so each row streams its own
+ * steps live — not just the root. Live frames before a row renders are recovered by
+ * the per-node `/events` backfill (every event is persisted with the same id), and
+ * the de-dupe in {@link onLiveEvent} prevents double rows.
+ */
 async function openActivity(runId: string): Promise<void> {
   activityRunId = runId;
-  wsSend({ type: "subscribe", runId });
   activity.classList.add("open");
   activity.setAttribute("aria-hidden", "false");
   try {
-    const [treeRes, eventsRes] = await Promise.all([
-      fetch(`/api/runs/${encodeURIComponent(runId)}/tree`),
-      fetch(`/api/runs/${encodeURIComponent(runId)}/events`),
-    ]);
+    const treeRes = await fetch(`/api/runs/${encodeURIComponent(runId)}/tree`);
     if (!treeRes.ok) {
       activityTree.replaceChildren();
       activityTitle.textContent = "Activity";
       return;
     }
     const tree = (await treeRes.json()) as RunTreeInfo;
-    const events = eventsRes.ok ? ((await eventsRes.json()) as RunEventInfo[]) : [];
-    if (activityRunId === runId) renderActivity(tree, events);
+    const ids: string[] = [];
+    collectRunIds(tree, ids);
+    // Subscribe before backfilling so frames after the snapshot still land.
+    for (const id of ids) wsSend({ type: "subscribe", runId: id });
+    subscribedRunIds = ids;
+    const perNode = await Promise.all(
+      ids.map(async (id) => {
+        const res = await fetch(`/api/runs/${encodeURIComponent(id)}/events`);
+        return res.ok ? ((await res.json()) as RunEventInfo[]) : [];
+      }),
+    );
+    if (activityRunId === runId) renderActivity(tree, perNode.flat());
   } catch {
     // transient; live frames still append as they arrive.
   }
 }
 
 function closeActivity(): void {
-  if (activityRunId !== null) wsSend({ type: "unsubscribe", runId: activityRunId });
+  for (const id of subscribedRunIds) wsSend({ type: "unsubscribe", runId: id });
+  subscribedRunIds = [];
   activityRunId = null;
   activity.classList.remove("open");
   activity.setAttribute("aria-hidden", "true");
@@ -516,8 +538,9 @@ function connectLive(): void {
   const ws = new WebSocket(`${proto}://${window.location.host}/api/live`);
   socket = ws;
   ws.addEventListener("open", () => {
-    // Re-subscribe to any run the panel is still following after a reconnect.
-    if (activityRunId !== null) wsSend({ type: "subscribe", runId: activityRunId });
+    // Re-open the panel after a reconnect: re-subscribes every node AND re-backfills
+    // the steps missed during the disconnect window (not just a bare re-subscribe).
+    if (activityRunId !== null) void openActivity(activityRunId);
   });
   ws.addEventListener("message", (ev) => {
     try {

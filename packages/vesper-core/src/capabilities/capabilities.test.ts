@@ -20,8 +20,8 @@ import { CapabilityError } from "./errors.ts";
 // ---------------------------------------------------------------------------
 
 describe("CAPABILITIES", () => {
-  test("contains all 9 capability values", () => {
-    expect(CAPABILITIES).toHaveLength(9);
+  test("contains all 10 capability values", () => {
+    expect(CAPABILITIES).toHaveLength(10);
     expect(CAPABILITIES).toContain("READ_VAULT");
     expect(CAPABILITIES).toContain("WRITE_VAULT");
     expect(CAPABILITIES).toContain("READ_STORAGE");
@@ -31,6 +31,7 @@ describe("CAPABILITIES", () => {
     expect(CAPABILITIES).toContain("FS_READ");
     expect(CAPABILITIES).toContain("FS_WRITE");
     expect(CAPABILITIES).toContain("SPAWN_SUBAGENT");
+    expect(CAPABILITIES).toContain("PROCESS_RUN");
   });
 
   test("all values are unique", () => {
@@ -41,6 +42,11 @@ describe("CAPABILITIES", () => {
   test("SPAWN_SUBAGENT is a recognised capability (deny-by-default: nothing grants it)", () => {
     expect(isCapability("SPAWN_SUBAGENT")).toBe(true);
     expect(CAPABILITIES).toContain("SPAWN_SUBAGENT");
+  });
+
+  test("PROCESS_RUN is a recognised capability (deny-by-default: only acquisition-mode grants it)", () => {
+    expect(isCapability("PROCESS_RUN")).toBe(true);
+    expect(CAPABILITIES).toContain("PROCESS_RUN");
   });
 });
 

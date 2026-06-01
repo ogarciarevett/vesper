@@ -375,6 +375,42 @@ describe("buildPipelineContext.spawn", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// readSignals — capability gate + frozen snapshot
+// ---------------------------------------------------------------------------
+
+describe("buildPipelineContext.readSignals", () => {
+  test("throws CapabilityError when READ_STORAGE is not declared", () => {
+    const { store } = makeStore();
+    const ctx = build({ task: makeTask(["WRITE_STORAGE"]), now: NOW, store });
+    expect(() => ctx.readSignals()).toThrow(CapabilityError);
+  });
+
+  test("returns a frozen snapshot windowed to the look-back when READ_STORAGE is declared", () => {
+    const nowMs = NOW.getTime();
+    const recentRun = {
+      id: "r1",
+      ts: nowMs - 1_000,
+      pipeline: "p",
+      status: "error",
+      summary: "",
+      parentRunId: null,
+      statusUpdatedAt: nowMs - 1_000,
+    };
+    const oldRun = { ...recentRun, id: "r0", ts: nowMs - 1_000 * 60 * 60 * 48 };
+    const { store } = makeStore();
+    // Override listRuns to return one in-window and one out-of-window row.
+    const storeWithRuns: Store = { ...store, listRuns: () => [oldRun, recentRun] };
+    const ctx = build({ task: makeTask(["READ_STORAGE"]), now: NOW, store: storeWithRuns });
+
+    const signals = ctx.readSignals();
+    expect(Object.isFrozen(signals)).toBe(true);
+    expect(signals.runs).toHaveLength(1);
+    expect(signals.runs[0]?.id).toBe("r1");
+    expect(signals.rollups[0]).toEqual({ pipeline: "p", total: 1, errors: 1 });
+  });
+});
+
 describe("redactSummary", () => {
   test("replaces content with a size-only marker", () => {
     expect(redactSummary("hello")).toBe("[redacted: 5 chars]");

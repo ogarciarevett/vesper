@@ -1,3 +1,4 @@
+import type { EvolveSignals } from "../auto-evolve/types.ts";
 import type { Capability } from "../capabilities/index.ts";
 import type { CompleteResult } from "../cli/types.ts";
 
@@ -150,6 +151,7 @@ export interface ProgressEvent {
  * - `recordRun` (`WRITE_STORAGE`)
  * - `emitProgress` (`WRITE_STORAGE`) — persists a live-trace step and publishes it
  * - `spawn` (`SPAWN_SUBAGENT`) — runs a registered handler as an in-process child
+ * - `readSignals` (`READ_STORAGE`) — returns a frozen runtime-health snapshot
  */
 export interface PipelineContext {
   readonly task: ScheduledTask;
@@ -179,6 +181,13 @@ export interface PipelineContext {
    * sub-agents (depth = 1).
    */
   spawn(descriptor: SubAgentDescriptor): SubAgentHandle;
+  /**
+   * Read a frozen, read-only snapshot of runtime-health signals (recent runs,
+   * dead-lettered tasks, per-task last errors) over `[now - windowMs, now]`.
+   * Requires the task to declare `READ_STORAGE`. The snapshot is detached from the
+   * live store — a handler cannot read past its window or write through it.
+   */
+  readSignals(opts?: { readonly windowMs?: number }): EvolveSignals;
 }
 
 /**

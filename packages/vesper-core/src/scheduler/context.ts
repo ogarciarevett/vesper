@@ -1,3 +1,4 @@
+import { gatherSignals } from "../auto-evolve/gather.ts";
 import { assertCapabilities } from "../capabilities/assert.ts";
 import type { Capability } from "../capabilities/index.ts";
 import { CLIError } from "../cli/errors.ts";
@@ -5,6 +6,7 @@ import type { Store } from "../storage/types.ts";
 import { SchedulerError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
 import { RUN_EVENT } from "./events.ts";
+import type { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
 import type {
   CompleteFn,
@@ -14,6 +16,9 @@ import type {
   SubAgentDescriptor,
   SubAgentHandle,
 } from "./types.ts";
+
+/** Default look-back window for {@link PipelineContext.readSignals} (24 hours). */
+const DEFAULT_SIGNAL_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
 /**
  * Replace a run summary with size-only metadata, so raw CLI output is never
@@ -32,8 +37,14 @@ export interface BuildContextDeps {
   readonly runId: string;
   /** Parent run id for a sub-agent invocation; null for a top-level run. */
   readonly parentRunId: string | null;
-  /** Storage used by {@link PipelineContext.recordRun}/`emitProgress`. */
+  /** Storage used by {@link PipelineContext.recordRun}/`emitProgress`/`readSignals`. */
   readonly store: Store;
+  /**
+   * Task persistence used by {@link PipelineContext.readSignals} to read
+   * dead-lettered tasks + per-task last errors. When absent, `readSignals` reports
+   * only run-derived signals (failed-task/last-error sections read empty).
+   */
+  readonly taskPersistence?: TaskPersistence;
   /**
    * Resolver that shells out to a CLI adapter. Injected by the host (CLI layer)
    * so `vesper-core` stays free of config/path concerns. When absent, calling
@@ -145,6 +156,21 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         );
       }
       return deps.spawn(descriptor, self);
+    },
+
+    readSignals(opts) {
+      assertCapabilities(["READ_STORAGE"], task.required_capabilities);
+      const windowMs = opts?.windowMs ?? DEFAULT_SIGNAL_WINDOW_MS;
+      const sinceMs = now.getTime() - windowMs;
+      const persistence = deps.taskPersistence;
+      return gatherSignals(
+        {
+          listRuns: (options) => store.listRuns(options),
+          listFailedTasks: () => persistence?.listFailedTasks() ?? [],
+          listTasks: () => persistence?.list() ?? [],
+        },
+        { sinceMs },
+      );
     },
   };
 

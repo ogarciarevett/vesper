@@ -155,6 +155,9 @@ export function runSubAgent(args: RunSubAgentArgs): SubAgentHandle {
     parentTaskCapabilities: descriptorCaps,
     maxFanout,
     ...(complete !== undefined ? { complete } : {}),
+    // Thread the descriptor's params through to the child's `ctx.params`, so a
+    // parent can parameterize each sub-agent it fans out.
+    ...(descriptor.params !== undefined ? { options: { params: descriptor.params } } : {}),
     redactSummaries,
     onRecordRun: (record) => {
       recordedRef.current = record;

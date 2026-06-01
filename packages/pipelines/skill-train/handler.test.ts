@@ -44,6 +44,9 @@ function makeCtx(params: Record<string, unknown>): {
     spawn() {
       throw new Error("spawn is not supported in this fake context");
     },
+    readSignals() {
+      throw new Error("readSignals is not supported in this fake context");
+    },
   };
   return { ctx, recorded };
 }

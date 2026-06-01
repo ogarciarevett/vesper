@@ -81,6 +81,9 @@ function makeFakeContext(options: {
     spawn() {
       throw new Error("spawn is not supported in this fake context");
     },
+    readSignals() {
+      throw new Error("readSignals is not supported in this fake context");
+    },
   };
 
   return { ctx, completeCalls, recordedRuns };
@@ -207,6 +210,22 @@ describe("registerPipelines", () => {
     expect(selftestTask).toBeDefined();
     expect(selftestTask?.required_capabilities).toContain("CLI_INVOKE");
     expect(selftestTask?.required_capabilities).toContain("WRITE_STORAGE");
+  });
+
+  test("registers auto-evolve as a disabled daily cron task (opt-in)", () => {
+    const registry = new HandlerRegistry();
+    const scheduler = new Scheduler({ db, registry, grants: grantedCapabilities() });
+
+    registerPipelines(scheduler, registry);
+
+    const evolve = scheduler.list().find((task) => task.id === "auto-evolve");
+    expect(evolve).toBeDefined();
+    expect(evolve?.kind).toBe("cron");
+    expect(evolve?.schedule_expr).toBe("0 3 * * *");
+    expect(evolve?.enabled).toBe(false);
+    expect(evolve?.max_runs_per_day).toBe(1);
+    // Default declared set is proposal-only — PROCESS_RUN is NOT granted out of the box.
+    expect(evolve?.required_capabilities).not.toContain("PROCESS_RUN");
   });
 
   test("is idempotent — calling twice does not throw and yields a single selftest task", () => {

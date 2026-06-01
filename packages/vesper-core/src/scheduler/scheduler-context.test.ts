@@ -187,6 +187,53 @@ describe("Scheduler — pipeline runtime context", () => {
     expect(calls).toHaveLength(0);
   });
 
+  test("readSignals returns real run rows from the live store + task persistence", async () => {
+    // Seed an error run row so the gather window has something to roll up.
+    const store = new SqliteStore(db);
+    store.recordRun({ pipeline: "broken", status: "error", summary: "kaboom" });
+
+    let rollupErrors: number | undefined;
+    let taskErrorCount: number | undefined;
+    registry.register("evolve", (ctx) => {
+      const signals = ctx.readSignals();
+      rollupErrors = signals.rollups.find((r) => r.pipeline === "broken")?.errors;
+      taskErrorCount = signals.taskErrors.length;
+      ctx.recordRun({ status: "ok", summary: signals.digest.slice(0, 50) });
+    });
+
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "evolve",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "evolve",
+      required_capabilities: ["READ_STORAGE", "WRITE_STORAGE"],
+    });
+
+    await scheduler.run("evolve");
+
+    // The gather seam saw the seeded error run via the live store.
+    expect(rollupErrors).toBe(1);
+    // No task carries a last_error yet, so taskErrors is empty (persistence wired, just empty).
+    expect(taskErrorCount).toBe(0);
+  });
+
+  test("readSignals is refused when READ_STORAGE is not declared", async () => {
+    registry.register("noread", (ctx) => {
+      ctx.readSignals();
+    });
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "noread",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "noread",
+      required_capabilities: ["WRITE_STORAGE"],
+    });
+
+    await expect(scheduler.run("noread")).rejects.toBeInstanceOf(CapabilityError);
+  });
+
   test("scheduled runs get empty params and no cli override", async () => {
     const { fn, calls } = recordingComplete();
     let seenParams: Readonly<Record<string, unknown>> | undefined;

@@ -1,6 +1,7 @@
 import type { Registrable } from "../dispatch.ts";
 import { cliGroup } from "./cli.ts";
 import { daemonGroup } from "./daemon.ts";
+import { evolveGroup } from "./evolve.ts";
 import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
 import { runsGroup } from "./runs.ts";
@@ -22,4 +23,5 @@ export const registry: readonly Registrable[] = [
   scheduleGroup,
   runsGroup,
   skillGroup,
+  evolveGroup,
 ];

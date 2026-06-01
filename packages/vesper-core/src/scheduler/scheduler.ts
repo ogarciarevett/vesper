@@ -490,6 +490,7 @@ export class Scheduler {
         runId,
         parentRunId: null,
         store: this.#store,
+        taskPersistence: this.#persistence,
         events: this.#events,
         registry: this.#registry,
         grants: this.#grants,

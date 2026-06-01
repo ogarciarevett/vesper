@@ -16,6 +16,18 @@ import {
   SchedulerError,
   type TaskHandler,
 } from "@vesper/core";
+import {
+  AUTO_EVOLVE_HANDLER_ID,
+  autoEvolveHandler,
+  autoEvolveTaskInput,
+} from "./auto-evolve/handler.ts";
+import {
+  DEMO_WORKER_HANDLER_ID,
+  demoWorkerHandler,
+  ORCHESTRATOR_DEMO_HANDLER_ID,
+  orchestratorDemoHandler,
+  orchestratorDemoTaskInput,
+} from "./orchestrator-demo/handler.ts";
 import { SELFTEST_HANDLER_ID, selftestHandler, selftestTaskInput } from "./selftest/handler.ts";
 import {
   SKILL_TRAIN_HANDLER_ID,
@@ -24,6 +36,14 @@ import {
 } from "./skill-train/handler.ts";
 
 export {
+  AUTO_EVOLVE_HANDLER_ID,
+  autoEvolveHandler,
+  autoEvolveTaskInput,
+  DEMO_WORKER_HANDLER_ID,
+  demoWorkerHandler,
+  ORCHESTRATOR_DEMO_HANDLER_ID,
+  orchestratorDemoHandler,
+  orchestratorDemoTaskInput,
   SELFTEST_HANDLER_ID,
   SKILL_TRAIN_HANDLER_ID,
   selftestHandler,
@@ -32,11 +52,16 @@ export {
   skillTrainTaskInput,
 };
 
-/** Self-contained description of a built-in pipeline: handler + task wiring. */
+/**
+ * Self-contained description of a built-in pipeline: a handler plus optional task
+ * wiring. A descriptor with `taskInput` registers a runnable/scheduled task; one
+ * WITHOUT (e.g. a spawn-only sub-agent worker) registers the handler only, so a
+ * parent pipeline can `ctx.spawn` it by id without it appearing in `schedule list`.
+ */
 export interface PipelineDescriptor {
   readonly handlerId: string;
   readonly handler: TaskHandler;
-  readonly taskInput: RegisterTaskInput;
+  readonly taskInput?: RegisterTaskInput;
 }
 
 /** Every built-in Vesper pipeline. */
@@ -51,6 +76,25 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handler: skillTrainHandler,
     taskInput: skillTrainTaskInput,
   },
+  {
+    handlerId: ORCHESTRATOR_DEMO_HANDLER_ID,
+    handler: orchestratorDemoHandler,
+    taskInput: orchestratorDemoTaskInput,
+  },
+  // Self-reflection: a daily, OPT-IN (enabled:false) cron that reads the runtime's
+  // own health, reflects via the user's CLI, and writes proposals to `events`. The
+  // default declared set is proposal-only (no PROCESS_RUN) — it cannot shell out.
+  {
+    handlerId: AUTO_EVOLVE_HANDLER_ID,
+    handler: autoEvolveHandler,
+    taskInput: autoEvolveTaskInput,
+  },
+  // Spawn-only worker: registered as a handler so orchestrator-demo can `ctx.spawn`
+  // it, but it has no task of its own (not shown in `schedule list`).
+  {
+    handlerId: DEMO_WORKER_HANDLER_ID,
+    handler: demoWorkerHandler,
+  },
 ];
 
 /**
@@ -62,7 +106,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
 export function grantedCapabilities(): Capability[] {
   const granted = new Set<Capability>();
   for (const descriptor of PIPELINES) {
-    for (const capability of descriptor.taskInput.required_capabilities ?? []) {
+    for (const capability of descriptor.taskInput?.required_capabilities ?? []) {
       granted.add(capability);
     }
   }
@@ -85,6 +129,9 @@ export function grantedCapabilities(): Capability[] {
 export function registerPipelines(scheduler: Scheduler, registry: HandlerRegistry): void {
   for (const descriptor of PIPELINES) {
     registry.register(descriptor.handlerId, descriptor.handler);
+
+    // Spawn-only descriptors (no taskInput) register the handler only.
+    if (descriptor.taskInput === undefined) continue;
 
     try {
       scheduler.register(descriptor.taskInput);

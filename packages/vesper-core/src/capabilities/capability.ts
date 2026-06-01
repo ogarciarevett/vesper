@@ -14,7 +14,8 @@ export type Capability =
   | "NETWORK_FETCH"
   | "FS_READ"
   | "FS_WRITE"
-  | "SPAWN_SUBAGENT";
+  | "SPAWN_SUBAGENT"
+  | "PROCESS_RUN";
 
 /** Exhaustive tuple of all {@link Capability} values. */
 export const CAPABILITIES: readonly Capability[] = [
@@ -27,6 +28,7 @@ export const CAPABILITIES: readonly Capability[] = [
   "FS_READ",
   "FS_WRITE",
   "SPAWN_SUBAGENT",
+  "PROCESS_RUN",
 ] as const;
 
 /** Type-guard: returns true iff `x` is a known {@link Capability} value. */
