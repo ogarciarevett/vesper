@@ -651,3 +651,42 @@ the still-blocked forge sandbox (it executes no LLM-generated code).
 - DEFERRED (per spec Out of Scope): applying `fix_proposal`s (software-engineer pipeline); authoring
   pipeline CODE (forge, blocked on the sandbox); `NETWORK_FETCH`; a RAG/embedding index over signals;
   an elder-surface approval tile; auto-running skill-train on a newly acquired skill.
+
+## Chatbot home + editable pipeline templates (#9 + #4) — SHIPPED
+
+`specs/chatbot-home.md`. The post-onboarding HOME is a simple chatbot; the canvas demotes to a side
+activity panel. Built on the SHIPPED orchestration+trace backbone (consumed, not modified). No Linear
+issue (issue-capped) -> specs/ + this entry + the commit are the record (Rule 11). Built by a
+Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed by the lead.
+
+- **Storage (migration `007_chat_home`):** `chat_sessions`, `chat_turns`, `pipeline_templates` + index;
+  6 synchronous `Store` methods (createSession, appendTurn, listSessions, listTurns, getTemplate,
+  upsertTemplate) mirroring the existing JSON/assert helpers. `chat_turns.run_id` links an assistant
+  turn to the run that produced it (transcript bubble == activity-tree root, same data two ways).
+- **Router pipeline (`packages/pipelines/router/`):** a chat message is a manual `scheduler.run("router",
+  {params})` (the EXISTING run path — no new execution). The handler classifies via `ctx.complete` to ONE
+  label, maps it through a FIXED ALLOWLIST to a registered handler id, and `ctx.spawn`s it; an
+  unmapped/free-form label -> a clarify turn (NO spawn, no dynamic id — preserves no-eval). caps
+  [CLI_INVOKE, WRITE_STORAGE, SPAWN_SUBAGENT].
+- **Routes + WS:** `POST /api/chat`, `GET /api/chat/sessions`, `GET /api/chat/sessions/:id/turns`,
+  `GET /api/pipelines`, `GET|PUT /api/pipelines/:id/template`; a `chat:<sessionId>` WS topic next to the
+  backbone's `agent:<runId>` (one socket, UUID-guarded). Client: transcript home + demoted activity
+  panel (reuses the runTree render) + a templates screen; reduced-motion + WCAG-AA honored.
+- **Security:** a minimal out-of-band approval-token module (`vesper-core/src/approval/`, CSPRNG
+  single-use) gates `PUT /template`; `POST /api/approval/request` mints a code and prints it to the daemon
+  TTY (out-of-band — never in the HTTP response, so a local app can mint but not read it). The future
+  `security-hardening.md` adopts this seam. `POST /api/chat` is isLocalRequest-only (deliberate parity
+  with the existing run route, so the canvas Run button still works).
+- **Lead fixes over the workflow output** (2 real HIGHs the review caught): (1) `mint()` had NO production
+  caller -> added the `/api/approval/request` mint path + test, so template editing actually works
+  end-to-end; (2) the router ignored template `default_params` -> it now MERGES the target's editable
+  default_params UNDER the user message (injected via `registerPipelines({getDefaultParams})` -> daemon
+  wires `store.getTemplate`), so an edited template configures its runs (#4). + router/server tests.
+- 724 tests / 0 fail (+ chatbot suite + the 2 fix tests); Biome clean; no NEW tsc errors (same 16
+  pre-existing); no provider SDKs.
+- NOTED (not blocking): `PUT /template` persists prompt/params only — schedule/caps stay editable via
+  `vesper schedule` (the spec's Design-Decisions/Acceptance contradict each other; took the conservative
+  path). Migration `007_chat_home` takes the next free id; the umbrella ledger's planning reservation
+  (007=rag) shifts to 008/009 for rag/eval (gitignored planning doc, reconciled at their build).
+- DEFERRED (per spec Out of Scope): the security-hardening §C token formalization; multi-session history
+  UX; capability editing from the templates UI; token-level streaming.

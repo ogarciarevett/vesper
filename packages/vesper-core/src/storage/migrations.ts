@@ -108,4 +108,34 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_run_events_run ON run_events(run_id, ts);
     `,
   },
+  {
+    // The chatbot-home surface: a chat session + transcript model and per-pipeline
+    // editable templates. Each assistant turn carries the `run_id` of the router run
+    // that produced it, so a transcript bubble and the live activity tree are the same
+    // data viewed two ways. Forward-only; appended AFTER 006. The `events` table stays
+    // the durable audit trail (every chat/template mutation also writes an event there).
+    id: "007_chat_home",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id    TEXT    PRIMARY KEY NOT NULL,
+        ts    INTEGER NOT NULL,
+        title TEXT    NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS chat_turns (
+        id         TEXT    PRIMARY KEY NOT NULL,
+        session_id TEXT    NOT NULL,
+        ts         INTEGER NOT NULL,
+        role       TEXT    NOT NULL,
+        text       TEXT    NOT NULL,
+        run_id     TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_turns_session ON chat_turns(session_id, ts);
+      CREATE TABLE IF NOT EXISTS pipeline_templates (
+        handler_id     TEXT    PRIMARY KEY NOT NULL,
+        prompt         TEXT    NOT NULL DEFAULT '',
+        default_params TEXT    NOT NULL DEFAULT '{}',
+        updated_at     INTEGER NOT NULL
+      );
+    `,
+  },
 ];

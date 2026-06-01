@@ -1,8 +1,10 @@
 /// <reference lib="dom" />
 import type { Inhabitant, RunEventInfo, RunTreeInfo, SceneGraph } from "../world/types.ts";
 import { resolveMark } from "./brand/index.ts";
+import { ChatHome } from "./chat.ts";
 import type { HitRegion } from "./render.ts";
 import { drawSprite, SPRITE_W, spriteFor } from "./sprite.ts";
+import { TemplatesScreen } from "./templates.ts";
 import { resolveTheme } from "./theme/registry.ts";
 import {
   pickThemeId,
@@ -541,6 +543,8 @@ function connectLive(): void {
     // Re-open the panel after a reconnect: re-subscribes every node AND re-backfills
     // the steps missed during the disconnect window (not just a bare re-subscribe).
     if (activityRunId !== null) void openActivity(activityRunId);
+    // Re-subscribe + re-backfill the active chat session over the same socket.
+    chat.onSocketOpen();
   });
   ws.addEventListener("message", (ev) => {
     try {
@@ -550,8 +554,15 @@ function connectLive(): void {
         kind?: string;
         event?: RunEventInfo;
         outcome?: { taskId?: string; runId?: string | null };
+        turnId?: string;
+        role?: string;
+        text?: string;
       };
-      if (msg.type === "run:completed" && msg.outcome?.taskId !== undefined) {
+      if (msg.type === "chat:turn") {
+        // A transcript turn arrived on the chat:<sessionId> topic — the chat home
+        // de-dupes against its backfilled twin, so a double-deliver is harmless.
+        chat.onLiveTurn(msg);
+      } else if (msg.type === "run:completed" && msg.outcome?.taskId !== undefined) {
         pops.set(msg.outcome.taskId, performance.now());
         if (typeof msg.outcome.runId === "string") {
           latestRunByPipeline.set(msg.outcome.taskId, msg.outcome.runId);
@@ -591,7 +602,33 @@ function frame(t: number): void {
   requestAnimationFrame(frame);
 }
 
+// ── Chatbot home + Helpers (templates) ────────────────────────────────────────
+// The transcript is the HOME; the canvas world demotes to the activity panel. Both
+// modules REUSE the live socket (wsSend) + the activity panel (openActivity) + the
+// shared toast — no second transport.
+const chat = new ChatHome({ wsSend, openActivity, toast });
+const templates = new TemplatesScreen({ toast });
+
+// Top-nav view switch: chat (home) / world (canvas) / templates (Helpers).
+type View = "chat" | "world" | "templates";
+const navButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".nav button"));
+function setView(view: View): void {
+  document.body.dataset.view = view;
+  for (const btn of navButtons) {
+    btn.setAttribute("aria-current", btn.dataset.view === view ? "true" : "false");
+  }
+  if (view === "world") hint.style.opacity = "1";
+  else hint.style.opacity = "0";
+  if (view === "templates") void templates.ensureLoaded();
+  if (view === "chat") el<HTMLTextAreaElement>("chat-text").focus();
+}
+for (const btn of navButtons) {
+  btn.addEventListener("click", () => setView((btn.dataset.view as View) ?? "chat"));
+}
+
 startWizard();
+setView("chat");
+void chat.restoreLatest();
 void refreshWorld();
 connectLive();
 requestAnimationFrame(frame);

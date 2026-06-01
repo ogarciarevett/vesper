@@ -889,3 +889,219 @@ describe("listRuns parentRunId filter and runTree", () => {
     expect(store.runTree("does-not-exist")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Chat home (migration 007_chat_home)
+// ---------------------------------------------------------------------------
+
+describe("chat sessions and turns", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("createSession returns a generated id and listSessions reads it back", () => {
+    const id = store.createSession({ title: "first wish" });
+    expect(typeof id).toBe("string");
+    expect(id.length).toBeGreaterThan(0);
+
+    const sessions = store.listSessions();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.id).toBe(id);
+    expect(sessions[0]?.title).toBe("first wish");
+    expect(typeof sessions[0]?.ts).toBe("number");
+  });
+
+  test("createSession honors a supplied id", () => {
+    const id = store.createSession({ id: "11111111-1111-4111-8111-111111111111", title: "x" });
+    expect(id).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  test("listSessions is newest-first", () => {
+    const a = store.createSession({ title: "a" });
+    const b = store.createSession({ title: "b" });
+    const ids = store.listSessions().map((s) => s.id);
+    // b was created after a, so it sorts first (ts DESC).
+    expect(ids[0]).toBe(b);
+    expect(ids).toContain(a);
+  });
+
+  test("appendTurn persists user and assistant turns; listTurns is oldest-first", () => {
+    const session = store.createSession({ title: "t" });
+    const userTurn = store.appendTurn({ sessionId: session, role: "user", text: "do a thing" });
+    const asstTurn = store.appendTurn({
+      sessionId: session,
+      role: "assistant",
+      text: "on it",
+      runId: "22222222-2222-4222-8222-222222222222",
+    });
+
+    const turns = store.listTurns({ sessionId: session });
+    expect(turns.map((t) => t.id)).toEqual([userTurn, asstTurn]);
+    expect(turns[0]?.role).toBe("user");
+    expect(turns[0]?.runId).toBeNull();
+    expect(turns[1]?.role).toBe("assistant");
+    expect(turns[1]?.runId).toBe("22222222-2222-4222-8222-222222222222");
+  });
+
+  test("listTurns filters by afterTs and respects limit", () => {
+    const session = store.createSession({ title: "t" });
+    store.appendTurn({ sessionId: session, role: "user", text: "one" });
+    const all = store.listTurns({ sessionId: session });
+    const firstTs = all[0]?.ts ?? 0;
+
+    // afterTs strictly greater — the only turn (ts == firstTs) is excluded.
+    expect(store.listTurns({ sessionId: session, afterTs: firstTs })).toHaveLength(0);
+
+    store.appendTurn({ sessionId: session, role: "assistant", text: "two" });
+    store.appendTurn({ sessionId: session, role: "assistant", text: "three" });
+    expect(store.listTurns({ sessionId: session, limit: 1 })).toHaveLength(1);
+  });
+
+  test("listTurns scopes to its session only", () => {
+    const s1 = store.createSession({ title: "s1" });
+    const s2 = store.createSession({ title: "s2" });
+    store.appendTurn({ sessionId: s1, role: "user", text: "a" });
+    store.appendTurn({ sessionId: s2, role: "user", text: "b" });
+    expect(store.listTurns({ sessionId: s1 })).toHaveLength(1);
+    expect(store.listTurns({ sessionId: s1 })[0]?.text).toBe("a");
+  });
+
+  test("turns survive reopen (durable transcript)", () => {
+    const session = store.createSession({ title: "t" });
+    store.appendTurn({ sessionId: session, role: "user", text: "persisted" });
+    store.close();
+
+    const reopened = openStore(path);
+    const turns = reopened.listTurns({ sessionId: session });
+    reopened.close();
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.text).toBe("persisted");
+  });
+
+  test("a corrupted role column is rejected on read (corruption guard)", () => {
+    const session = store.createSession({ title: "t" });
+    // Write a row with an out-of-allowlist role directly.
+    const db = new Database(path);
+    db.run(
+      "INSERT INTO chat_turns (id, session_id, ts, role, text, run_id) VALUES ('bad', ?, 1, 'system', 'x', NULL)",
+      [session],
+    );
+    db.close();
+    expect(() => store.listTurns({ sessionId: session })).toThrow(StorageError);
+  });
+});
+
+describe("pipeline_templates round-trip", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("getTemplate returns null before any upsert", () => {
+    expect(store.getTemplate("router")).toBeNull();
+  });
+
+  test("upsertTemplate then getTemplate round-trips prompt + default params", () => {
+    store.upsertTemplate({
+      handlerId: "router",
+      prompt: "classify strictly",
+      defaultParams: { tone: "warm", retries: 2 },
+    });
+    const t = store.getTemplate("router");
+    expect(t).not.toBeNull();
+    expect(t?.handlerId).toBe("router");
+    expect(t?.prompt).toBe("classify strictly");
+    expect(t?.defaultParams).toEqual({ tone: "warm", retries: 2 });
+    expect(typeof t?.updatedAt).toBe("number");
+  });
+
+  test("upsertTemplate updates an existing row (ON CONFLICT)", () => {
+    store.upsertTemplate({ handlerId: "router", prompt: "v1", defaultParams: {} });
+    store.upsertTemplate({ handlerId: "router", prompt: "v2", defaultParams: { a: 1 } });
+    const t = store.getTemplate("router");
+    expect(t?.prompt).toBe("v2");
+    expect(t?.defaultParams).toEqual({ a: 1 });
+  });
+
+  test("template survives reopen", () => {
+    store.upsertTemplate({ handlerId: "router", prompt: "kept", defaultParams: {} });
+    store.close();
+    const reopened = openStore(path);
+    expect(reopened.getTemplate("router")?.prompt).toBe("kept");
+    reopened.close();
+  });
+});
+
+describe("migration 007 — chat home", () => {
+  let path: string;
+
+  beforeEach(() => {
+    path = tempDbPath();
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("schema_migrations records 007 and reopen is idempotent (chat tables queryable)", () => {
+    const first = openStore(path);
+    first.close();
+    const second = openStore(path);
+    second.close();
+
+    const db = new Database(path, { readonly: true });
+    const ids = db
+      .query<{ id: string }, []>("SELECT id FROM schema_migrations")
+      .all()
+      .map((r) => r.id);
+    expect(() => db.query("SELECT count(*) FROM chat_sessions").get()).not.toThrow();
+    expect(() => db.query("SELECT count(*) FROM chat_turns").get()).not.toThrow();
+    expect(() => db.query("SELECT count(*) FROM pipeline_templates").get()).not.toThrow();
+    db.close();
+
+    expect(ids).toContain("007_chat_home");
+    expect(ids.filter((id) => id === "007_chat_home")).toHaveLength(1);
+  });
+
+  test("007 is sequenced AFTER 006 (forward-only ordering)", () => {
+    const idx006 = MIGRATIONS.findIndex((m) => m.id.startsWith("006"));
+    const idx007 = MIGRATIONS.findIndex((m) => m.id === "007_chat_home");
+    expect(idx006).toBeGreaterThanOrEqual(0);
+    expect(idx007).toBeGreaterThan(idx006);
+  });
+});

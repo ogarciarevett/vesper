@@ -89,6 +89,24 @@ function makeStore(): {
     getTaskGrant() {
       return null;
     },
+    // Chat-home Store methods (migration 007): unused by the context double, stubbed
+    // so the mock still satisfies the widened Store interface.
+    createSession() {
+      return "session-id";
+    },
+    appendTurn() {
+      return "turn-id";
+    },
+    listSessions() {
+      return [];
+    },
+    listTurns() {
+      return [];
+    },
+    getTemplate() {
+      return null;
+    },
+    upsertTemplate() {},
     close() {},
   };
   return { store, finished, events };

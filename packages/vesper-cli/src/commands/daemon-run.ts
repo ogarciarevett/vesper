@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
+  ApprovalTokenStore,
   DEFAULT_AGENT_MATCHERS,
   detectAvailableCLIs,
   HandlerRegistry,
@@ -67,21 +68,29 @@ export const daemonRunCommand: Command = {
       complete,
       redactSummaries: config.storage?.redactRunSummaries === true,
     });
-    registerPipelines(scheduler, registry);
+    // The UI store is opened first so the router can read editable template
+    // default_params through it (#4) — an edited template then affects its runs.
+    const uiStore = openStore(dbPath());
+    registerPipelines(scheduler, registry, {
+      getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
+    });
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
     // scheduler + storage directly and gets live run events off its EventBus.
     // Agent-presence detection uses the built-in allowlist plus any matchers
     // the user added under `presence.matchers` in config; `presence.pollMs`
     // overrides the scan interval.
-    const uiStore = openStore(dbPath());
     const presenceMatchers = [...DEFAULT_AGENT_MATCHERS, ...(config.presence?.matchers ?? [])];
+    // Out-of-band approval tokens for privileged config mutations (template edits).
+    // In-memory + per-process: a daemon restart invalidates every outstanding code.
+    const approvalTokens = new ApprovalTokenStore();
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
       seed: machineFingerprint(),
       port: uiPort(),
       detectPresences: presenceDetectorFor(presenceMatchers),
+      approvalTokens,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),
     });

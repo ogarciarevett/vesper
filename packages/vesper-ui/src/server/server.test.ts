@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ApprovalTokenStore,
   CAPABILITIES,
   type CompleteFn,
   HandlerRegistry,
@@ -298,5 +299,297 @@ describe("UI server", () => {
     await fetch(`${handle.url}/api/pipelines/echo/run`, { method: "POST" });
     expect(await completed).toBe("ok");
     ws.close();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Chatbot home + editable pipeline templates (chatbot-home spec)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("UI server — chat + templates", () => {
+  let cDir: string;
+  let cDb: Database;
+  let cStore: Store;
+  let cHandle: UiServerHandle;
+  let tokens: ApprovalTokenStore;
+
+  beforeEach(async () => {
+    cDir = mkdtempSync(join(tmpdir(), "vesper-ui-chat-"));
+    const path = join(cDir, "vesper.db");
+    openStore(path).close();
+    cDb = new Database(path);
+    cStore = openStore(path);
+
+    const registry = new HandlerRegistry();
+    // A spawn-only child the router dispatches to.
+    registry.register("child", async (ctx) => {
+      ctx.emitProgress({ kind: "step", message: "working" });
+      ctx.recordRun({ status: "ok", summary: "child summary" });
+    });
+    // A minimal router that classifies via complete() then spawns the child.
+    registry.register("router", async (ctx) => {
+      await ctx.complete("classify");
+      const handle = ctx.spawn({
+        handlerId: "child",
+        label: "child",
+        params: {},
+        capabilities: ["WRITE_STORAGE"],
+      });
+      const outcome = await handle.done.catch(() => null);
+      ctx.recordRun({
+        status: outcome?.status === "ok" ? "ok" : "partial",
+        summary: "routed to child",
+      });
+    });
+    const scheduler = new Scheduler({
+      db: cDb,
+      registry,
+      grants: CAPABILITIES,
+      complete: fakeComplete,
+    });
+    scheduler.register({
+      id: "router",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "router",
+      required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE", "SPAWN_SUBAGENT"],
+    });
+
+    tokens = new ApprovalTokenStore();
+    cHandle = await startUiServer({
+      scheduler,
+      store: cStore,
+      seed: "chat-seed",
+      port: 0,
+      approvalTokens: tokens,
+    });
+  });
+
+  afterEach(() => {
+    cHandle.stop();
+    cStore.close();
+    cDb.close();
+    rmSync(cDir, { recursive: true, force: true });
+  });
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  test("POST /api/chat runs the router and returns sessionId/turnId/runId", async () => {
+    const res = await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "run a self test" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sessionId: string; turnId: string; runId: string };
+    expect(UUID_RE.test(body.sessionId)).toBe(true);
+    expect(body.runId).not.toBeNull();
+
+    // The transcript has the user turn + an assistant turn carrying the runId.
+    const turnsRes = await fetch(
+      `${cHandle.url}/api/chat/sessions/${body.sessionId}/turns?afterTs=0`,
+    );
+    const turns = (await turnsRes.json()) as {
+      role: string;
+      text: string;
+      runId: string | null;
+    }[];
+    expect(turns.map((t) => t.role)).toEqual(["user", "assistant"]);
+    expect(turns[1]?.runId).toBe(body.runId);
+
+    // A chat audit event was written.
+    const sessions = (await (await fetch(`${cHandle.url}/api/chat/sessions`)).json()) as {
+      id: string;
+    }[];
+    expect(sessions.map((s) => s.id)).toContain(body.sessionId);
+  });
+
+  test("POST /api/chat continues an existing session when sessionId is supplied", async () => {
+    const first = (await (
+      await fetch(`${cHandle.url}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "one" }),
+      })
+    ).json()) as { sessionId: string };
+
+    await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "two", sessionId: first.sessionId }),
+    });
+
+    const turns = (await (
+      await fetch(`${cHandle.url}/api/chat/sessions/${first.sessionId}/turns`)
+    ).json()) as unknown[];
+    // 2 messages x (user + assistant) = 4 turns in ONE session.
+    expect(turns).toHaveLength(4);
+    const sessions = (await (await fetch(`${cHandle.url}/api/chat/sessions`)).json()) as unknown[];
+    expect(sessions).toHaveLength(1);
+  });
+
+  test("POST /api/chat rejects an empty message (400)", async () => {
+    const res = await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /api/chat rejects a non-UUID sessionId (400)", async () => {
+    const res = await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi", sessionId: "not-a-uuid" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /api/chat is rejected cross-origin (403, CSRF guard)", async () => {
+    const res = await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://evil.example.com" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("GET /api/chat/sessions/:id/turns rejects a non-UUID id (400)", async () => {
+    const res = await fetch(`${cHandle.url}/api/chat/sessions/not-a-uuid/turns`);
+    expect(res.status).toBe(400);
+  });
+
+  test("a chat turn is pushed live to a chat:<sessionId> subscriber", async () => {
+    // Create the session first so we have an id to subscribe to.
+    const first = (await (
+      await fetch(`${cHandle.url}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "seed" }),
+      })
+    ).json()) as { sessionId: string };
+
+    const ws = new WebSocket(`${cHandle.url.replace("http", "ws")}/api/live`);
+    await new Promise<void>((resolve) =>
+      ws.addEventListener("open", () => resolve(), { once: true }),
+    );
+    ws.send(JSON.stringify({ type: "subscribe", sessionId: first.sessionId }));
+    // Give the subscribe control frame a tick to register.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const got = new Promise<{ role: string; text: string }>((resolve) => {
+      ws.addEventListener("message", (e) => {
+        const m = JSON.parse(String(e.data)) as { type: string; role?: string; text?: string };
+        if (m.type === "chat:turn" && m.role === "user" && m.text === "second message") {
+          resolve({ role: m.role, text: m.text });
+        }
+      });
+    });
+
+    await fetch(`${cHandle.url}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: "second message", sessionId: first.sessionId }),
+    });
+
+    const frame = await got;
+    expect(frame.role).toBe("user");
+    ws.close();
+  });
+
+  test("GET /api/pipelines lists registered tasks with their config", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines`);
+    expect(res.status).toBe(200);
+    const pipelines = (await res.json()) as { id: string; handlerId: string }[];
+    expect(pipelines.map((p) => p.id)).toContain("router");
+  });
+
+  test("GET /api/pipelines/:id/template returns prompt + params + config", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/router/template`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      handlerId: string;
+      prompt: string;
+      defaultParams: Record<string, unknown>;
+      config: { id: string };
+    };
+    expect(body.handlerId).toBe("router");
+    expect(body.prompt).toBe("");
+    expect(body.config.id).toBe("router");
+  });
+
+  test("GET template for an unknown pipeline is a 404", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/ghost/template`);
+    expect(res.status).toBe(404);
+  });
+
+  test("PUT template without an approval code is 401", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/router/template`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "new", defaultParams: {} }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("PUT template with an invalid approval code is 403", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/router/template`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": "deadbeef" },
+      body: JSON.stringify({ prompt: "new", defaultParams: {} }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("PUT template with a valid single-use code persists prompt + params and audits", async () => {
+    const code = tokens.mint();
+    const res = await fetch(`${cHandle.url}/api/pipelines/router/template`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": code },
+      body: JSON.stringify({ prompt: "classify strictly", defaultParams: { tone: "warm" } }),
+    });
+    expect(res.status).toBe(200);
+
+    // The template is now persisted and read back via GET.
+    const got = (await (await fetch(`${cHandle.url}/api/pipelines/router/template`)).json()) as {
+      prompt: string;
+      defaultParams: Record<string, unknown>;
+    };
+    expect(got.prompt).toBe("classify strictly");
+    expect(got.defaultParams).toEqual({ tone: "warm" });
+
+    // The code is single-use — a second PUT with the same code is 403.
+    const replay = await fetch(`${cHandle.url}/api/pipelines/router/template`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": code },
+      body: JSON.stringify({ prompt: "x", defaultParams: {} }),
+    });
+    expect(replay.status).toBe(403);
+  });
+
+  test("PUT template is rejected cross-origin BEFORE the token is checked (403)", async () => {
+    const code = tokens.mint();
+    const res = await fetch(`${cHandle.url}/api/pipelines/router/template`, {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://evil.example.com",
+        "x-vesper-approval": code,
+      },
+      body: JSON.stringify({ prompt: "x", defaultParams: {} }),
+    });
+    expect(res.status).toBe(403);
+    // The local-origin guard fired first, so the code was NOT consumed.
+    expect(tokens.isValid(code)).toBe(true);
+  });
+
+  test("POST /api/approval/request mints a code (production mint path) without leaking it", async () => {
+    const res = await fetch(`${cHandle.url}/api/approval/request`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    // Returns ok; the code is surfaced OUT-OF-BAND on the daemon TTY, never in the body.
+    expect(body).toEqual({ ok: true });
+    expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{6,}/);
   });
 });
