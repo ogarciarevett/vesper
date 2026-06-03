@@ -1,0 +1,186 @@
+/// <reference lib="dom" />
+import type { RunEventInfo, RunTreeInfo } from "../../world/types.ts";
+import { injectStyle, type LiveMessage, type SectionContext } from "../shell/section.ts";
+
+const RAIL_CSS = `
+  .rail { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .rail-head { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-soft); font-weight: 700; padding: 2px 2px 14px; }
+  .rail-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .rail-rest { margin: auto; text-align: center; color: var(--ink-soft); font-size: 14px; line-height: 1.5; padding: 24px 12px; }
+  .rail-rest .rr-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-faint); margin: 0 auto 12px; }
+  .arow { border: 1px solid var(--border); border-radius: 13px; background: var(--surface-2); padding: 12px 13px; }
+  .arow.child { margin-left: 16px; }
+  .atop { display: flex; align-items: center; gap: 9px; }
+  .atop .adot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+  .atop .adot.ok { background: var(--ok); } .atop .adot.error { background: var(--danger); }
+  .aname { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .astatus { font-size: 12px; color: var(--ink-soft); margin-left: auto; }
+  .alog { margin-top: 9px; display: flex; flex-direction: column; gap: 5px; max-height: 220px; overflow-y: auto; }
+  .aevent { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .akind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-2); min-width: 58px; }
+  .amsg { color: var(--ink); word-break: break-word; }
+  .alog .empty { font-size: 13px; color: var(--ink-faint); font-style: italic; }
+`;
+
+/**
+ * The Chat "Vesper activity" rail — a live tree of the run Vesper started for the
+ * conversation (root + sub-agents), each with a streaming step log. Reflects ONLY
+ * Vesper's own runs. Preserves the subscribe-before-backfill + de-dupe-by-event-id
+ * behavior so a reconnect re-backfills missed steps without duplicate rows.
+ */
+export class ActivityRail {
+  readonly #ctx: SectionContext;
+  readonly #head: HTMLElement;
+  readonly #body: HTMLElement;
+  #runId: string | null = null;
+  #subscribed: string[] = [];
+
+  constructor(host: HTMLElement, ctx: SectionContext) {
+    injectStyle("rail-css", RAIL_CSS);
+    this.#ctx = ctx;
+    host.classList.add("rail");
+    this.#head = document.createElement("div");
+    this.#head.className = "rail-head";
+    this.#head.textContent = "Vesper activity";
+    this.#body = document.createElement("div");
+    this.#body.className = "rail-body";
+    host.append(this.#head, this.#body);
+    this.reset();
+  }
+
+  /** Calm "resting" state — Vesper has nothing in flight. */
+  reset(): void {
+    this.#runId = null;
+    const rest = document.createElement("div");
+    rest.className = "rail-rest";
+    const dot = document.createElement("div");
+    dot.className = "rr-dot";
+    const text = document.createElement("div");
+    text.textContent = "Vesper is resting. Send a message and watch it work here.";
+    rest.append(dot, text);
+    this.#body.replaceChildren(rest);
+  }
+
+  /** Re-follow the active run after a socket reconnect (re-subscribe + re-backfill). */
+  resubscribe(): void {
+    if (this.#runId !== null) void this.follow(this.#runId);
+  }
+
+  /** Follow a run: fetch its tree, subscribe + backfill every node, render live. */
+  async follow(runId: string): Promise<void> {
+    this.#runId = runId;
+    try {
+      const tree = await this.#ctx.api.getJson<RunTreeInfo>(
+        `/api/runs/${encodeURIComponent(runId)}/tree`,
+      );
+      const ids: string[] = [];
+      collectRunIds(tree, ids);
+      for (const id of ids) this.#ctx.wsSend({ type: "subscribe", runId: id });
+      this.#subscribed = ids;
+      const perNode = await Promise.all(
+        ids.map((id) =>
+          this.#ctx.api
+            .getJson<RunEventInfo[]>(`/api/runs/${encodeURIComponent(id)}/events`)
+            .catch(() => [] as RunEventInfo[]),
+        ),
+      );
+      if (this.#runId === runId) this.#render(tree, perNode.flat());
+    } catch {
+      // transient; live frames still append as they arrive.
+    }
+  }
+
+  /** Route a live `/api/live` frame relevant to the followed run. */
+  handleLive(msg: LiveMessage): void {
+    if (this.#runId === null) return;
+    if (msg.type === "run:event" && msg.event !== undefined) {
+      this.#appendLive(msg.event as RunEventInfo);
+    } else if (msg.type === "run:event:lite" && typeof msg.runId === "string") {
+      // A run stepped; if a child row is missing the tree gained a sub-agent.
+      if (this.#logFor(msg.runId) === null) void this.follow(this.#runId);
+    } else if (msg.type === "run:completed") {
+      const outcome = msg.outcome as { runId?: string | null } | undefined;
+      if (outcome?.runId === this.#runId) void this.follow(this.#runId);
+    }
+  }
+
+  /** Drop subscriptions when the section unmounts. */
+  destroy(): void {
+    for (const id of this.#subscribed) this.#ctx.wsSend({ type: "unsubscribe", runId: id });
+    this.#subscribed = [];
+    this.#runId = null;
+  }
+
+  #logFor(runId: string): HTMLElement | null {
+    return this.#body.querySelector<HTMLElement>(`.alog[data-run-id="${runId}"]`);
+  }
+
+  #appendLive(ev: RunEventInfo): void {
+    const log = this.#logFor(ev.runId);
+    if (log === null) return;
+    if (log.querySelector(`[data-event-id="${ev.id}"]`) !== null) return;
+    appendEventRow(log, ev);
+  }
+
+  #render(tree: RunTreeInfo, events: RunEventInfo[]): void {
+    this.#body.replaceChildren();
+    this.#body.append(buildRunRow(tree, false, events));
+    for (const child of tree.children) this.#body.append(buildRunRow(child, true, events));
+  }
+}
+
+function collectRunIds(node: RunTreeInfo, into: string[]): void {
+  into.push(node.run.id);
+  for (const child of node.children) collectRunIds(child, into);
+}
+
+function appendEventRow(log: HTMLElement, ev: RunEventInfo): void {
+  const empty = log.querySelector(".empty");
+  if (empty !== null) empty.remove();
+  const row = document.createElement("div");
+  row.className = "aevent";
+  row.dataset.eventId = ev.id;
+  const kind = document.createElement("span");
+  kind.className = "akind";
+  kind.textContent = ev.kind;
+  const msg = document.createElement("span");
+  msg.className = "amsg";
+  msg.textContent = ev.message;
+  row.append(kind, msg);
+  log.append(row);
+  log.scrollTop = log.scrollHeight;
+}
+
+function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]): HTMLElement {
+  const row = document.createElement("div");
+  row.className = isChild ? "arow child" : "arow";
+
+  const top = document.createElement("div");
+  top.className = "atop";
+  const dot = document.createElement("span");
+  const st = node.run.status;
+  dot.className = `adot ${st === "ok" ? "ok" : st === "error" ? "error" : ""}`;
+  const name = document.createElement("span");
+  name.className = "aname";
+  name.textContent = node.run.pipeline;
+  const status = document.createElement("span");
+  status.className = "astatus";
+  status.textContent = node.run.status;
+  top.append(dot, name, status);
+
+  const log = document.createElement("div");
+  log.className = "alog";
+  log.dataset.runId = node.run.id;
+  const own = events.filter((e) => e.runId === node.run.id);
+  if (own.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "no steps yet";
+    log.append(empty);
+  } else {
+    for (const ev of own) appendEventRow(log, ev);
+  }
+
+  row.append(top, log);
+  return row;
+}

@@ -6,7 +6,13 @@ import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
 import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
 import { defaultPresenceDetector, type PresenceDetector, presenceSignature } from "./presence.ts";
-import { buildSnapshot } from "./snapshot.ts";
+
+/** A helper-CLI's detected status for the `/api/status` route + titlebar pill. */
+interface CliStatusRow {
+  readonly name: string;
+  readonly status: string;
+  readonly ok: boolean;
+}
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
 
@@ -38,8 +44,17 @@ export function setEmbeddedClientAssets(assets: ClientAssets): void {
 export interface UiServerDeps {
   readonly scheduler: Scheduler;
   readonly store: Store;
-  /** Stable per-machine seed (fingerprint) for the deterministic world. */
-  readonly seed: string;
+  /** Stable per-machine seed (fingerprint). Retained for callers; unused since the
+   * pixel-art world was retired. */
+  readonly seed?: string;
+  /** Daemon version for the `/api/status` route + titlebar pill (default "0.1.0"). */
+  readonly version?: string;
+  /** IPC socket path shown in the Runtime panel. */
+  readonly socketPath?: string;
+  /** Configured default helper-CLI name (from config). */
+  readonly defaultCli?: string | null;
+  /** Cheap CLI presence probe for `/api/status` (which-based; no auth probe). */
+  readonly detectClis?: () => Promise<readonly CliStatusRow[]>;
   readonly port?: number;
   readonly hostname?: string;
   /** Optional pluggable UI modules (e.g. Voice). MVP passes none. */
@@ -287,7 +302,8 @@ async function resolveClientAssets(deps: UiServerDeps): Promise<ClientAssets> {
  * local-origin guard as every other route.
  */
 export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle> {
-  const { scheduler, store, seed } = deps;
+  const { scheduler, store } = deps;
+  const startedAt = Date.now();
   const hostname = deps.hostname ?? "127.0.0.1";
   const port = deps.port ?? 4317;
   const modules = new ModuleRegistry(deps.modules ?? []);
@@ -335,8 +351,44 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           headers: { "content-type": "text/javascript; charset=utf-8" },
         });
       }
-      if (req.method === "GET" && pathname === "/api/world") {
-        return json(buildSnapshot(scheduler, store, seed, presences));
+      // GET /api/status — the Runtime panel + titlebar status pills.
+      if (req.method === "GET" && pathname === "/api/status") {
+        const clis = deps.detectClis ? await deps.detectClis() : [];
+        return json({
+          version: deps.version ?? "0.1.0",
+          uptimeMs: Date.now() - startedAt,
+          socket: deps.socketPath ?? "~/.vesper/run/vesper.sock",
+          defaultCli: deps.defaultCli ?? null,
+          clis,
+          runs: store.listRuns().length,
+          sessions: store.listSessions().length,
+          uiPort: server.port,
+          theme: themeId.length > 0 ? themeId : "dark",
+        });
+      }
+
+      // GET /api/presence — agents running on this machine (Diagnostics; relocated
+      // from the retired pixel-art home).
+      if (req.method === "GET" && pathname === "/api/presence") {
+        return json(presences);
+      }
+
+      // GET /api/runs?limit= — recent runs (newest-first) for Diagnostics.
+      if (req.method === "GET" && pathname === "/api/runs") {
+        const limitRaw = Number(url.searchParams.get("limit") ?? "50");
+        const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
+        const rows = store
+          .listRuns({ limit })
+          .slice()
+          .sort((a, b) => b.ts - a.ts)
+          .map((r) => ({
+            id: r.id,
+            pipeline: r.pipeline,
+            status: r.status,
+            summary: r.summary,
+            ts: r.ts,
+          }));
+        return json(rows);
       }
 
       // GET /api/runs/:runId/events?afterTs= — replay/backfill the persisted

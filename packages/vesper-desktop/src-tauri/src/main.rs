@@ -1,9 +1,11 @@
-// Vesper desktop shell — DEV-112 Slice 2.
+// Vesper desktop shell — DEV-112 slices 2-3.
 //
-// A thin native window over the Bun daemon. The Rust core does four things and holds no
-// business logic: (1) spawns the compiled `vesper-daemon` sidecar (which serves Vesper
-// World on 127.0.0.1:4317), (2) waits for that port to accept connections, (3) opens the
-// window onto it, and (4) stops the sidecar on exit.
+// A thin native window over the Bun daemon. The Rust core holds no business logic; it:
+//   1. spawns the compiled `vesper-daemon` sidecar (serves Vesper World on 127.0.0.1:4317),
+//   2. waits for that port to accept connections,
+//   3. opens the window onto it,
+//   4. stops the sidecar on exit,
+// plus native chrome (slice 3): a system tray (Show/Quit) and single-instance focus.
 //
 // Attach-if-already-running is free: if a daemon is already up (e.g. `vesper daemon
 // start`), the sidecar's own single-instance guard makes it exit immediately, the window
@@ -15,6 +17,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -30,11 +34,39 @@ const HEALTH_POLL: Duration = Duration::from_millis(250);
 /// already-running daemon (the spawned child exited via the single-instance guard).
 struct Sidecar(Mutex<Option<CommandChild>>);
 
+/// Show and focus the main window if it exists yet (it is created after the health-wait).
+fn focus_main(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        // single-instance MUST be the first plugin: a second launch just focuses us.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_main(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .manage(Sidecar(Mutex::new(None)))
         .setup(|app| {
+            // Native chrome (slice 3): a tray icon with Show/Quit. Built on the app's
+            // bundled icon; Tauri retains the registered tray for the app's lifetime.
+            let show = MenuItem::with_id(app, "show", "Show Vesper", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Vesper", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            TrayIconBuilder::with_id("vesper-tray")
+                .icon(app.default_window_icon().expect("bundled app icon").clone())
+                .tooltip("Vesper")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => focus_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+
             // 1. Spawn the compiled daemon sidecar (runs `vesper-daemon daemon run`).
             let (mut rx, child) = app
                 .shell()
@@ -60,15 +92,24 @@ fn main() {
                 let window_handle = handle.clone();
                 let _ = handle.run_on_main_thread(move || {
                     let url = format!("http://{UI_ADDR}");
-                    let _ = WebviewWindowBuilder::new(
+                    let builder = WebviewWindowBuilder::new(
                         &window_handle,
                         "main",
                         WebviewUrl::External(url.parse().expect("valid UI url")),
                     )
                     .title("Vesper")
                     .inner_size(1180.0, 820.0)
-                    .min_inner_size(880.0, 600.0)
-                    .build();
+                    .min_inner_size(880.0, 600.0);
+
+                    // macOS-only: frameless/overlay titlebar so the web UI's custom HTML
+                    // titlebar shows with the native traffic-light buttons inset over it
+                    // (the "native application" look). Windows/Linux are unaffected.
+                    #[cfg(target_os = "macos")]
+                    let builder = builder
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+
+                    let _ = builder.build();
                 });
             });
 

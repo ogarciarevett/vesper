@@ -690,3 +690,39 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   (007=rag) shifts to 008/009 for rag/eval (gitignored planning doc, reconciled at their build).
 - DEFERRED (per spec Out of Scope): the security-hardening §C token formalization; multi-session history
   UX; capability editing from the templates UI; token-level streaming.
+
+---
+
+## Desktop shell redesign — premium dark-glass native companion + Vesper World rebuild — SHIPPED
+
+- Specs: `specs/desktop-app-shell.md` + `specs/vesper-world-rebuild.md` (Omar-authorized 2026-06-02; record
+  surface = specs + this log; Linear issue cap active). Reference look: OpenClaw Windows Companion.
+- **Decisions locked (Omar):** premium dark-glass SUPERSEDES the elder-first *visual* framing (Hard rule 14
+  amendment pending on a later sync); primary section name = **Pipelines**; presence/echo MOVES to
+  Diagnostics (not deleted); built shell + rebuilt Chat together as slice 1.
+- **What shipped:** the `@vesper/ui` client is now an app shell — custom draggable titlebar (Cmd+E command
+  search, live status pills off `/api/status`), grouped sidebar, a client-side `SectionRouter`, and a
+  chrome-only theme system (dark default; light/hearth opt-in) that REPLACES the canvas-coupled `WorldTheme`.
+  14 sections: Chat + Runtime/CLIs/Permissions/Sandbox/Settings/Diagnostics/About (live) + Pipelines/
+  Channels/Schedule (thin) + Skills/Memory/Voice (honest stubs naming their specs).
+- **Vesper World rebuilt:** the pixel-art canvas + machine-wide presence home are RETIRED (controlled
+  `git rm`, recoverable). Chat = transcript + a Vesper-ONLY activity rail (follows the conversation's run
+  tree via the existing `/api/chat` + run-trace APIs; subscribe-before-backfill + de-dupe preserved). No
+  backend rewrite — reused chat/router/sessions/turns verbatim.
+- **Server:** new read-only `/api/status`, `/api/presence`, `/api/runs`; `/api/world` + `snapshot.ts` removed;
+  presence poll kept (feeds `/api/presence` for Diagnostics).
+- **Native:** macOS overlay titlebar (`TitleBarStyle::Overlay` + `hidden_title`, cfg-gated to macOS) so the
+  custom HTML titlebar shows with the traffic lights inset; tray + single-instance from DEV-112 slice 3.
+- **Parallel build:** lead built the backbone + Chat + real sections + server routes; 2 sub-agents built the
+  6 thin views + the Rust overlay window concurrently (file-disjoint). Net **-890 lines** tracked in vesper-ui.
+- **Gotcha (cost a runtime crash Omar caught):** the browser client is bundled by Bun (which does NOT error
+  on an undefined identifier) and sits OUTSIDE the root tsc program, so a section referenced in the barrel
+  but never imported (`sandboxSection`) only failed at runtime in the browser — green tests + clean bundle
+  missed it. FIX + GUARD: `sections/index.test.ts` imports the barrel and asserts ALL_SECTIONS (14, unique
+  ids, valid shape). Lesson: for the browser client, an import-the-barrel test is the real typecheck.
+- Verified: `biome ci` clean (2 cosmetic warnings), vesper-ui 46 / vesper-cli 104 pass, no new tsc errors in
+  touched files, compiled sidecar serves the new shell end-to-end. No provider SDKs.
+- DEFERRED: privileged config writes from Settings (theme is client-side; default-CLI read-only); full
+  template editing in Pipelines (read-only view); Windows/Linux window chrome (macOS-first per Omar); the
+  one `!important` (reduced-motion) biome warning; the menu-bar popover app + internal-pipelines auto-skills
+  feature (next requests).

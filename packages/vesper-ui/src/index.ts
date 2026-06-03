@@ -1,7 +1,7 @@
-// @vesper/ui — the local pixel-art Agent-OS UI ("Vesper World").
+// @vesper/ui — the local Vesper desktop UI (native companion shell + Chat).
 
 export { ModuleRegistry } from "./modules/registry.ts";
-export type { AgentAddon, AgentAffordance, AgentDecoration, UiModule } from "./modules/types.ts";
+export type { UiModule } from "./modules/types.ts";
 export {
   defaultPresenceDetector,
   type PresenceDetector,
@@ -16,15 +16,4 @@ export {
   type UiServerDeps,
   type UiServerHandle,
 } from "./server/server.ts";
-export { buildSnapshot } from "./server/snapshot.ts";
-export { buildWorld } from "./world/build.ts";
-export { fnv1a, seededUnit } from "./world/hash.ts";
-export type {
-  AgentMood,
-  Inhabitant,
-  PipelineInfo,
-  PresenceInfo,
-  RunInfo,
-  SceneGraph,
-  WorldSnapshot,
-} from "./world/types.ts";
+export type { PresenceInfo, RunEventInfo, RunTreeInfo } from "./world/types.ts";
