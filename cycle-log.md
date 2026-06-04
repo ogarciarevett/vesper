@@ -651,3 +651,78 @@ the still-blocked forge sandbox (it executes no LLM-generated code).
 - DEFERRED (per spec Out of Scope): applying `fix_proposal`s (software-engineer pipeline); authoring
   pipeline CODE (forge, blocked on the sandbox); `NETWORK_FETCH`; a RAG/embedding index over signals;
   an elder-surface approval tile; auto-running skill-train on a newly acquired skill.
+
+## Chatbot home + editable pipeline templates (#9 + #4) — SHIPPED
+
+`specs/chatbot-home.md`. The post-onboarding HOME is a simple chatbot; the canvas demotes to a side
+activity panel. Built on the SHIPPED orchestration+trace backbone (consumed, not modified). No Linear
+issue (issue-capped) -> specs/ + this entry + the commit are the record (Rule 11). Built by a
+Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed by the lead.
+
+- **Storage (migration `007_chat_home`):** `chat_sessions`, `chat_turns`, `pipeline_templates` + index;
+  6 synchronous `Store` methods (createSession, appendTurn, listSessions, listTurns, getTemplate,
+  upsertTemplate) mirroring the existing JSON/assert helpers. `chat_turns.run_id` links an assistant
+  turn to the run that produced it (transcript bubble == activity-tree root, same data two ways).
+- **Router pipeline (`packages/pipelines/router/`):** a chat message is a manual `scheduler.run("router",
+  {params})` (the EXISTING run path — no new execution). The handler classifies via `ctx.complete` to ONE
+  label, maps it through a FIXED ALLOWLIST to a registered handler id, and `ctx.spawn`s it; an
+  unmapped/free-form label -> a clarify turn (NO spawn, no dynamic id — preserves no-eval). caps
+  [CLI_INVOKE, WRITE_STORAGE, SPAWN_SUBAGENT].
+- **Routes + WS:** `POST /api/chat`, `GET /api/chat/sessions`, `GET /api/chat/sessions/:id/turns`,
+  `GET /api/pipelines`, `GET|PUT /api/pipelines/:id/template`; a `chat:<sessionId>` WS topic next to the
+  backbone's `agent:<runId>` (one socket, UUID-guarded). Client: transcript home + demoted activity
+  panel (reuses the runTree render) + a templates screen; reduced-motion + WCAG-AA honored.
+- **Security:** a minimal out-of-band approval-token module (`vesper-core/src/approval/`, CSPRNG
+  single-use) gates `PUT /template`; `POST /api/approval/request` mints a code and prints it to the daemon
+  TTY (out-of-band — never in the HTTP response, so a local app can mint but not read it). The future
+  `security-hardening.md` adopts this seam. `POST /api/chat` is isLocalRequest-only (deliberate parity
+  with the existing run route, so the canvas Run button still works).
+- **Lead fixes over the workflow output** (2 real HIGHs the review caught): (1) `mint()` had NO production
+  caller -> added the `/api/approval/request` mint path + test, so template editing actually works
+  end-to-end; (2) the router ignored template `default_params` -> it now MERGES the target's editable
+  default_params UNDER the user message (injected via `registerPipelines({getDefaultParams})` -> daemon
+  wires `store.getTemplate`), so an edited template configures its runs (#4). + router/server tests.
+- 724 tests / 0 fail (+ chatbot suite + the 2 fix tests); Biome clean; no NEW tsc errors (same 16
+  pre-existing); no provider SDKs.
+- NOTED (not blocking): `PUT /template` persists prompt/params only — schedule/caps stay editable via
+  `vesper schedule` (the spec's Design-Decisions/Acceptance contradict each other; took the conservative
+  path). Migration `007_chat_home` takes the next free id; the umbrella ledger's planning reservation
+  (007=rag) shifts to 008/009 for rag/eval (gitignored planning doc, reconciled at their build).
+- DEFERRED (per spec Out of Scope): the security-hardening §C token formalization; multi-session history
+  UX; capability editing from the templates UI; token-level streaming.
+
+---
+
+## Desktop shell redesign — premium dark-glass native companion + Vesper World rebuild — SHIPPED
+
+- Specs: `specs/desktop-app-shell.md` + `specs/vesper-world-rebuild.md` (Omar-authorized 2026-06-02; record
+  surface = specs + this log; Linear issue cap active). Reference look: OpenClaw Windows Companion.
+- **Decisions locked (Omar):** premium dark-glass SUPERSEDES the elder-first *visual* framing (Hard rule 14
+  amendment pending on a later sync); primary section name = **Pipelines**; presence/echo MOVES to
+  Diagnostics (not deleted); built shell + rebuilt Chat together as slice 1.
+- **What shipped:** the `@vesper/ui` client is now an app shell — custom draggable titlebar (Cmd+E command
+  search, live status pills off `/api/status`), grouped sidebar, a client-side `SectionRouter`, and a
+  chrome-only theme system (dark default; light/hearth opt-in) that REPLACES the canvas-coupled `WorldTheme`.
+  14 sections: Chat + Runtime/CLIs/Permissions/Sandbox/Settings/Diagnostics/About (live) + Pipelines/
+  Channels/Schedule (thin) + Skills/Memory/Voice (honest stubs naming their specs).
+- **Vesper World rebuilt:** the pixel-art canvas + machine-wide presence home are RETIRED (controlled
+  `git rm`, recoverable). Chat = transcript + a Vesper-ONLY activity rail (follows the conversation's run
+  tree via the existing `/api/chat` + run-trace APIs; subscribe-before-backfill + de-dupe preserved). No
+  backend rewrite — reused chat/router/sessions/turns verbatim.
+- **Server:** new read-only `/api/status`, `/api/presence`, `/api/runs`; `/api/world` + `snapshot.ts` removed;
+  presence poll kept (feeds `/api/presence` for Diagnostics).
+- **Native:** macOS overlay titlebar (`TitleBarStyle::Overlay` + `hidden_title`, cfg-gated to macOS) so the
+  custom HTML titlebar shows with the traffic lights inset; tray + single-instance from DEV-112 slice 3.
+- **Parallel build:** lead built the backbone + Chat + real sections + server routes; 2 sub-agents built the
+  6 thin views + the Rust overlay window concurrently (file-disjoint). Net **-890 lines** tracked in vesper-ui.
+- **Gotcha (cost a runtime crash Omar caught):** the browser client is bundled by Bun (which does NOT error
+  on an undefined identifier) and sits OUTSIDE the root tsc program, so a section referenced in the barrel
+  but never imported (`sandboxSection`) only failed at runtime in the browser — green tests + clean bundle
+  missed it. FIX + GUARD: `sections/index.test.ts` imports the barrel and asserts ALL_SECTIONS (14, unique
+  ids, valid shape). Lesson: for the browser client, an import-the-barrel test is the real typecheck.
+- Verified: `biome ci` clean (2 cosmetic warnings), vesper-ui 46 / vesper-cli 104 pass, no new tsc errors in
+  touched files, compiled sidecar serves the new shell end-to-end. No provider SDKs.
+- DEFERRED: privileged config writes from Settings (theme is client-side; default-CLI read-only); full
+  template editing in Pipelines (read-only view); Windows/Linux window chrome (macOS-first per Omar); the
+  one `!important` (reduced-motion) biome warning; the menu-bar popover app + internal-pipelines auto-skills
+  feature (next requests).

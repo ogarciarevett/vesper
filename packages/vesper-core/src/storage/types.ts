@@ -128,6 +128,80 @@ export interface UpsertTaskGrantInput {
   readonly granted_at?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Chat home (migration 007_chat_home)
+// ---------------------------------------------------------------------------
+
+/** A row from the `chat_sessions` table — one conversation thread. */
+export interface ChatSessionRow {
+  readonly id: string;
+  /** Unix timestamp in milliseconds the session was created. */
+  readonly ts: number;
+  readonly title: string;
+}
+
+/** The role of a {@link ChatTurnRow}. */
+export type ChatTurnRole = "user" | "assistant";
+
+/**
+ * A row from the `chat_turns` table — a single transcript bubble. An assistant
+ * turn carries the `runId` of the router run that produced it, so the same row
+ * renders both as a transcript bubble and as the root of the live activity tree.
+ */
+export interface ChatTurnRow {
+  readonly id: string;
+  readonly sessionId: string;
+  /** Unix timestamp in milliseconds the turn was appended. */
+  readonly ts: number;
+  readonly role: ChatTurnRole;
+  readonly text: string;
+  /** The `runs` row id this assistant turn started, or null (user turns). */
+  readonly runId: string | null;
+}
+
+/** A row from the `pipeline_templates` table — a pipeline's editable prompt + params. */
+export interface PipelineTemplateRow {
+  readonly handlerId: string;
+  readonly prompt: string;
+  /** The deserialized default-params object the router merges into spawn params. */
+  readonly defaultParams: Record<string, unknown>;
+  /** Unix timestamp in milliseconds the template was last written. */
+  readonly updatedAt: number;
+}
+
+/** Input for {@link Store.createSession}. `id`/`ts` are generated when omitted. */
+export interface CreateSessionInput {
+  /** Pre-allocated session id (UUID); a fresh one is generated when omitted. */
+  readonly id?: string;
+  readonly title: string;
+}
+
+/** Input for {@link Store.appendTurn}. */
+export interface AppendTurnInput {
+  readonly sessionId: string;
+  readonly role: ChatTurnRole;
+  readonly text: string;
+  /** The `runs` row this turn started (assistant turns); omitted/null for user turns. */
+  readonly runId?: string | null;
+}
+
+/** Filters for {@link Store.listTurns}. */
+export interface ListTurnsOptions {
+  readonly sessionId: string;
+  /** Return only turns strictly after this timestamp (ts > afterTs). */
+  readonly afterTs?: number;
+  /** Maximum number of rows to return (default: unlimited). */
+  readonly limit?: number;
+}
+
+/** Input for {@link Store.upsertTemplate}. */
+export interface UpsertTemplateInput {
+  readonly handlerId: string;
+  readonly prompt: string;
+  /** Default-params object; serialized to JSON on write. */
+  readonly defaultParams: Record<string, unknown>;
+}
+
 /** Optional filters for {@link Store.listEvents}. */
 export interface ListEventsOptions {
   /** Return only events with this source. */
@@ -232,6 +306,28 @@ export interface Store {
    * `contentHash` defaults to "" (the non-generated-handler key).
    */
   getTaskGrant(handlerId: string, contentHash?: string): TaskGrant | null;
+
+  // -------------------------------------------------------------------------
+  // Chat home (migration 007_chat_home)
+  // -------------------------------------------------------------------------
+
+  /** Create a chat session and return its generated (or supplied) id. */
+  createSession(input: CreateSessionInput): string;
+
+  /** Append a transcript turn and return its generated id. */
+  appendTurn(input: AppendTurnInput): string;
+
+  /** List chat sessions newest-first (most recent activity at the top). */
+  listSessions(): ChatSessionRow[];
+
+  /** List a session's turns oldest-first, optionally filtered by `afterTs`/`limit`. */
+  listTurns(options: ListTurnsOptions): ChatTurnRow[];
+
+  /** Return the editable template for `handlerId`, or null if none was saved yet. */
+  getTemplate(handlerId: string): PipelineTemplateRow | null;
+
+  /** Insert or update a pipeline's editable template (prompt + default params). */
+  upsertTemplate(input: UpsertTemplateInput): void;
 
   /**
    * Close the underlying database connection. After this call the store must not be used.

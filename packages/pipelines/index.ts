@@ -12,6 +12,7 @@ import {
   type Capability,
   type HandlerRegistry,
   type RegisterTaskInput,
+  type RunParams,
   type Scheduler,
   SchedulerError,
   type TaskHandler,
@@ -28,6 +29,13 @@ import {
   orchestratorDemoHandler,
   orchestratorDemoTaskInput,
 } from "./orchestrator-demo/handler.ts";
+import {
+  makeRouterHandler,
+  ROUTE_ALLOWLIST,
+  ROUTER_HANDLER_ID,
+  routerHandler,
+  routerTaskInput,
+} from "./router/handler.ts";
 import { SELFTEST_HANDLER_ID, selftestHandler, selftestTaskInput } from "./selftest/handler.ts";
 import {
   SKILL_TRAIN_HANDLER_ID,
@@ -44,6 +52,10 @@ export {
   ORCHESTRATOR_DEMO_HANDLER_ID,
   orchestratorDemoHandler,
   orchestratorDemoTaskInput,
+  ROUTE_ALLOWLIST,
+  ROUTER_HANDLER_ID,
+  routerHandler,
+  routerTaskInput,
   SELFTEST_HANDLER_ID,
   SKILL_TRAIN_HANDLER_ID,
   selftestHandler,
@@ -70,6 +82,14 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: SELFTEST_HANDLER_ID,
     handler: selftestHandler,
     taskInput: selftestTaskInput,
+  },
+  // The chatbot-home dispatcher: a chat message is a manual run of this pipeline. It
+  // classifies the wish via the CLI and spawns one allowlisted built-in. Adds
+  // CLI_INVOKE + WRITE_STORAGE + SPAWN_SUBAGENT to the host grant union.
+  {
+    handlerId: ROUTER_HANDLER_ID,
+    handler: routerHandler,
+    taskInput: routerTaskInput,
   },
   {
     handlerId: SKILL_TRAIN_HANDLER_ID,
@@ -126,9 +146,29 @@ export function grantedCapabilities(): Capability[] {
  * so a daemon restart backfills grants for tasks persisted before per-task grants
  * existed. No grant writing happens here; that would duplicate the ceiling check.
  */
-export function registerPipelines(scheduler: Scheduler, registry: HandlerRegistry): void {
+/** Host-injected wiring for built-in pipelines (e.g. the router's template reader). */
+export interface RegisterPipelinesOptions {
+  /**
+   * Resolves a target handler's editable template `default_params` so the `router`
+   * merges them into spawn params (#4). When omitted, the router uses no defaults
+   * (the built-in handler), so non-daemon callers and tests behave unchanged.
+   */
+  readonly getDefaultParams?: (handlerId: string) => RunParams;
+}
+
+export function registerPipelines(
+  scheduler: Scheduler,
+  registry: HandlerRegistry,
+  options: RegisterPipelinesOptions = {},
+): void {
   for (const descriptor of PIPELINES) {
-    registry.register(descriptor.handlerId, descriptor.handler);
+    // The daemon injects the template reader into the router so edited templates take
+    // effect; every other handler registers as declared.
+    const handler =
+      descriptor.handlerId === ROUTER_HANDLER_ID && options.getDefaultParams !== undefined
+        ? makeRouterHandler({ getDefaultParams: options.getDefaultParams })
+        : descriptor.handler;
+    registry.register(descriptor.handlerId, handler);
 
     // Spawn-only descriptors (no taskInput) register the handler only.
     if (descriptor.taskInput === undefined) continue;

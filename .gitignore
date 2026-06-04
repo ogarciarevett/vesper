@@ -5,6 +5,14 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Rust / Tauri build artifacts (packages/vesper-desktop — the native shell, DEV-112).
+# Cargo.lock IS committed (this is an application binary — reproducible builds).
+target/
+/packages/vesper-desktop/src-tauri/gen/
+# generated daemon-embed assets + the compiled sidecar binary (DEV-112 Slice 2)
+/packages/vesper-cli/src/generated/
+/packages/vesper-desktop/src-tauri/binaries/
+
 # Vesper local runtime directory
 .vesper/
 

@@ -1,21 +1,60 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RunOutcome, RunTreeNode, Scheduler, Store } from "@vesper/core";
-import { RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
+import type { ApprovalTokenStore, RunOutcome, RunTreeNode, Scheduler, Store } from "@vesper/core";
+import { ApprovalError, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
 import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
 import { defaultPresenceDetector, type PresenceDetector, presenceSignature } from "./presence.ts";
-import { buildSnapshot } from "./snapshot.ts";
+
+/** A helper-CLI's detected status for the `/api/status` route + titlebar pill. */
+interface CliStatusRow {
+  readonly name: string;
+  readonly status: string;
+  readonly ok: boolean;
+}
 
 const CLIENT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "client");
+
+/**
+ * Prebuilt browser-client assets — the `index.html` shell and the bundled `app.js`.
+ * Supplied when the daemon runs as a `bun build --compile` binary, where the client
+ * source files and the runtime bundler are unavailable (the embedded FS has no
+ * `client/` dir). See {@link setEmbeddedClientAssets}.
+ */
+export interface ClientAssets {
+  readonly indexHtml: string;
+  readonly appJs: string;
+}
+
+/**
+ * Process-wide fallback client assets, set once by a compiled entrypoint before the
+ * daemon starts. `startUiServer` prefers an explicit `deps.clientAssets`, then this,
+ * then a from-disk build (the dev path) — so the compiled sidecar can embed the UI
+ * without threading assets through every daemon caller.
+ */
+let embeddedClientAssets: ClientAssets | null = null;
+
+/** Install process-wide {@link ClientAssets} (used by the compiled daemon sidecar). */
+export function setEmbeddedClientAssets(assets: ClientAssets): void {
+  embeddedClientAssets = assets;
+}
 
 /** Dependencies for {@link startUiServer}. */
 export interface UiServerDeps {
   readonly scheduler: Scheduler;
   readonly store: Store;
-  /** Stable per-machine seed (fingerprint) for the deterministic world. */
-  readonly seed: string;
+  /** Stable per-machine seed (fingerprint). Retained for callers; unused since the
+   * pixel-art world was retired. */
+  readonly seed?: string;
+  /** Daemon version for the `/api/status` route + titlebar pill (default "0.1.0"). */
+  readonly version?: string;
+  /** IPC socket path shown in the Runtime panel. */
+  readonly socketPath?: string;
+  /** Configured default helper-CLI name (from config). */
+  readonly defaultCli?: string | null;
+  /** Cheap CLI presence probe for `/api/status` (which-based; no auth probe). */
+  readonly detectClis?: () => Promise<readonly CliStatusRow[]>;
   readonly port?: number;
   readonly hostname?: string;
   /** Optional pluggable UI modules (e.g. Voice). MVP passes none. */
@@ -26,6 +65,20 @@ export interface UiServerDeps {
   readonly presencePollMs?: number;
   /** Default Vesper World theme id, stamped into the page for the client to read. */
   readonly defaultTheme?: string;
+  /**
+   * Out-of-band approval-token store. Privileged config mutations
+   * (`PUT /api/pipelines/:id/template`) require a valid single-use code from this
+   * store IN ADDITION to {@link isLocalRequest}. When omitted, those mutations are
+   * refused (403) — fail-closed; the chatbot/template surface is then read-only.
+   */
+  readonly approvalTokens?: ApprovalTokenStore;
+  /**
+   * Prebuilt client assets. When set, the server serves these instead of reading
+   * `client/index.html` and bundling `client/main.ts` from disk — required for the
+   * compiled (`bun build --compile`) daemon. Falls back to {@link setEmbeddedClientAssets},
+   * then to an on-disk build.
+   */
+  readonly clientAssets?: ClientAssets;
 }
 
 /** A running UI server. */
@@ -81,6 +134,96 @@ function mapTreeToInfo(node: RunTreeNode): RunTreeInfo {
   };
 }
 
+/** A chat-turn frame published to the `chat:<sessionId>` WS topic. */
+interface ChatTurnFrame {
+  readonly turnId: string;
+  readonly runId: string | null;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+}
+
+/** Publish a chat turn to its session's topic so live transcript views update. */
+function publishChatTurn(
+  server: { publish(topic: string, data: string): unknown },
+  sessionId: string,
+  frame: ChatTurnFrame,
+): void {
+  server.publish(`chat:${sessionId}`, JSON.stringify({ type: "chat:turn", ...frame }));
+}
+
+/** The editable-config view of a `ScheduledTask` returned by the template routes. */
+interface PipelineConfig {
+  readonly id: string;
+  readonly handlerId: string;
+  readonly kind: string;
+  readonly scheduleExpr: string;
+  readonly enabled: boolean;
+  readonly maxRunsPerDay: number | null;
+  readonly maxConcurrent: number | null;
+  readonly maxDurationMs: number | null;
+  readonly requiredCapabilities: readonly string[];
+}
+
+/** Map a core `ScheduledTask` to the thin {@link PipelineConfig} view (no secrets). */
+function toPipelineConfig(task: {
+  id: string;
+  handler_id: string;
+  kind: string;
+  schedule_expr: string;
+  enabled: boolean;
+  max_runs_per_day: number | null;
+  max_concurrent: number | null;
+  max_duration_ms: number | null;
+  required_capabilities: readonly string[];
+}): PipelineConfig {
+  return {
+    id: task.id,
+    handlerId: task.handler_id,
+    kind: task.kind,
+    scheduleExpr: task.schedule_expr,
+    enabled: task.enabled,
+    maxRunsPerDay: task.max_runs_per_day,
+    maxConcurrent: task.max_concurrent,
+    maxDurationMs: task.max_duration_ms,
+    requiredCapabilities: [...task.required_capabilities],
+  };
+}
+
+/** Parse a request's JSON body, returning a record or null (malformed/non-object). */
+async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed: unknown = await req.json();
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Gate a privileged mutation behind a single-use approval code. Returns null when the
+ * caller is authorised; otherwise a 403/401 `Response`. The code is read from the
+ * `x-vesper-approval` header (out-of-band — minted by the daemon, never in the page).
+ * When no token store is configured the route is fail-closed (403).
+ */
+function requireApproval(req: Request, tokens: ApprovalTokenStore | undefined): Response | null {
+  if (tokens === undefined) {
+    return json({ error: "approval is not configured (mutation refused)" }, 403);
+  }
+  const code = req.headers.get("x-vesper-approval");
+  if (code === null || code.length === 0) {
+    return json({ error: "approval code required" }, 401);
+  }
+  try {
+    tokens.verify(code);
+    return null;
+  } catch (err) {
+    if (err instanceof ApprovalError) {
+      return json({ error: `approval ${err.reason}` }, 403);
+    }
+    return json({ error: "approval failed" }, 403);
+  }
+}
+
 /** Extract the host (no port) from a `Host` header value or an `Origin` URL. */
 function hostOf(value: string | null): string | null {
   if (value === null || value.length === 0) return null;
@@ -125,6 +268,25 @@ async function buildClientBundle(): Promise<string> {
 }
 
 /**
+ * Build the raw client assets from disk — the `index.html` shell and the bundled
+ * `app.js`, without theme stamping. Used by the dev path and by the desktop build
+ * step that embeds these into the compiled daemon; theme stamping happens later,
+ * per-process, in {@link startUiServer}.
+ */
+export async function buildClientAssets(): Promise<ClientAssets> {
+  const indexHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  const appJs = await buildClientBundle();
+  return { indexHtml, appJs };
+}
+
+/** Resolve client assets: explicit dep, then process-embedded, then an on-disk build. */
+async function resolveClientAssets(deps: UiServerDeps): Promise<ClientAssets> {
+  if (deps.clientAssets !== undefined) return deps.clientAssets;
+  if (embeddedClientAssets !== null) return embeddedClientAssets;
+  return await buildClientAssets();
+}
+
+/**
  * Start the local Vesper World UI server (HTTP + WebSocket) on `127.0.0.1`.
  *
  * Routes: `GET /` (client shell), `GET /app.js` (bundled client), `GET /api/world`
@@ -140,23 +302,24 @@ async function buildClientBundle(): Promise<string> {
  * local-origin guard as every other route.
  */
 export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle> {
-  const { scheduler, store, seed } = deps;
+  const { scheduler, store } = deps;
+  const startedAt = Date.now();
   const hostname = deps.hostname ?? "127.0.0.1";
   const port = deps.port ?? 4317;
   const modules = new ModuleRegistry(deps.modules ?? []);
 
-  const baseHtml = await Bun.file(join(CLIENT_DIR, "index.html")).text();
+  const assets = await resolveClientAssets(deps);
   // Stamp the configured default theme into the page (sanitized to [a-z0-9-]) so the
   // client can read it via <meta name="vesper-theme">. Shell templating only.
   const themeId = (deps.defaultTheme ?? "").replace(/[^a-z0-9-]/gi, "");
   const indexHtml =
     themeId.length > 0
-      ? baseHtml.replace(
+      ? assets.indexHtml.replace(
           "</head>",
           `    <meta name="vesper-theme" content="${themeId}" />\n  </head>`,
         )
-      : baseHtml;
-  const appJs = await buildClientBundle();
+      : assets.indexHtml;
+  const appJs = assets.appJs;
 
   // Live presence: the agents running on this machine right now. Detected once at
   // startup, then re-scanned on an interval; the latest set feeds every /api/world.
@@ -188,8 +351,44 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           headers: { "content-type": "text/javascript; charset=utf-8" },
         });
       }
-      if (req.method === "GET" && pathname === "/api/world") {
-        return json(buildSnapshot(scheduler, store, seed, presences));
+      // GET /api/status — the Runtime panel + titlebar status pills.
+      if (req.method === "GET" && pathname === "/api/status") {
+        const clis = deps.detectClis ? await deps.detectClis() : [];
+        return json({
+          version: deps.version ?? "0.1.0",
+          uptimeMs: Date.now() - startedAt,
+          socket: deps.socketPath ?? "~/.vesper/run/vesper.sock",
+          defaultCli: deps.defaultCli ?? null,
+          clis,
+          runs: store.listRuns().length,
+          sessions: store.listSessions().length,
+          uiPort: server.port,
+          theme: themeId.length > 0 ? themeId : "dark",
+        });
+      }
+
+      // GET /api/presence — agents running on this machine (Diagnostics; relocated
+      // from the retired pixel-art home).
+      if (req.method === "GET" && pathname === "/api/presence") {
+        return json(presences);
+      }
+
+      // GET /api/runs?limit= — recent runs (newest-first) for Diagnostics.
+      if (req.method === "GET" && pathname === "/api/runs") {
+        const limitRaw = Number(url.searchParams.get("limit") ?? "50");
+        const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
+        const rows = store
+          .listRuns({ limit })
+          .slice()
+          .sort((a, b) => b.ts - a.ts)
+          .map((r) => ({
+            id: r.id,
+            pipeline: r.pipeline,
+            status: r.status,
+            summary: r.summary,
+            ts: r.ts,
+          }));
+        return json(rows);
       }
 
       // GET /api/runs/:runId/events?afterTs= — replay/backfill the persisted
@@ -242,6 +441,144 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         }
       }
 
+      // ── Chatbot home ─────────────────────────────────────────────────────
+      // POST /api/chat — a chat message is a manual run of the `router` pipeline
+      // through the EXISTING run path (no new execution). Persists the user turn,
+      // runs the router, persists the assistant turn carrying its runId, audits the
+      // mutation, and publishes both turns to the session's chat:<id> WS topic.
+      if (req.method === "POST" && pathname === "/api/chat") {
+        const body = await readJsonBody(req);
+        const message = typeof body?.message === "string" ? body.message : "";
+        if (message.trim().length === 0) {
+          return json({ error: "message is required" }, 400);
+        }
+        const requested = typeof body?.sessionId === "string" ? body.sessionId : null;
+        if (requested !== null && !UUID_RE.test(requested)) {
+          return json({ error: "invalid sessionId" }, 400);
+        }
+
+        // Create the session lazily; a brand-new session is titled from the message.
+        const sessionId = requested ?? store.createSession({ title: message.slice(0, 80) });
+        const userTurnId = store.appendTurn({ sessionId, role: "user", text: message });
+        publishChatTurn(server, sessionId, {
+          turnId: userTurnId,
+          runId: null,
+          role: "user",
+          text: message,
+        });
+
+        let outcome: RunOutcome;
+        try {
+          outcome = await scheduler.run("router", { params: { message, sessionId } });
+        } catch (err) {
+          if (err instanceof SchedulerError && err.reason === "unknown_task") {
+            return json({ error: "router pipeline is not registered" }, 500);
+          }
+          return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+
+        const assistantText = outcome.summary ?? "(no response)";
+        const turnId = store.appendTurn({
+          sessionId,
+          role: "assistant",
+          text: assistantText,
+          runId: outcome.runId,
+        });
+        publishChatTurn(server, sessionId, {
+          turnId,
+          runId: outcome.runId,
+          role: "assistant",
+          text: assistantText,
+        });
+        store.appendEvent({
+          source: "chat",
+          kind: "message",
+          payload: { sessionId, turnId, runId: outcome.runId },
+        });
+        return json({ sessionId, turnId, runId: outcome.runId });
+      }
+
+      // GET /api/chat/sessions — the session list (newest-first) for the home.
+      if (req.method === "GET" && pathname === "/api/chat/sessions") {
+        return json(store.listSessions());
+      }
+
+      // GET /api/chat/sessions/:id/turns?afterTs= — replay/backfill a transcript.
+      const turnsMatch = pathname.match(/^\/api\/chat\/sessions\/([^/]+)\/turns$/);
+      if (req.method === "GET" && turnsMatch) {
+        const sessionId = decodeURIComponent(turnsMatch[1] ?? "");
+        if (!UUID_RE.test(sessionId)) return json({ error: "invalid sessionId" }, 400);
+        const afterRaw = url.searchParams.get("afterTs");
+        const afterTs = afterRaw === null ? undefined : Number(afterRaw);
+        const turns = store.listTurns({
+          sessionId,
+          ...(afterTs !== undefined && Number.isFinite(afterTs) ? { afterTs } : {}),
+          limit: 500,
+        });
+        return json(turns);
+      }
+
+      // ── Editable pipeline templates ──────────────────────────────────────
+      // GET /api/pipelines — registered tasks + their editable ScheduledTask config.
+      if (req.method === "GET" && pathname === "/api/pipelines") {
+        return json(scheduler.list().map(toPipelineConfig));
+      }
+
+      // GET /api/pipelines/:id/template — the editable prompt + default params + config.
+      const templateMatch = pathname.match(/^\/api\/pipelines\/([^/]+)\/template$/);
+      if (req.method === "GET" && templateMatch) {
+        const id = decodeURIComponent(templateMatch[1] ?? "");
+        const task = scheduler.list().find((t) => t.id === id);
+        if (task === undefined) return json({ error: `unknown pipeline "${id}"` }, 404);
+        const template = store.getTemplate(task.handler_id);
+        return json({
+          handlerId: task.handler_id,
+          prompt: template?.prompt ?? "",
+          defaultParams: template?.defaultParams ?? {},
+          config: toPipelineConfig(task),
+        });
+      }
+
+      // PUT /api/pipelines/:id/template — the PRIVILEGED config mutation. Behind
+      // isLocalRequest (above) AND a single-use out-of-band approval code. A rejected
+      // edit is a row upsert, never a destructive file op (Hard rule 4).
+      if (req.method === "PUT" && templateMatch) {
+        const id = decodeURIComponent(templateMatch[1] ?? "");
+        const tokenError = requireApproval(req, deps.approvalTokens);
+        if (tokenError !== null) return tokenError;
+
+        const task = scheduler.list().find((t) => t.id === id);
+        if (task === undefined) return json({ error: `unknown pipeline "${id}"` }, 404);
+
+        const body = await readJsonBody(req);
+        if (body === null) return json({ error: "invalid JSON body" }, 400);
+        const prompt = typeof body.prompt === "string" ? body.prompt : "";
+        const defaultParams = isRecord(body.defaultParams) ? body.defaultParams : {};
+        store.upsertTemplate({ handlerId: task.handler_id, prompt, defaultParams });
+        store.appendEvent({
+          source: "templates",
+          kind: "updated",
+          payload: { pipelineId: id, handlerId: task.handler_id },
+        });
+        return json({ ok: true, handlerId: task.handler_id });
+      }
+
+      // POST /api/approval/request — mint a single-use approval code and surface it
+      // OUT-OF-BAND on the daemon's own stdout (the operator's `vesper daemon` terminal).
+      // The HTTP response NEVER carries the code, so a malicious local app can trigger a
+      // mint but cannot READ it — only the operator at the foreground terminal sees it.
+      // The operator pastes it into the privileged-mutation form (`x-vesper-approval`).
+      if (req.method === "POST" && pathname === "/api/approval/request") {
+        if (deps.approvalTokens === undefined) {
+          return json({ error: "approval is not configured" }, 403);
+        }
+        const code = deps.approvalTokens.mint();
+        process.stdout.write(
+          `\n  Vesper approval code: ${code}  (single-use, expires shortly)\n\n`,
+        );
+        return json({ ok: true });
+      }
+
       return new Response("not found", { status: 404 });
     },
     websocket: {
@@ -249,17 +586,23 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         ws.subscribe("world");
       },
       message(ws, raw) {
-        // Control protocol: {type:'subscribe'|'unsubscribe', runId}. A client follows
-        // one run's live trace by subscribing to its agent:<runId> topic. The runId is
-        // guarded by UUID shape (rejects crafted/wildcard topics); malformed frames are
-        // ignored silently — the connection is already local-origin (upgrade is guarded).
+        // Control protocol, two topic families on ONE socket:
+        //   {type:'subscribe'|'unsubscribe', runId}     -> a run's live trace (agent:<runId>)
+        //   {type:'subscribe'|'unsubscribe', sessionId}  -> a chat transcript (chat:<sessionId>)
+        // Each id is guarded by UUID shape (rejects crafted/wildcard topics); malformed
+        // frames are ignored silently — the connection is already local-origin (upgrade
+        // is guarded).
         try {
           const msg: unknown = JSON.parse(typeof raw === "string" ? raw : raw.toString());
           if (!isRecord(msg)) return;
-          const { type, runId } = msg;
-          if (typeof runId !== "string" || !UUID_RE.test(runId)) return;
-          if (type === "subscribe") ws.subscribe(`agent:${runId}`);
-          else if (type === "unsubscribe") ws.unsubscribe(`agent:${runId}`);
+          const { type, runId, sessionId } = msg;
+          if (typeof runId === "string" && UUID_RE.test(runId)) {
+            if (type === "subscribe") ws.subscribe(`agent:${runId}`);
+            else if (type === "unsubscribe") ws.unsubscribe(`agent:${runId}`);
+          } else if (typeof sessionId === "string" && UUID_RE.test(sessionId)) {
+            if (type === "subscribe") ws.subscribe(`chat:${sessionId}`);
+            else if (type === "unsubscribe") ws.unsubscribe(`chat:${sessionId}`);
+          }
         } catch {
           // Non-JSON / unexpected payload — ignore.
         }

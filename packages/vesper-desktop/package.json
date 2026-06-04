@@ -1,0 +1,15 @@
+{
+  "name": "@vesper/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Native desktop shell for Vesper — a thin Tauri 2 window over the Bun-hosted Vesper World. DEV-112 Slice 1.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}

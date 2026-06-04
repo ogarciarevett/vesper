@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core permissions for the main and panel windows. Both load the local Vesper World over HTTP; the panel popover calls the app's custom commands (open_main, quit_app) over the Tauri IPC bridge, which custom commands allow by default under core defaults.",
+  "windows": ["main", "panel"],
+  "permissions": ["core:default"]
+}

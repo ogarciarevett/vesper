@@ -6,11 +6,18 @@ import { MIGRATIONS } from "./migrations.ts";
 import type {
   AppendEventInput,
   AppendRunEventInput,
+  AppendTurnInput,
+  ChatSessionRow,
+  ChatTurnRole,
+  ChatTurnRow,
+  CreateSessionInput,
   EventRow,
   FinishRunInput,
   ListEventsOptions,
   ListRunEventsOptions,
   ListRunsOptions,
+  ListTurnsOptions,
+  PipelineTemplateRow,
   RecordRunInput,
   RunEventKind,
   RunEventRow,
@@ -20,6 +27,7 @@ import type {
   Store,
   TaskGrant,
   UpsertTaskGrantInput,
+  UpsertTemplateInput,
 } from "./types.ts";
 
 /**
@@ -66,6 +74,31 @@ interface RawTaskGrantRow {
   capabilities_json: unknown;
   granted_at: unknown;
   granted_by: unknown;
+}
+
+/** Raw shape returned for the `chat_sessions` table. */
+interface RawChatSessionRow {
+  id: unknown;
+  ts: unknown;
+  title: unknown;
+}
+
+/** Raw shape returned for the `chat_turns` table. */
+interface RawChatTurnRow {
+  id: unknown;
+  session_id: unknown;
+  ts: unknown;
+  role: unknown;
+  text: unknown;
+  run_id: unknown;
+}
+
+/** Raw shape returned for the `pipeline_templates` table. */
+interface RawPipelineTemplateRow {
+  handler_id: unknown;
+  prompt: unknown;
+  default_params: unknown;
+  updated_at: unknown;
 }
 
 function assertString(value: unknown, column: string): string {
@@ -189,6 +222,43 @@ function toTaskGrant(raw: RawTaskGrantRow): TaskGrant {
     capabilities: parseCapabilitiesJson(raw.capabilities_json, "capabilities_json"),
     granted_at: assertNumber(raw.granted_at, "granted_at"),
     granted_by: assertString(raw.granted_by, "granted_by"),
+  };
+}
+
+function toChatSessionRow(raw: RawChatSessionRow): ChatSessionRow {
+  return {
+    id: assertString(raw.id, "id"),
+    ts: assertNumber(raw.ts, "ts"),
+    title: assertString(raw.title, "title"),
+  };
+}
+
+/** Narrow a `chat_turns.role` column to the allowlisted union (corruption guard). */
+function assertChatTurnRole(value: unknown, column: string): ChatTurnRole {
+  const str = assertString(value, column);
+  if (str !== "user" && str !== "assistant") {
+    throw new StorageError("query_failed", `unrecognised chat turn role "${str}"`);
+  }
+  return str;
+}
+
+function toChatTurnRow(raw: RawChatTurnRow): ChatTurnRow {
+  return {
+    id: assertString(raw.id, "id"),
+    sessionId: assertString(raw.session_id, "session_id"),
+    ts: assertNumber(raw.ts, "ts"),
+    role: assertChatTurnRole(raw.role, "role"),
+    text: assertString(raw.text, "text"),
+    runId: assertStringOrNull(raw.run_id, "run_id"),
+  };
+}
+
+function toPipelineTemplateRow(raw: RawPipelineTemplateRow): PipelineTemplateRow {
+  return {
+    handlerId: assertString(raw.handler_id, "handler_id"),
+    prompt: assertString(raw.prompt, "prompt"),
+    defaultParams: parsePayload(raw.default_params, "default_params"),
+    updatedAt: assertNumber(raw.updated_at, "updated_at"),
   };
 }
 
@@ -515,6 +585,118 @@ export class SqliteStore implements Store {
     } catch (cause) {
       if (cause instanceof StorageError) throw cause;
       throw new StorageError("query_failed", "failed to read task grant", { cause });
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Chat home (migration 007_chat_home)
+  // -------------------------------------------------------------------------
+
+  createSession(input: CreateSessionInput): string {
+    const id = input.id ?? crypto.randomUUID();
+    const ts = Date.now();
+    try {
+      this.#db
+        .query<void, [string, number, string]>(
+          "INSERT INTO chat_sessions (id, ts, title) VALUES (?, ?, ?)",
+        )
+        .run(id, ts, input.title);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to create chat session", { cause });
+    }
+    return id;
+  }
+
+  appendTurn(input: AppendTurnInput): string {
+    const id = crypto.randomUUID();
+    const ts = Date.now();
+    const runId = input.runId ?? null;
+    try {
+      this.#db
+        .query<void, [string, string, number, string, string, string | null]>(
+          "INSERT INTO chat_turns (id, session_id, ts, role, text, run_id) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .run(id, input.sessionId, ts, input.role, input.text, runId);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to append chat turn", { cause });
+    }
+    return id;
+  }
+
+  listSessions(): ChatSessionRow[] {
+    try {
+      // `rowid DESC` breaks ts ties by insertion order so two sessions created in
+      // the same millisecond still sort newest-first deterministically.
+      const rows = this.#db
+        .query<RawChatSessionRow, []>(
+          "SELECT id, ts, title FROM chat_sessions ORDER BY ts DESC, rowid DESC",
+        )
+        .all();
+      return rows.map(toChatSessionRow);
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to list chat sessions", { cause });
+    }
+  }
+
+  listTurns(options: ListTurnsOptions): ChatTurnRow[] {
+    try {
+      const conditions: string[] = ["session_id = ?"];
+      const params: (string | number)[] = [options.sessionId];
+
+      if (options.afterTs !== undefined) {
+        conditions.push("ts > ?");
+        params.push(options.afterTs);
+      }
+
+      const where = ` WHERE ${conditions.join(" AND ")}`;
+      const limitClause = options.limit !== undefined ? " LIMIT ?" : "";
+      if (options.limit !== undefined) {
+        params.push(options.limit);
+      }
+
+      // `rowid ASC` breaks ts ties by insertion order so turns appended in the same
+      // millisecond still read back oldest-first (user before assistant).
+      const sql = `SELECT id, session_id, ts, role, text, run_id FROM chat_turns${where} ORDER BY ts ASC, rowid ASC${limitClause}`;
+      const rows = this.#db.query<RawChatTurnRow, (string | number)[]>(sql).all(...params);
+      return rows.map(toChatTurnRow);
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to list chat turns", { cause });
+    }
+  }
+
+  getTemplate(handlerId: string): PipelineTemplateRow | null {
+    try {
+      const row = this.#db
+        .query<RawPipelineTemplateRow, [string]>(
+          `SELECT handler_id, prompt, default_params, updated_at
+           FROM pipeline_templates WHERE handler_id = ?`,
+        )
+        .get(handlerId);
+      return row !== null ? toPipelineTemplateRow(row) : null;
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to read pipeline template", { cause });
+    }
+  }
+
+  upsertTemplate(input: UpsertTemplateInput): void {
+    const updatedAt = Date.now();
+    const defaultParamsJson = JSON.stringify(input.defaultParams);
+    try {
+      this.#db
+        .query<void, [string, string, string, number]>(
+          `INSERT INTO pipeline_templates (handler_id, prompt, default_params, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(handler_id) DO UPDATE SET
+             prompt = excluded.prompt,
+             default_params = excluded.default_params,
+             updated_at = excluded.updated_at`,
+        )
+        .run(input.handlerId, input.prompt, defaultParamsJson, updatedAt);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to upsert pipeline template", { cause });
     }
   }
 

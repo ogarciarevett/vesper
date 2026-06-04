@@ -1,0 +1,35 @@
+// @vesper/core — Connections layer public surface (messaging channels + MCP catalog).
+
+export {
+  type ConnectionEventKind,
+  recordConnectionEvent,
+  stripSensitive,
+} from "./audit.ts";
+export {
+  CHANNEL_CATALOG,
+  channelById,
+  isChannelId,
+  isMcpId,
+  MCP_CATALOG,
+  type McpDescriptor,
+  mcpById,
+} from "./catalog.ts";
+export { ConnectionError, type ConnectionErrorReason } from "./errors.ts";
+export {
+  type AllowlistedFetchOptions,
+  allowlistedFetch,
+  type FetchFn,
+} from "./fetch.ts";
+export { ChannelRegistry } from "./registry.ts";
+export { TelegramHandler, type TelegramHandlerOptions } from "./telegram.ts";
+export type {
+  ChannelDescriptor,
+  ChannelHandler,
+  ChannelId,
+  ChannelStatus,
+  ChannelTransport,
+  ChatSink,
+  InboundMessage,
+  OutboundIntent,
+  Stoppable,
+} from "./types.ts";
