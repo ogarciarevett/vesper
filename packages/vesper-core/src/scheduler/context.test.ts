@@ -334,6 +334,29 @@ describe("buildPipelineContext.complete — context usage capture", () => {
     });
   });
 
+  test("prefers the CLI's exact contextWindow over the model-name heuristic", async () => {
+    const { store, contexts } = makeStore();
+    const complete: CompleteFn = async () => ({
+      ...makeResult("ok"),
+      // The model has no "1m" tag (the heuristic would say 200k), but the CLI
+      // reports the real 1M window — the exact value must win.
+      usage: {
+        inputTokens: 2_000,
+        outputTokens: 5,
+        model: "some-future-model",
+        contextWindow: 1_000_000,
+      },
+    });
+    const ctx = build({ task: makeTask(["CLI_INVOKE"]), now: NOW, store, complete });
+    await ctx.complete("p");
+    expect(contexts[0]).toEqual({
+      runId: RUN_ID,
+      usedTokens: 2_000,
+      limit: 1_000_000,
+      model: "some-future-model",
+    });
+  });
+
   test("records nothing when the completion reports no usage", async () => {
     const { store, contexts, events } = makeStore();
     const ctx = build({

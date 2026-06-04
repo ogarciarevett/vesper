@@ -763,3 +763,8 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   merge baseline (0 new); no provider SDKs (usage parsed from the user's own CLI). DEFERRED: live browser
   visual verify of the pill (data path is integration-tested server-side); a peak-vs-latest toggle; usage
   for non-Claude CLIs that do not emit it.
+- Follow-up (verified against the real `claude` CLI, post-ship): the `--output-format json` envelope reports
+  the EXACT window at `modelUsage[model].contextWindow` (1,000,000 for `claude-opus-4-8[1m]`). Now read into
+  `CompleteUsage.contextWindow` and PREFERRED over the `contextWindowFor` name-heuristic (kept as the fallback
+  for CLIs that omit it) — so the fill % is exact, not guessed. Text/usage/model field names also confirmed
+  against the real envelope. 765 tests / 0 fail.

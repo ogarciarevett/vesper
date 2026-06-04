@@ -316,6 +316,35 @@ describe("ClaudeCodeAdapter.complete — usage parsing", () => {
     expect(result.usage?.model).toBe("claude-sonnet-4-6");
   });
 
+  test("JSON envelope: exact contextWindow is read from the modelUsage entry", async () => {
+    const envelope = makeEnvelope("ok", {
+      inputTokens: 100,
+      outputTokens: 4,
+      modelUsage: { "claude-opus-4-8[1m]": { contextWindow: 1_000_000, maxOutputTokens: 64_000 } },
+    });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: envelope })),
+    });
+    const result = await adapter.complete("ping");
+
+    expect(result.usage?.model).toBe("claude-opus-4-8[1m]");
+    expect(result.usage?.contextWindow).toBe(1_000_000);
+  });
+
+  test("JSON envelope: contextWindow is undefined when the modelUsage entry lacks it", async () => {
+    const envelope = makeEnvelope("ok", {
+      inputTokens: 10,
+      outputTokens: 2,
+      modelUsage: { "claude-sonnet-4-6": { input_tokens: 10, output_tokens: 2 } },
+    });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: envelope })),
+    });
+    const result = await adapter.complete("ping");
+
+    expect(result.usage?.contextWindow).toBeUndefined();
+  });
+
   test("JSON envelope: model is null when neither model nor modelUsage is present", async () => {
     const envelope = makeEnvelope("hi", { inputTokens: 10, outputTokens: 2 });
     const adapter = new ClaudeCodeAdapter({

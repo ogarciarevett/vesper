@@ -27,18 +27,31 @@ function toNumber(v: unknown): number | undefined {
 }
 
 /**
- * Resolve the model identifier from a Claude JSON envelope. Preference order:
- * 1. Top-level `model` string field.
- * 2. First key of `modelUsage` object (the model id Anthropic uses internally).
- * 3. `null` — present but unresolvable.
+ * Resolve the model id AND its exact context window from a Claude JSON envelope.
+ *
+ * Model preference: top-level `model` string, else the first `modelUsage` key (the
+ * model id Anthropic uses internally), else `null`. The window comes from that same
+ * `modelUsage` entry's `contextWindow` (a real number from the CLI) when present —
+ * preferred downstream over the model-name heuristic so the fill is exact.
  */
-function resolveModel(envelope: ClaudeJsonEnvelope): string | null {
-  if (typeof envelope.model === "string") return envelope.model;
-  if (typeof envelope.modelUsage === "object" && envelope.modelUsage !== null) {
-    const firstKey = Object.keys(envelope.modelUsage)[0];
-    if (firstKey !== undefined) return firstKey;
+function resolveModelInfo(envelope: ClaudeJsonEnvelope): {
+  model: string | null;
+  contextWindow?: number;
+} {
+  const usage = envelope.modelUsage;
+  const firstKey = typeof usage === "object" && usage !== null ? Object.keys(usage)[0] : undefined;
+
+  const model = typeof envelope.model === "string" ? envelope.model : (firstKey ?? null);
+
+  if (firstKey !== undefined && usage !== undefined) {
+    const entry = usage[firstKey];
+    const cw =
+      typeof entry === "object" && entry !== null
+        ? (entry as Record<string, unknown>).contextWindow
+        : undefined;
+    if (typeof cw === "number" && cw > 0) return { model, contextWindow: cw };
   }
-  return null;
+  return { model };
 }
 
 /**
@@ -86,12 +99,14 @@ export class ClaudeCodeAdapter extends BaseAdapter {
       // Include the optional cache fields only when present (exactOptionalPropertyTypes).
       const cacheReadTokens = toNumber(u?.cache_read_input_tokens);
       const cacheCreationTokens = toNumber(u?.cache_creation_input_tokens);
+      const { model, contextWindow } = resolveModelInfo(raw);
       const usage: CompleteUsage = {
         inputTokens,
         outputTokens,
-        model: resolveModel(raw),
+        model,
         ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
         ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
       };
 
       return { text: raw.result, usage };

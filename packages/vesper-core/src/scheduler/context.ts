@@ -120,7 +120,9 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
       const usedTokens =
         usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0);
       const model = usage.model ?? null;
-      const limit = contextWindowFor(model);
+      // Prefer the CLI's exact window when it reports one; else fall back to the
+      // model-name heuristic.
+      const limit = usage.contextWindow ?? contextWindowFor(model);
       store.recordRunContext({ runId, usedTokens, limit, model });
       const payload: Record<string, unknown> = { usedTokens, limit, model };
       const eventId = store.appendRunEvent({ runId, kind: "usage", payload });

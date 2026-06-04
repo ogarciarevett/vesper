@@ -6,6 +6,12 @@ export interface CompleteUsage {
   readonly cacheCreationTokens?: number;
   /** Model id the CLI reported, if any (used downstream to pick the context window). */
   readonly model?: string | null;
+  /**
+   * The model's exact context-window size (tokens), when the CLI reports it (e.g.
+   * Claude's `modelUsage[model].contextWindow`). Preferred over the model-name
+   * heuristic so the fill percentage is exact rather than guessed.
+   */
+  readonly contextWindow?: number;
 }
 
 /**
