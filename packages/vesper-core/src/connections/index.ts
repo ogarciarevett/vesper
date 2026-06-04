@@ -14,6 +14,12 @@ export {
   type McpDescriptor,
   mcpById,
 } from "./catalog.ts";
+export {
+  DiscordHandler,
+  type DiscordHandlerOptions,
+  type GatewayConnect,
+  type GatewaySocket,
+} from "./discord.ts";
 export { ConnectionError, type ConnectionErrorReason } from "./errors.ts";
 export {
   type AllowlistedFetchOptions,

@@ -10,6 +10,7 @@
  */
 
 import type { Capability } from "../capabilities/index.ts";
+import { DiscordHandler } from "./discord.ts";
 import type { FetchFn } from "./fetch.ts";
 import { TelegramHandler } from "./telegram.ts";
 import type { ChannelHandler, ChannelId } from "./types.ts";
@@ -34,12 +35,22 @@ export interface ChannelPlugin {
   build(opts: ChannelBuildOptions): ChannelHandler;
 }
 
-/** Built-in channel plugins. Telegram is the only handler shipped today. */
+/** Built-in channel plugins. Telegram (long-poll) and Discord (Gateway) ship today. */
 export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
   {
     id: "telegram",
     build: (opts) =>
       new TelegramHandler({
+        granted: opts.granted,
+        vaultKey: opts.vaultKey,
+        allowedHosts: opts.allowedHosts,
+        ...(opts.fetchFn !== undefined ? { fetchFn: opts.fetchFn } : {}),
+      }),
+  },
+  {
+    id: "discord",
+    build: (opts) =>
+      new DiscordHandler({
         granted: opts.granted,
         vaultKey: opts.vaultKey,
         allowedHosts: opts.allowedHosts,

@@ -24,7 +24,8 @@ export const CHANNEL_CATALOG: readonly ChannelDescriptor[] = [
     id: "discord",
     displayName: "Discord",
     transport: "bot-api",
-    allowedHosts: ["discord.com"],
+    // discord.com is the REST API; gateway.discord.gg is the receive WebSocket.
+    allowedHosts: ["discord.com", "gateway.discord.gg"],
     vaultKeys: ["discord_bot_token"],
     docsUrl: "https://discord.com/developers/docs/getting-started",
     status: "ready",

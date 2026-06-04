@@ -119,8 +119,8 @@ describe("vesper connections — actions", () => {
     const states = await connectionStates(deps);
     const tg = states.find((s) => s.id === "telegram");
     expect(tg).toMatchObject({ available: true, configured: true, enabled: true });
-    // discord ships no handler in this slice -> not available.
-    expect(states.find((s) => s.id === "discord")?.available).toBe(false);
+    // whatsapp ships no handler yet -> not available.
+    expect(states.find((s) => s.id === "whatsapp")?.available).toBe(false);
   });
 
   test("testChannel builds the handler and authenticates it", async () => {
@@ -148,6 +148,6 @@ describe("vesper connections — actions", () => {
 
   test("testChannel refuses a channel with no shipped handler", async () => {
     const { deps } = makeDeps({ vault });
-    await expect(testChannel(deps, "discord")).rejects.toThrow(/no handler/);
+    await expect(testChannel(deps, "whatsapp")).rejects.toThrow(/no handler/);
   });
 });

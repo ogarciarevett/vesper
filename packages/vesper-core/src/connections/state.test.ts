@@ -24,13 +24,13 @@ describe("channelStates", () => {
   });
 
   test("a channel with no shipped handler is never available or running", () => {
-    const states = channelStates({ runningIds: ["discord"] });
-    const discord = byId(states, "discord");
-    expect(discord.available).toBe(false);
+    const states = channelStates({ runningIds: ["whatsapp"] });
+    const whatsapp = byId(states, "whatsapp");
+    expect(whatsapp.available).toBe(false);
     // Even if runningIds claims it, an unavailable channel must never read as running.
-    expect(discord.running).toBe(false);
-    expect(discord.configured).toBe(false);
-    expect(discord.enabled).toBe(false);
+    expect(whatsapp.running).toBe(false);
+    expect(whatsapp.configured).toBe(false);
+    expect(whatsapp.enabled).toBe(false);
   });
 
   test("configured falls back to the descriptor vault key when wiring omits it", () => {
