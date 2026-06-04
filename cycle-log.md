@@ -768,3 +768,30 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   `CompleteUsage.contextWindow` and PREFERRED over the `contextWindowFor` name-heuristic (kept as the fallback
   for CLIs that omit it) — so the fill % is exact, not guessed. Text/usage/model field names also confirmed
   against the real envelope. 765 tests / 0 fail.
+
+---
+
+## Router grants each routed child its target's declared capabilities — SHIPPED
+
+- Context: surfaced while re-capturing the README hero ("Vesper actually working"). The chatbot-home chat
+  flow could never show a clean success — the `router` granted every spawned child a flat `["WRITE_STORAGE"]`,
+  but both allowlisted targets need more: `selftest` -> `CLI_INVOKE`, `orchestrate`/orchestrator-demo ->
+  `SPAWN_SUBAGENT`. So a routed child was denied at its own context boundary ("capabilities denied: …") and
+  the only clean router outcome was a `clarify` turn (exactly what the old hero showed). Authorized by Omar
+  2026-06-04 (Linear issue cap active — this log + commit are the record, Rule 11).
+- Fix (`packages/pipelines/router/handler.ts`): replaced the constant `CHILD_CAPABILITIES` with
+  `CHILD_CAPABILITIES_BY_HANDLER`, keyed off each target's OWN `required_capabilities` (single source of
+  truth: the imported `selftestTaskInput` / `orchestratorDemoTaskInput`), plus a least-privilege
+  `WRITE_STORAGE` fallback for any custom-allowlist target with no mapping. The router task already declares
+  the UNION (CLI_INVOKE + WRITE_STORAGE + SPAWN_SUBAGENT), so every grant is within the router run's ceiling —
+  the flat grant was simply the bug, not a security boundary.
+- Result: chat -> `selftest` now runs clean (router ok -> selftest ok) — the honest README hero. NOTE the
+  depth-1 invariant (`scheduler/subagent.ts`: a sub-agent cannot spawn sub-agents) still blocks chat ->
+  `orchestrate` (orchestrator-demo would need to spawn its workers at depth 2); that route stays
+  partial-by-design and the rich research/draft/review fan-out only renders when orchestrator-demo runs
+  TOP-LEVEL. Follow-up worth a ticket when the cap lifts: either drop `orchestrate` from the router allowlist
+  or let orchestrator-demo degrade to inline stages under the depth limit.
+- TDD: updated the selftest-route test to expect `["CLI_INVOKE","WRITE_STORAGE"]` (it was asserting the buggy
+  flat grant) and added an orchestrate-route test asserting `["SPAWN_SUBAGENT","WRITE_STORAGE"]`.
+- Verified: 766 tests / 0 fail; Biome clean; tsc 0 errors; end-to-end via the daemon (chat -> router ok ->
+  selftest ok, with real context pills). No provider SDKs.

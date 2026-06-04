@@ -132,8 +132,25 @@ describe("routerHandler", () => {
     expect(fake.spawned).toHaveLength(1);
     expect(fake.spawned[0]?.handlerId).toBe(ROUTE_ALLOWLIST.selftest);
     expect(fake.spawned[0]?.params?.message).toBe("run the self test");
-    expect(fake.spawned[0]?.capabilities).toEqual(["WRITE_STORAGE"]);
+    // The child is granted exactly the capabilities ITS task declares — selftest
+    // needs CLI_INVOKE to reach the adapter, so a WRITE_STORAGE-only grant would
+    // deny the run at the context boundary (the original chatbot-home bug).
+    expect(fake.spawned[0]?.capabilities).toEqual(["CLI_INVOKE", "WRITE_STORAGE"]);
     expect(fake.recordedRuns[0]?.status).toBe("ok");
+  });
+
+  test("the orchestrate route grants the child SPAWN_SUBAGENT so it can fan out", async () => {
+    const fake = makeFakeContext({
+      params: { message: "plan, draft, and review something" },
+      classifyReply: "orchestrate",
+    });
+    await makeRouterHandler()(fake.ctx);
+
+    expect(fake.spawned).toHaveLength(1);
+    expect(fake.spawned[0]?.handlerId).toBe(ROUTE_ALLOWLIST.orchestrate);
+    // orchestrator-demo spawns its own sub-agents; without SPAWN_SUBAGENT the child
+    // is denied at its first spawn ("capabilities denied: SPAWN_SUBAGENT").
+    expect(fake.spawned[0]?.capabilities).toEqual(["SPAWN_SUBAGENT", "WRITE_STORAGE"]);
   });
 
   test("merges the target template default_params UNDER the user message (#4)", async () => {

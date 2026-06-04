@@ -19,6 +19,11 @@
  */
 
 import type { Capability, RegisterTaskInput, RunParams, TaskHandler } from "@vesper/core";
+import {
+  ORCHESTRATOR_DEMO_HANDLER_ID,
+  orchestratorDemoTaskInput,
+} from "../orchestrator-demo/handler.ts";
+import { SELFTEST_HANDLER_ID, selftestTaskInput } from "../selftest/handler.ts";
 
 /** Allowlisted handler id referenced by the `router` task. */
 export const ROUTER_HANDLER_ID = "router";
@@ -34,8 +39,25 @@ export const ROUTE_ALLOWLIST: Readonly<Record<string, string>> = {
   orchestrate: "orchestrator-demo",
 } as const;
 
-/** The capability the spawned child is granted — `WRITE_STORAGE` only (it records + traces). */
-const CHILD_CAPABILITIES: readonly Capability[] = ["WRITE_STORAGE"];
+/**
+ * The capabilities each allowlisted spawn target is granted — exactly what ITS task
+ * declares (the single source of truth is each target's `required_capabilities`).
+ * The router task requires the UNION of these (CLI_INVOKE + WRITE_STORAGE +
+ * SPAWN_SUBAGENT), so every grant here is within the router run's ceiling. Granting
+ * a flat `WRITE_STORAGE` denied `selftest` (needs CLI_INVOKE) and `orchestrate`
+ * (needs SPAWN_SUBAGENT) at the child's context boundary — the chatbot-home bug.
+ */
+const CHILD_CAPABILITIES_BY_HANDLER: Readonly<Record<string, readonly Capability[]>> = {
+  [SELFTEST_HANDLER_ID]: selftestTaskInput.required_capabilities ?? [],
+  [ORCHESTRATOR_DEMO_HANDLER_ID]: orchestratorDemoTaskInput.required_capabilities ?? [],
+};
+
+/**
+ * Fallback grant for a custom-allowlist target with no declared mapping (record +
+ * trace only). The built-in allowlist always resolves above; this bounds an
+ * unknown injected target to the least privilege rather than the router's full union.
+ */
+const DEFAULT_CHILD_CAPABILITIES: readonly Capability[] = ["WRITE_STORAGE"];
 
 /** Max characters of the user message embedded in the classify prompt (bound the prompt). */
 const MESSAGE_MAX_LENGTH = 2_000;
@@ -146,7 +168,7 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
       handlerId,
       label,
       params: { ...templateParams, message },
-      capabilities: CHILD_CAPABILITIES,
+      capabilities: CHILD_CAPABILITIES_BY_HANDLER[handlerId] ?? DEFAULT_CHILD_CAPABILITIES,
     });
     const childOutcome = await handle.done.catch(() => null);
 
