@@ -19,6 +19,7 @@ import { loadConfig, saveConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
+import { loadOptionalChannels } from "../optional-channels.ts";
 import { PairingCoordinator } from "../pairing-coordinator.ts";
 import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
 import { dim, green, line, yellow } from "../ui.ts";
@@ -95,6 +96,9 @@ export const daemonRunCommand: Command = {
     // messages bridge to the chatbot's EXISTING run path (see makeChannelSink); the
     // loops start AFTER the UI (their POST target) is listening.
     const vault = new KeychainVault();
+    // Register opt-in channel packages (e.g. WhatsApp-Web via Baileys) BEFORE building the
+    // registry so a paired one starts, and so the pairing coordinator + UI report it available.
+    const optionalChannels = await loadOptionalChannels();
     const channels = await buildChannelRegistry({
       connections: config.connections,
       vault,
@@ -141,6 +145,9 @@ export const daemonRunCommand: Command = {
     );
     if (channels.runningIds.length > 0) {
       line(dim(`  channels:  ${channels.runningIds.join(", ")}`));
+    }
+    if (optionalChannels.length > 0) {
+      line(dim(`  optional:  ${optionalChannels.join(", ")} (opt-in package loaded)`));
     }
 
     // Start the cron tick loop. The scheduler records per-task errors for any

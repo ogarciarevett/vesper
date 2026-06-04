@@ -33,6 +33,8 @@ export {
   type ChannelBuildOptions,
   type ChannelPlugin,
   channelPluginById,
+  registerChannelPlugin,
+  unregisterChannelPlugin,
 } from "./plugins.ts";
 export { ChannelRegistry } from "./registry.ts";
 export {

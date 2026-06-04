@@ -10,5 +10,8 @@
     "@vesper/core": "workspace:*",
     "@vesper/pipelines": "workspace:*",
     "@vesper/ui": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@vesper/channel-whatsapp-web": "workspace:*"
   }
 }

@@ -106,30 +106,43 @@ export class PairingCoordinator {
     const vaultKey = conn?.vaultKey ?? descriptor.vaultKeys[0];
     if (vaultKey === undefined) return errorSession(`channel "${id}" declares no vault key`);
 
-    // Reuse the running handler if the daemon already receives this channel; otherwise
-    // build a transient one and feed only the pairing listeners for the pairing window.
-    let handler: ChannelHandler | undefined = this.#deps.registry.byId(id as ChannelId);
+    const plugin = channelPluginById(id);
+    const running = this.#deps.registry.byId(id as ChannelId);
+    if (plugin === undefined && running === undefined) {
+      return errorSession(`channel "${id}" has no handler yet`);
+    }
+    // SELF-DRIVING channels (e.g. WhatsApp-Web) establish auth via the scan itself and drive
+    // their own socket, so they skip the authenticate precondition + the inbound multiplex.
+    // CHAT-LINK channels (Telegram/Discord) watch the daemon's single inbound stream for the
+    // nonce, reusing the running receiver or a transient one.
+    const needsInbound = plugin?.pairingNeedsInbound !== false;
+    const buildOpts = {
+      granted: CHANNEL_GRANTS,
+      vaultKey,
+      allowedHosts: conn?.allowedHosts ?? descriptor.allowedHosts,
+      ...(conn?.params !== undefined ? { params: conn.params } : {}),
+      ...(this.#deps.fetchFn !== undefined ? { fetchFn: this.#deps.fetchFn } : {}),
+    };
+
+    let handler: ChannelHandler;
     let transient: Stoppable | undefined;
-    if (handler === undefined) {
-      const plugin = channelPluginById(id);
+    if (needsInbound && running !== undefined) {
+      handler = running;
+    } else {
       if (plugin === undefined) return errorSession(`channel "${id}" has no handler yet`);
-      const built = plugin.build({
-        granted: CHANNEL_GRANTS,
-        vaultKey,
-        allowedHosts: conn?.allowedHosts ?? descriptor.allowedHosts,
-        ...(conn?.params !== undefined ? { params: conn.params } : {}),
-        ...(this.#deps.fetchFn !== undefined ? { fetchFn: this.#deps.fetchFn } : {}),
-      });
-      try {
-        await built.authenticate(this.#deps.vault);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        return errorSession(`cannot authenticate "${id}": ${reason}`);
+      const built = plugin.build(buildOpts);
+      if (needsInbound) {
+        try {
+          await built.authenticate(this.#deps.vault);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          return errorSession(`cannot authenticate "${id}": ${reason}`);
+        }
+        transient = built.receive(async (message) => {
+          this.#notify(message);
+        });
       }
       handler = built;
-      transient = built.receive(async (message) => {
-        this.#notify(message);
-      });
     }
 
     if (!isPairable(handler)) {
@@ -141,7 +154,9 @@ export class PairingCoordinator {
 
     const inner = handler.startPairing({
       vault: this.#deps.vault,
-      subscribeInbound: (on) => this.#subscribe(on),
+      ...(needsInbound
+        ? { subscribeInbound: (on: (m: InboundMessage) => void) => this.#subscribe(on) }
+        : {}),
     });
 
     const onUpdate = (update: PairingUpdate): Promise<void> => this.#onUpdate(id, vaultKey, update);
@@ -165,23 +180,33 @@ export class PairingCoordinator {
 
   async #onUpdate(id: string, vaultKey: string, update: PairingUpdate): Promise<void> {
     if (update.status === "linked") {
-      if (update.chatId !== undefined) await this.#persistLinked(id, vaultKey, update.chatId);
-      this.#record("connection_paired", { channel: id, vaultKey, chatId: update.chatId });
+      // Enable the channel on link. Chat-link channels carry the captured chat id;
+      // self-driving channels (WhatsApp-Web) link the account with no chat id here.
+      await this.#persistLinked(id, vaultKey, update.chatId);
+      this.#record("connection_paired", {
+        channel: id,
+        vaultKey,
+        ...(update.chatId !== undefined ? { chatId: update.chatId } : {}),
+      });
     } else if (update.status === "error" || update.status === "expired") {
       this.#record("connection_pairing_failed", { channel: id, outcome: update.status });
     }
   }
 
-  /** Persist the captured chat id as `params.defaultChatId` and enable the channel. */
-  async #persistLinked(id: string, vaultKey: string, chatId: string): Promise<void> {
+  /** Enable the channel on link, recording the captured chat id (if any) as the default target. */
+  async #persistLinked(id: string, vaultKey: string, chatId?: string): Promise<void> {
     const config = await this.#deps.load();
     const descriptor = channelById(id);
     const existing = config.connections?.[id];
+    const params = {
+      ...existing?.params,
+      ...(chatId !== undefined ? { defaultChatId: chatId } : {}),
+    };
     const conn: ConnectionConfig = {
       enabled: true,
       vaultKey,
       allowedHosts: existing?.allowedHosts ?? descriptor?.allowedHosts ?? [],
-      params: { ...existing?.params, defaultChatId: chatId },
+      ...(Object.keys(params).length > 0 ? { params } : {}),
     };
     await this.#deps.save(withConnection(config, id, conn));
   }

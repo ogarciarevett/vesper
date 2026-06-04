@@ -152,9 +152,20 @@ fallback for manual reconciliation.
   (GitHub tokens, Discord webhooks). It never stores LLM auth — that is the CLI's concern.
 - IPC: Unix socket at `~/.vesper/run/vesper.sock` (interface defined in Foundation; server can
   be a stub returning 501 for non-`ping` methods).
-- **Only dependency is `@biomejs/biome` (devDep)** (+ `@types/bun` for Bun TS types). No
-  `commander`/`zod`/`keytar` — hand-roll the small CLI arg parser. Bun-only: `bun install`,
-  `bun run`, `bun test`, `bun x`. No npm/yarn.
+- **Core stays dependency-free.** `vesper-core`, `vesper-cli`, and `vesper-ui` ship only
+  `@biomejs/biome` (devDep) (+ `@types/bun`). No `commander`/`zod`/`keytar` — hand-roll the small
+  CLI arg parser. Bun-only: `bun install`, `bun run`, `bun test`, `bun x`. No npm/yarn.
+- **Opt-in package exception (the ONLY runtime dependency; authorized by Omar 2026-06-05).** The
+  isolated `@vesper/channel-whatsapp-web` package bundles **Baileys** (`baileys`) — a
+  reverse-engineered WhatsApp-Web client — to enable personal-account QR pairing. Deliberate and
+  contained: Baileys and its transitive deps (incl. a native Rust bridge in v7) live ONLY in that
+  package; core + ui never reference it, and the cli only DECLARES it (an `optionalDependency`) and
+  lazy-loads it at boot via a variable-specifier dynamic `import()` (`loadOptionalChannels`) — so it
+  never enters the static module graph or the compiled binary, and a distributed build can omit it
+  (`--omit=optional`). This does **NOT** relax Hard rule 12 (no LLM
+  provider SDKs) — Baileys is a messaging-channel transport, not an LLM SDK — and is not a precedent:
+  any further runtime dependency requires the same explicit Omar authorization + isolation in its own
+  opt-in package.
 - UI: **Bun/TypeScript/web stack** for any user-facing surface (local-first, ESM-only, served from
   the existing TS toolchain). **No Rust/Tauri by default** — Tauri is opt-in only when a capability
   strictly requires a native shell, and only after surfacing the need to Omar (see Hard rule 14).
@@ -329,9 +340,20 @@ DEV-93/94/36/90/98/99/100 Cancelled as superseded by the bring-your-own-CLI + el
 (per-issue reasons recorded; reversible). DEV-13 + DEV-48 cancellation was blocked by the permission
 classifier — pending Omar's call.
 
+**Connections (messaging channels) SHIPPED.** Channels are a plugin (`connections/` core + a
+`ChannelRegistry` the daemon/CLI/UI iterate): Telegram (long-poll), Discord (Gateway), WhatsApp
+Cloud-API send-only, each a handler + one catalog/registry entry. **Scan-to-connect (PR #9)** adds
+QR pairing: a dependency-free portable QR encoder (`media/qr`) + an optional `Pairable` capability;
+Telegram's `t.me/<bot>?start=<nonce>` deep-link QR auto-captures the chat id, Discord uses an OAuth2
+invite QR + `pair <nonce>`. A daemon `PairingCoordinator` multiplexes the single inbound long-poll;
+`POST /api/connections/:id/pair` streams pairing updates as ndjson to both the Vesper World "Connect"
+canvas-QR card and `vesper connections pair`. **WhatsApp-Web (personal account)** lands as the opt-in
+`@vesper/channel-whatsapp-web` package — the SOLE runtime dependency (Baileys; see the opt-in carve-out
+under Stack), lazy-registered by the daemon, with rotating-QR pairing into a vault-backed session.
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **514 tests / 0 fail**; Biome clean; no
-provider SDKs.
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **870 tests / 0 fail**; Biome clean; no
+provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
 Voice (`specs/voice-modalities.md`, needs the Hard-rule-12 contract amendment first); the one-line

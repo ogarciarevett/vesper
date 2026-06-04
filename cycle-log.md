@@ -927,3 +927,45 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   package (Baileys isolated + lazy-imported so core stays dep-free) + a rotating-QR pairing session + the
   `.ai/context.md` amendment carving out that one dependency. Also: Signal (signal-cli, real QR device-link);
   optionally browser token entry behind the approval gate; filtering the pairing `/start` message from the chat.
+
+## Scan-to-connect — WhatsApp-Web (personal account) via Baileys, opt-in — SHIPPED
+- The deferred slice G of scan-to-connect. Omar shipped the dep-free v1 (PR #9) first, then greenlit the heavy
+  WhatsApp-Web path. Issue-capped: this entry + the commit are the record (Rule 11).
+- DEPENDENCY DISCOVERY (surfaced to Omar before building): the latest Baileys (`baileys@7.0.0-rc13`, dist-tag
+  `latest`) is an RC AND pulls a native Rust bridge (`whatsapp-rust-bridge`) + libsignal/protobuf/pino (~11
+  transitive). The stable `legacy` 6.7.23 avoids Rust but is older-protocol + git-URL deps. Omar chose v7-rc
+  (current protocol; accepts the RC + Rust). Install + runtime-load verified (no blocked native scripts; the
+  Rust bridge ships prebuilt). Brushes Hard rule 14 (no Rust by default) — recorded in the contract, but 14 is
+  a UI-stack rule and this is a transitive dep inside one opt-in package, so not a violation.
+- ISOLATION ARCHITECTURE (the crux): `plugin.build()` is SYNC, so a lazy `import()` can't live inside it. Solution
+  — make the core plugin registry EXTENSIBLE (`registerChannelPlugin`/`unregisterChannelPlugin`; `channelPluginById`
+  checks built-ins then a runtime map) so core ships zero Baileys, and the daemon registers the optional plugin at
+  boot. `whatsapp-web` is a real catalog id + ChannelId (transport `qr-web`); `available`/`pairable` derive from
+  registration (honest gate). The cli declares `@vesper/channel-whatsapp-web` as an `optionalDependency` (so it
+  RESOLVES in the workspace — an undeclared sibling does not) and `loadOptionalChannels()` loads it via a VARIABLE-
+  specifier dynamic `import()` (kept out of tsc's resolution + the compiled binary's static graph; `--omit=optional`
+  drops it from a distributed build). Lesson: in a Bun monorepo a dynamic `import()` of a sibling only resolves if
+  the importer DECLARES it — the first integration test caught this (registered === []), fixed by the optional dep.
+- PAIRING SHAPE DIVERGENCE: WhatsApp-Web pairing is SELF-DRIVING (drives its own Baileys socket; the scan ESTABLISHES
+  auth) — unlike Telegram/Discord which watch the daemon's inbound stream for a nonce and need a prior authenticate.
+  Added `pairingNeedsInbound?: boolean` to the plugin (default true; whatsapp-web false). The coordinator now branches:
+  self-driving channels skip the authenticate precondition + the transient receiver + `subscribeInbound`, and pairing
+  `linked` carries NO chatId — so `#persistLinked` enables the channel even without one. Telegram/Discord behavior
+  is byte-identical (default true).
+- THE PACKAGE (`@vesper/channel-whatsapp-web`): `WhatsAppWebHandler` (ChannelHandler + Pairable) with an injected
+  `WASocketFactory` seam (tests inject a fake — no live WhatsApp, no real socket). `makeVaultAuthState` ports Baileys'
+  `useMultiFileAuthState` to a SINGLE vault blob (`whatsapp_web_session`), serialized with `BufferJSON` (incl. the
+  `app-state-sync-key` proto re-wrap), rewritten on every key `set` + `creds.update`. `startPairing` bridges
+  `connection.update` to an async queue so rotating QRs preserve repeated `awaiting` (kind `code`); `open` -> save +
+  `linked`; `close` -> `error`. `receive` maps non-fromMe text to InboundMessage (two-way works once paired); `send`
+  uses the live receive socket (throws when not connected).
+- CONTRACT AMENDMENT: `.ai/context.md` Stack section now carves out the ONE opt-in runtime dependency (cites Omar
+  2026-05 [2026-06-05] auth, the isolation mechanism, that it does NOT relax Hard rule 12 and is not a precedent);
+  `bun run sync:ai` regenerated AGENTS.md + rules.mdc. "Where we are" updated with the Connections/scan-to-connect arc.
+- Verified: 870 tests / 0 fail (+16: 15 package + 1 lazy-registration integration); biome clean; tsc adds 0 new errors
+  in the new package + my wiring; the `whatsapp-web` catalog addition broke ZERO existing tests (partial-match assertions).
+  NOT exercised against a live WhatsApp account (no scan in CI; the socket seam is mocked end-to-end).
+- KNOWN LIMITATIONS / follow-ups: `vesper connections list` in the CLI process shows whatsapp-web `available:false`
+  (the plugin is registered only in the daemon — the UI/daemon is the source of truth; the CLI doesn't load Baileys
+  for a list); the compiled `vesper-desktop` binary omits whatsapp-web (dynamic import not bundled) until Launch wires
+  it; re-pairing an already-live whatsapp-web opens a second socket (rare edge). Signal (signal-cli) still open.
