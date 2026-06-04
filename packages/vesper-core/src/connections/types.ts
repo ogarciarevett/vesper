@@ -82,3 +82,60 @@ export interface ChannelHandler {
   /** Start the inbound loop feeding `sink`; returns a stop handle. */
   receive(sink: ChatSink): Stoppable;
 }
+
+/**
+ * What the user must scan or open to complete pairing. The SAME prompt renders as
+ * a QR in both the terminal (`vesper connections pair`) and Vesper World; `kind`
+ * tells the renderer whether `data` is a URL the phone camera can open ("link",
+ * e.g. a Telegram deep link or a Discord invite) or an opaque string to encode
+ * verbatim ("code", e.g. a WhatsApp-Web pairing string).
+ */
+export interface PairingPrompt {
+  readonly kind: "link" | "code";
+  readonly data: string;
+  /** Plain-language instruction shown under the QR (elder-first). */
+  readonly humanHint: string;
+  /** Epoch ms after which this prompt is stale and a fresh one should be issued. */
+  readonly expiresAt: number;
+}
+
+/**
+ * A streamed update from an in-flight pairing attempt. `awaiting` may fire more
+ * than once when the channel rotates its QR (WhatsApp-Web); `linked`, `error`, and
+ * `expired` are terminal.
+ */
+export type PairingUpdate =
+  | { readonly status: "awaiting"; readonly prompt: PairingPrompt }
+  | { readonly status: "linked"; readonly chatId?: string; readonly label?: string }
+  | { readonly status: "error"; readonly reason: string }
+  | { readonly status: "expired" };
+
+/**
+ * A running pairing attempt. `updates()` yields {@link PairingUpdate}s until a
+ * terminal status; `stop()` cancels it (idempotent, like every {@link Stoppable}).
+ */
+export interface PairingSession extends Stoppable {
+  updates(): AsyncIterable<PairingUpdate>;
+}
+
+/**
+ * Seams a {@link Pairable} handler is given to run pairing, injected by the daemon
+ * coordinator so the handler never couples to it. Chat-link channels
+ * (Telegram/Discord) detect their nonce via {@link PairingDeps.subscribeInbound}
+ * (the daemon multiplexes its single receive loop into both the chat sink and the
+ * pairing session); QR-session channels (WhatsApp-Web) drive themselves and may use
+ * {@link PairingDeps.vault} to persist their linked session.
+ */
+export interface PairingDeps {
+  readonly vault: Vault;
+  readonly subscribeInbound?: (on: (message: InboundMessage) => void) => Stoppable;
+}
+
+/**
+ * An OPTIONAL capability a {@link ChannelHandler} may also implement: QR/link
+ * pairing (scan-to-connect). A handler that omits it simply cannot be paired (its
+ * channel reports `pairable: false`). Dispatched at runtime via `isPairable`.
+ */
+export interface Pairable {
+  startPairing(deps: PairingDeps): PairingSession;
+}

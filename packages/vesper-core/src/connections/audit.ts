@@ -14,6 +14,9 @@ export type ConnectionEventKind =
   | "connection_connected"
   | "connection_disconnected"
   | "connection_send_failed"
+  | "connection_pairing_started"
+  | "connection_paired"
+  | "connection_pairing_failed"
   | "mcp_enabled"
   | "mcp_disabled";
 
@@ -31,6 +34,8 @@ const REDACTED_KEYS: ReadonlySet<string> = new Set([
   "text",
   "message",
   "body",
+  "nonce",
+  "qr",
 ]);
 
 /** Drop any secret/message-body field from an audit payload (shallow). */

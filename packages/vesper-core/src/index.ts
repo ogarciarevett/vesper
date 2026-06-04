@@ -8,6 +8,7 @@ export * from "./cli/index.ts";
 export * from "./connections/index.ts";
 export { VesperError } from "./errors.ts";
 export * from "./ipc/index.ts";
+export * from "./media/index.ts";
 export * from "./presence/index.ts";
 export {
   CommandNotFoundError,

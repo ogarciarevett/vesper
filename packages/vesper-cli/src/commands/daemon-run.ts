@@ -15,10 +15,11 @@ import { grantedCapabilities, PIPELINES, registerPipelines } from "@vesper/pipel
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
 import { makeCompleteFn } from "../cli-resolver.ts";
-import { loadConfig } from "../config.ts";
+import { loadConfig, saveConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
+import { PairingCoordinator } from "../pairing-coordinator.ts";
 import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
 import { dim, green, line, yellow } from "../ui.ts";
 
@@ -99,6 +100,17 @@ export const daemonRunCommand: Command = {
       vault,
       store: uiStore,
     });
+    // Pairing (scan-to-connect): the coordinator multiplexes the daemon's single
+    // inbound stream into active QR/link pairing sessions and persists the captured
+    // chat id on link. Exposed to the UI's POST /api/connections/:id/pair route and
+    // consumed by `vesper connections pair`.
+    const pairing = new PairingCoordinator({
+      registry: channels.registry,
+      vault,
+      load: () => loadConfig(),
+      save: (next) => saveConfig(next),
+      store: uiStore,
+    });
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
@@ -118,13 +130,14 @@ export const daemonRunCommand: Command = {
             runningIds: channels.runningIds,
           }),
       },
+      pairing,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),
     });
 
     // The UI (the chat sink's POST target) is now listening — start the inbound loops.
     const channelStop = channels.registry.startAll(
-      makeChannelSink({ baseUrl: ui.url, registry: channels.registry }),
+      pairing.tap(makeChannelSink({ baseUrl: ui.url, registry: channels.registry })),
     );
     if (channels.runningIds.length > 0) {
       line(dim(`  channels:  ${channels.runningIds.join(", ")}`));

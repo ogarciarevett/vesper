@@ -13,12 +13,17 @@ import type { Vault } from "../vault/index.ts";
 import { channelById } from "./catalog.ts";
 import { ConnectionError } from "./errors.ts";
 import { allowlistedFetch, type FetchFn } from "./fetch.ts";
+import { newPairingNonce, PAIRING_TTL_MS } from "./pairing.ts";
 import type {
   ChannelDescriptor,
   ChannelHandler,
   ChatSink,
   InboundMessage,
   OutboundIntent,
+  Pairable,
+  PairingDeps,
+  PairingSession,
+  PairingUpdate,
   Stoppable,
 } from "./types.ts";
 
@@ -73,13 +78,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export class TelegramHandler implements ChannelHandler {
+export class TelegramHandler implements ChannelHandler, Pairable {
   readonly descriptor: ChannelDescriptor = TELEGRAM_DESCRIPTOR;
   readonly #granted: readonly Capability[];
   readonly #fetchFn: FetchFn | undefined;
   readonly #vaultKey: string;
   readonly #allowedHosts: readonly string[];
   #token: string | null = null;
+  #username: string | undefined = undefined;
 
   constructor(options: TelegramHandlerOptions) {
     this.#granted = options.granted;
@@ -138,11 +144,89 @@ export class TelegramHandler implements ChannelHandler {
     if (!me.is_bot) {
       throw new ConnectionError("not_authenticated", "telegram getMe did not return a bot");
     }
+    this.#username = me.username;
   }
 
   /** Deliver an outbound intent via `sendMessage`. */
   async send(intent: OutboundIntent): Promise<void> {
     await this.#call("sendMessage", { chat_id: intent.chatId, text: intent.text });
+  }
+
+  /**
+   * Scan-to-connect: build a `t.me/<bot>?start=<nonce>` deep link, render it as a
+   * QR, and wait for the bot's long-poll to receive `/start <nonce>` — at which
+   * point the user's chat id is captured automatically (no copying ids). Inbound
+   * is observed through the daemon-multiplexed {@link PairingDeps.subscribeInbound}
+   * seam, so pairing never opens a second `getUpdates` consumer.
+   */
+  startPairing(deps: PairingDeps): PairingSession {
+    let stopped = false;
+    let subscription: Stoppable | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settle!: (update: PairingUpdate) => void;
+    const outcome = new Promise<PairingUpdate>((resolve) => {
+      settle = resolve;
+    });
+
+    const cleanup = (): void => {
+      subscription?.stop();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+
+    const resolveUsername = async (): Promise<string | undefined> => {
+      if (this.#username !== undefined) return this.#username;
+      try {
+        const me = await this.#call<TelegramUser>("getMe");
+        this.#username = me.username;
+        return me.username;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const run = async function* (): AsyncGenerator<PairingUpdate> {
+      const username = await resolveUsername();
+      if (username === undefined) {
+        yield { status: "error", reason: "telegram bot has no username; cannot build a deep link" };
+        return;
+      }
+      if (deps.subscribeInbound === undefined) {
+        yield { status: "error", reason: "no inbound stream available for telegram pairing" };
+        return;
+      }
+      const nonce = newPairingNonce();
+      const expected = `/start ${nonce}`;
+      yield {
+        status: "awaiting",
+        prompt: {
+          kind: "link",
+          data: `https://t.me/${username}?start=${nonce}`,
+          humanHint:
+            "Point your phone camera at this code (or open the link) to open the bot in Telegram, then tap Start.",
+          expiresAt: Date.now() + PAIRING_TTL_MS,
+        },
+      };
+      if (stopped) return;
+      subscription = deps.subscribeInbound((message) => {
+        if (message.channel === "telegram" && message.text.trim() === expected) {
+          settle({ status: "linked", chatId: message.chatId, label: message.from });
+        }
+      });
+      timer = setTimeout(() => settle({ status: "expired" }), PAIRING_TTL_MS);
+      const final = await outcome;
+      cleanup();
+      yield final;
+    };
+
+    return {
+      updates: () => run(),
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        cleanup();
+        settle({ status: "expired" });
+      },
+    };
   }
 
   /**

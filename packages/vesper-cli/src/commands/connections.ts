@@ -16,11 +16,15 @@ import {
   type ChannelState,
   channelById,
   channelStates,
+  encodeQr,
   KeychainVault,
+  type PairingUpdate,
+  renderQrTerminal,
   type Vault,
 } from "@vesper/core";
 import { type ConnectionConfig, loadConfig, saveConfig, type VesperConfig } from "../config.ts";
 import type { Command, CommandGroup } from "../dispatch.ts";
+import { uiPort } from "../paths.ts";
 import { dim, green, line, table, yellow } from "../ui.ts";
 
 /** Injectable seams so the command logic is unit-testable (no Keychain, no disk). */
@@ -153,6 +157,58 @@ export async function sendVia(
   return displayName;
 }
 
+/** Convert the daemon's `application/x-ndjson` pairing stream into PairingUpdates. */
+async function* ndjsonUpdates(body: ReadableStream<Uint8Array>): AsyncGenerator<PairingUpdate> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl = buffer.indexOf("\n");
+    while (nl >= 0) {
+      const chunk = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (chunk.length > 0) yield JSON.parse(chunk) as PairingUpdate;
+      nl = buffer.indexOf("\n");
+    }
+  }
+  const tail = buffer.trim();
+  if (tail.length > 0) yield JSON.parse(tail) as PairingUpdate;
+}
+
+/**
+ * Render a pairing stream to the terminal: a scannable QR + plain hint while awaiting,
+ * a success line on link. Returns the exit code (0 linked, 1 otherwise). Pure over its
+ * `print` seam so it is unit-testable without a daemon.
+ */
+export async function runPairing(
+  updates: AsyncIterable<PairingUpdate>,
+  print: (text: string) => void,
+): Promise<number> {
+  for await (const update of updates) {
+    if (update.status === "awaiting") {
+      print(renderQrTerminal(encodeQr(update.prompt.data)));
+      print("");
+      print(update.prompt.humanHint);
+      print(dim(update.prompt.data));
+      print(dim("Waiting for you to scan..."));
+    } else if (update.status === "linked") {
+      const where = update.chatId !== undefined ? ` (chat ${update.chatId})` : "";
+      print(green(`Linked!${where}`));
+      return 0;
+    } else if (update.status === "error") {
+      print(yellow(`Pairing failed: ${update.reason}`));
+      return 1;
+    } else {
+      print(yellow("Pairing expired before a scan completed. Run the command again."));
+      return 1;
+    }
+  }
+  return 1;
+}
+
 function yesNo(value: boolean): string {
   return value ? green("yes") : dim("no");
 }
@@ -219,6 +275,31 @@ const sendCommand: Command = {
   },
 };
 
+const pairCommand: Command = {
+  name: "pair",
+  summary: "Scan a QR to connect a channel (auto-captures your chat). Daemon must be running.",
+  usage: "vesper connections pair <id>",
+  async run({ positionals }) {
+    const id = positionals[0];
+    if (id === undefined) throw new Error("usage: vesper connections pair <id>");
+    const base = `http://127.0.0.1:${uiPort()}`;
+    let res: Response;
+    try {
+      res = await fetch(`${base}/api/connections/${encodeURIComponent(id)}/pair`, {
+        method: "POST",
+        headers: { origin: base },
+      });
+    } catch {
+      throw new Error("could not reach the daemon — start it with `vesper daemon start`");
+    }
+    if (!res.ok || res.body === null) {
+      const detail = (await res.text().catch(() => "")).trim();
+      throw new Error(`pairing request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+    }
+    return runPairing(ndjsonUpdates(res.body), line);
+  },
+};
+
 const testCommand: Command = {
   name: "test",
   summary: "Authenticate a channel's stored credential (e.g. Telegram getMe).",
@@ -262,6 +343,14 @@ const disableCommand: Command = {
 
 export const connectionsGroup: CommandGroup = {
   name: "connections",
-  summary: "Connect messaging channels (Telegram) so the chatbot is reachable remotely.",
-  subcommands: [listCommand, setCommand, testCommand, sendCommand, enableCommand, disableCommand],
+  summary: "Connect messaging channels (scan a QR to pair) so the chatbot is reachable remotely.",
+  subcommands: [
+    listCommand,
+    setCommand,
+    pairCommand,
+    testCommand,
+    sendCommand,
+    enableCommand,
+    disableCommand,
+  ],
 };

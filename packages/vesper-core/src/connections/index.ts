@@ -26,6 +26,7 @@ export {
   allowlistedFetch,
   type FetchFn,
 } from "./fetch.ts";
+export { isPairable, newPairingNonce, PAIRING_TTL_MS } from "./pairing.ts";
 export {
   CHANNEL_GRANTS,
   CHANNEL_PLUGINS,
@@ -49,6 +50,11 @@ export type {
   ChatSink,
   InboundMessage,
   OutboundIntent,
+  Pairable,
+  PairingDeps,
+  PairingPrompt,
+  PairingSession,
+  PairingUpdate,
   Stoppable,
 } from "./types.ts";
 export { WhatsAppHandler, type WhatsAppHandlerOptions } from "./whatsapp.ts";
