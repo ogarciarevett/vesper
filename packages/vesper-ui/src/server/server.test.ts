@@ -88,12 +88,25 @@ afterEach(() => {
 });
 
 describe("UI server", () => {
-  test("GET /api/world returns a SceneGraph with one inhabitant per pipeline", async () => {
-    const res = await fetch(`${handle.url}/api/world`);
+  test("GET /api/status returns runtime info", async () => {
+    const res = await fetch(`${handle.url}/api/status`);
     expect(res.status).toBe(200);
-    const scene = (await res.json()) as { seed: string; inhabitants: { id: string }[] };
-    expect(scene.seed).toBe("test-seed");
-    expect(scene.inhabitants.map((i) => i.id)).toContain("echo");
+    const s = (await res.json()) as { version: string; uiPort: number; runs: number };
+    expect(s.version).toBe("0.1.0");
+    expect(typeof s.uiPort).toBe("number");
+    expect(s.runs).toBe(0);
+  });
+
+  test("GET /api/presence returns an array of detected agents", async () => {
+    const res = await fetch(`${handle.url}/api/presence`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(await res.json())).toBe(true);
+  });
+
+  test("GET /api/runs is empty before any run", async () => {
+    const res = await fetch(`${handle.url}/api/runs`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
   });
 
   test("GET / serves the client shell", async () => {
@@ -101,6 +114,38 @@ describe("UI server", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(await res.text()).toContain("Vesper");
+  });
+
+  test("serves injected clientAssets verbatim, with runtime theme stamping", async () => {
+    // The compiled (`bun build --compile`) daemon has no client/ dir or bundler, so it
+    // injects prebuilt assets. Provided assets must be served as-is — not the on-disk
+    // build — while per-process theme stamping still applies to the injected shell.
+    const scheduler = new Scheduler({
+      db,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+      complete: fakeComplete,
+    });
+    const injected = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      defaultTheme: "glass",
+      clientAssets: {
+        indexHtml: "<!doctype html><html><head></head><body>INJECTED-SHELL</body></html>",
+        appJs: "/* INJECTED-APP-JS */ globalThis.__vesper_injected = true;",
+      },
+    });
+    try {
+      const html = await fetch(`${injected.url}/`).then((r) => r.text());
+      expect(html).toContain("INJECTED-SHELL");
+      expect(html).toContain('name="vesper-theme" content="glass"');
+      const js = await fetch(`${injected.url}/app.js`).then((r) => r.text());
+      expect(js).toContain("INJECTED-APP-JS");
+    } finally {
+      injected.stop();
+    }
   });
 
   test("GET /app.js serves the bundled client", async () => {
@@ -117,11 +162,9 @@ describe("UI server", () => {
     expect(outcome.status).toBe("ok");
     expect(outcome.summary).toBe("hello back");
 
-    // The run is now visible in the world snapshot.
-    const world = (await (await fetch(`${handle.url}/api/world`)).json()) as {
-      inhabitants: { id: string; runCount: number }[];
-    };
-    expect(world.inhabitants.find((i) => i.id === "echo")?.runCount).toBe(1);
+    // The run is now visible in the runs list.
+    const runs = (await (await fetch(`${handle.url}/api/runs`)).json()) as { pipeline: string }[];
+    expect(runs.some((r) => r.pipeline === "echo")).toBe(true);
   });
 
   test("POST run for an unknown agent is a 404", async () => {
@@ -138,7 +181,7 @@ describe("UI server", () => {
   });
 
   test("rejects a rebound Host header", async () => {
-    const res = await fetch(`${handle.url}/api/world`, {
+    const res = await fetch(`${handle.url}/api/status`, {
       headers: { host: "attacker.example.com" },
     });
     expect(res.status).toBe(403);

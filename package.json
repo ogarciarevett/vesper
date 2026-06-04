@@ -14,6 +14,7 @@
     "vesper": "bun packages/vesper-cli/src/index.ts",
     "sync:ai": "bun scripts/sync-ai-docs.ts",
     "docs:cli": "bun scripts/gen-cli-docs.ts",
+    "build:daemon": "bun scripts/build-daemon.ts",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "engines": {
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@types/bun": "^1.3.14"
+    "@types/bun": "^1.3.14",
+    "@vesper/ui": "workspace:*"
   }
 }

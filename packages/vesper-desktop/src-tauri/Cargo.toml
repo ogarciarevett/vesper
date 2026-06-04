@@ -1,0 +1,29 @@
+[package]
+name = "vesper-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Native desktop shell for Vesper (thin Tauri window over the Bun daemon)."
+authors = ["ogarciarevett"]
+# Pin a recent-enough toolchain; CI provisions Rust for the desktop package only.
+rust-version = "1.77"
+
+# The compiled shell binary. The Bun host stays Bun — see specs/tauri-migration.md.
+[[bin]]
+name = "vesper-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+
+# Smaller, faster release binaries for distribution.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
