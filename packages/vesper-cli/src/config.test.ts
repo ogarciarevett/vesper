@@ -141,6 +141,13 @@ describe("normalizeConfig — connections", () => {
     expect(cfg.connections?.telegram?.enabled).toBe(false);
   });
 
+  test("keeps non-secret string params and drops non-string ones", () => {
+    const cfg = normalizeConfig({
+      connections: { whatsapp: { enabled: true, params: { phoneNumberId: "123", junk: 5 } } },
+    });
+    expect(cfg.connections?.whatsapp?.params).toEqual({ phoneNumberId: "123" });
+  });
+
   test("omits connections entirely when absent or all entries are invalid", () => {
     expect(normalizeConfig({ cli: { adapters: {} } }).connections).toBeUndefined();
     expect(normalizeConfig({ connections: {} }).connections).toBeUndefined();

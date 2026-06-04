@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { ChannelHandler, ChannelPlugin, Vault } from "@vesper/core";
+import type { ChannelHandler, ChannelPlugin, OutboundIntent, Vault } from "@vesper/core";
 import type { VesperConfig } from "../config.ts";
 import {
   type ConnectionsDeps,
   connectionStates,
+  sendVia,
   setEnabled,
   setToken,
   testChannel,
@@ -83,6 +84,12 @@ describe("vesper connections — actions", () => {
     });
   });
 
+  test("setToken merges and persists non-secret params (e.g. phoneNumberId)", async () => {
+    const { deps, saved } = makeDeps({ vault });
+    await setToken(deps, "whatsapp", "tok", { phoneNumberId: "PN1" });
+    expect(saved().connections?.whatsapp?.params).toEqual({ phoneNumberId: "PN1" });
+  });
+
   test("setToken rejects an empty stdin token", async () => {
     const { deps } = makeDeps({ vault });
     await expect(setToken(deps, "telegram", "")).rejects.toThrow(/no token/);
@@ -119,8 +126,8 @@ describe("vesper connections — actions", () => {
     const states = await connectionStates(deps);
     const tg = states.find((s) => s.id === "telegram");
     expect(tg).toMatchObject({ available: true, configured: true, enabled: true });
-    // whatsapp ships no handler yet -> not available.
-    expect(states.find((s) => s.id === "whatsapp")?.available).toBe(false);
+    // signal ships no handler yet -> not available.
+    expect(states.find((s) => s.id === "signal")?.available).toBe(false);
   });
 
   test("testChannel builds the handler and authenticates it", async () => {
@@ -148,6 +155,31 @@ describe("vesper connections — actions", () => {
 
   test("testChannel refuses a channel with no shipped handler", async () => {
     const { deps } = makeDeps({ vault });
-    await expect(testChannel(deps, "whatsapp")).rejects.toThrow(/no handler/);
+    await expect(testChannel(deps, "signal")).rejects.toThrow(/no handler/);
+  });
+
+  test("sendVia authenticates and delivers a one-off message via the handler", async () => {
+    const sent: OutboundIntent[] = [];
+    const plugin: ChannelPlugin = {
+      id: "telegram",
+      build: () =>
+        ({
+          descriptor: { id: "telegram", displayName: "Telegram" },
+          async authenticate() {},
+          async send(i: OutboundIntent) {
+            sent.push(i);
+          },
+          receive: () => ({ stop() {} }),
+        }) as unknown as ChannelHandler,
+    };
+    const { deps } = makeDeps({ vault: fakeVault({ telegram_bot_token: "t" }), plugins: [plugin] });
+    const name = await sendVia(deps, "telegram", "chat-1", "hi there");
+    expect(name).toBe("Telegram");
+    expect(sent).toEqual([{ kind: "notify", chatId: "chat-1", text: "hi there" }]);
+  });
+
+  test("sendVia rejects an empty message", async () => {
+    const { deps } = makeDeps({ vault });
+    await expect(sendVia(deps, "telegram", "c", "")).rejects.toThrow(/no message/);
   });
 });

@@ -14,6 +14,7 @@ import { DiscordHandler } from "./discord.ts";
 import type { FetchFn } from "./fetch.ts";
 import { TelegramHandler } from "./telegram.ts";
 import type { ChannelHandler, ChannelId } from "./types.ts";
+import { WhatsAppHandler } from "./whatsapp.ts";
 
 /** Capabilities a channel handler is granted: NETWORK_FETCH (egress) + READ_VAULT (token). */
 export const CHANNEL_GRANTS: readonly Capability[] = ["NETWORK_FETCH", "READ_VAULT"];
@@ -25,6 +26,8 @@ export interface ChannelBuildOptions {
   readonly vaultKey: string;
   /** Hosts the handler may reach — already narrowed against the catalog descriptor. */
   readonly allowedHosts: readonly string[];
+  /** Non-secret per-channel params (e.g. WhatsApp `phoneNumberId`). */
+  readonly params?: Readonly<Record<string, string>>;
   /** Injected fetch so the suite fetches to nothing; omit to use the real fetch. */
   readonly fetchFn?: FetchFn;
 }
@@ -54,6 +57,19 @@ export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
         granted: opts.granted,
         vaultKey: opts.vaultKey,
         allowedHosts: opts.allowedHosts,
+        ...(opts.fetchFn !== undefined ? { fetchFn: opts.fetchFn } : {}),
+      }),
+  },
+  {
+    id: "whatsapp",
+    build: (opts) =>
+      new WhatsAppHandler({
+        granted: opts.granted,
+        vaultKey: opts.vaultKey,
+        allowedHosts: opts.allowedHosts,
+        ...(opts.params?.phoneNumberId !== undefined
+          ? { phoneNumberId: opts.params.phoneNumberId }
+          : {}),
         ...(opts.fetchFn !== undefined ? { fetchFn: opts.fetchFn } : {}),
       }),
   },

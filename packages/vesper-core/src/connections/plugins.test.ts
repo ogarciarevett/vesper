@@ -14,12 +14,12 @@ describe("channel plugins", () => {
     expect(handler?.descriptor.id).toBe("telegram");
   });
 
-  test("discord ships a plugin (Gateway handler)", () => {
+  test("discord and whatsapp ship plugins", () => {
     expect(channelPluginById("discord")).toBeDefined();
+    expect(channelPluginById("whatsapp")).toBeDefined();
   });
 
   test("a channel with no shipped handler has no plugin (availability gate)", () => {
-    expect(channelPluginById("whatsapp")).toBeUndefined();
     expect(channelPluginById("signal")).toBeUndefined();
     expect(channelPluginById("not-a-channel")).toBeUndefined();
   });

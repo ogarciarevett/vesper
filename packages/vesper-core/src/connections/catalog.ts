@@ -33,11 +33,12 @@ export const CHANNEL_CATALOG: readonly ChannelDescriptor[] = [
   {
     id: "whatsapp",
     displayName: "WhatsApp",
-    transport: "webhook",
+    // Send-only v1 over the Cloud API (REST). Inbound (a public webhook) is deferred.
+    transport: "bot-api",
     allowedHosts: ["graph.facebook.com"],
     vaultKeys: ["whatsapp_access_token"],
     docsUrl: "https://developers.facebook.com/docs/whatsapp/cloud-api",
-    status: "deferred",
+    status: "ready",
   },
   {
     id: "signal",

@@ -70,11 +70,12 @@ export async function connectionStates(deps: ConnectionsDeps): Promise<ChannelSt
   return channelStates({ wiring: config.connections, storedKeys });
 }
 
-/** Store a channel token in the vault (stdin value) and enable it in config. */
+/** Store a channel token in the vault (stdin value), merge any params, and enable it. */
 export async function setToken(
   deps: ConnectionsDeps,
   id: string,
   token: string,
+  params: Readonly<Record<string, string>> = {},
 ): Promise<{ vaultKey: string }> {
   const descriptor = requireDescriptor(id);
   if (token.length === 0) throw new Error("no token provided on stdin");
@@ -83,10 +84,12 @@ export async function setToken(
   const vaultKey = existing?.vaultKey ?? descriptor.vaultKeys[0];
   if (vaultKey === undefined) throw new Error(`channel "${id}" declares no vault key`);
   await deps.vault.set(vaultKey, token);
+  const merged = { ...existing?.params, ...params };
   const conn: ConnectionConfig = {
     enabled: existing?.enabled ?? true,
     vaultKey,
     allowedHosts: existing?.allowedHosts ?? descriptor.allowedHosts,
+    ...(Object.keys(merged).length > 0 ? { params: merged } : {}),
   };
   await deps.save(withConnection(config, id, conn));
   return { vaultKey };
@@ -112,22 +115,42 @@ export async function setEnabled(
   );
 }
 
-/** Build the channel's handler and authenticate it (e.g. Telegram getMe). */
-export async function testChannel(deps: ConnectionsDeps, id: string): Promise<string> {
+/** Build a channel's handler from config (granted caps + vaultKey + hosts + params). */
+async function buildHandler(deps: ConnectionsDeps, id: string) {
   const descriptor = requireDescriptor(id);
   const plugin = deps.plugins.find((p) => p.id === id);
   if (plugin === undefined) throw new Error(`channel "${id}" has no handler yet — coming soon`);
-  const config = await deps.load();
-  const conn = config.connections?.[id];
+  const conn = (await deps.load()).connections?.[id];
   const vaultKey = conn?.vaultKey ?? descriptor.vaultKeys[0];
   if (vaultKey === undefined) throw new Error(`channel "${id}" declares no vault key`);
   const handler = plugin.build({
     granted: CHANNEL_GRANTS,
     vaultKey,
     allowedHosts: conn?.allowedHosts ?? descriptor.allowedHosts,
+    ...(conn?.params !== undefined ? { params: conn.params } : {}),
   });
+  return { handler, displayName: descriptor.displayName };
+}
+
+/** Build the channel's handler and authenticate it (e.g. Telegram getMe). */
+export async function testChannel(deps: ConnectionsDeps, id: string): Promise<string> {
+  const { handler, displayName } = await buildHandler(deps, id);
   await handler.authenticate(deps.vault);
-  return descriptor.displayName;
+  return displayName;
+}
+
+/** Authenticate the channel, then send a one-off text message to a recipient. */
+export async function sendVia(
+  deps: ConnectionsDeps,
+  id: string,
+  chatId: string,
+  text: string,
+): Promise<string> {
+  if (text.length === 0) throw new Error("no message provided on stdin");
+  const { handler, displayName } = await buildHandler(deps, id);
+  await handler.authenticate(deps.vault);
+  await handler.send({ kind: "notify", chatId, text });
+  return displayName;
 }
 
 function yesNo(value: boolean): string {
@@ -151,17 +174,47 @@ const listCommand: Command = {
   },
 };
 
+/** Parse `key=value` tokens into a params record (non-secret channel params). */
+function parseParams(tokens: readonly string[]): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const token of tokens) {
+    const eq = token.indexOf("=");
+    if (eq > 0) params[token.slice(0, eq)] = token.slice(eq + 1);
+  }
+  return params;
+}
+
 const setCommand: Command = {
   name: "set",
-  summary: "Store a channel credential (read from stdin) and enable it.",
-  usage: "vesper connections set <id>   # token via stdin",
+  summary: "Store a channel credential (stdin) + any key=value params, and enable it.",
+  usage: "vesper connections set <id> [key=value ...]   # token via stdin",
   async run({ positionals }) {
     const id = positionals[0];
-    if (id === undefined) throw new Error("usage: vesper connections set <id>  (token via stdin)");
+    if (id === undefined) {
+      throw new Error("usage: vesper connections set <id> [key=value ...]  (token via stdin)");
+    }
+    const params = parseParams(positionals.slice(1));
     const token = await readSecret(`Token for ${id}`);
-    const { vaultKey } = await setToken(realDeps(), id, token);
+    const { vaultKey } = await setToken(realDeps(), id, token, params);
     line(green(`stored "${id}" (vault key "${vaultKey}") and enabled`));
     line(dim(`run \`vesper connections test ${id}\` to verify, then restart the daemon`));
+    return 0;
+  },
+};
+
+const sendCommand: Command = {
+  name: "send",
+  summary: "Send a one-off message to a channel recipient (message via stdin).",
+  usage: "vesper connections send <id> <chatId>   # message via stdin",
+  async run({ positionals }) {
+    const id = positionals[0];
+    const chatId = positionals[1];
+    if (id === undefined || chatId === undefined) {
+      throw new Error("usage: vesper connections send <id> <chatId>  (message via stdin)");
+    }
+    const text = await readSecret("Message");
+    const name = await sendVia(realDeps(), id, chatId, text);
+    line(green(`sent via ${name}`));
     return 0;
   },
 };
@@ -210,5 +263,5 @@ const disableCommand: Command = {
 export const connectionsGroup: CommandGroup = {
   name: "connections",
   summary: "Connect messaging channels (Telegram) so the chatbot is reachable remotely.",
-  subcommands: [listCommand, setCommand, testCommand, enableCommand, disableCommand],
+  subcommands: [listCommand, setCommand, testCommand, sendCommand, enableCommand, disableCommand],
 };

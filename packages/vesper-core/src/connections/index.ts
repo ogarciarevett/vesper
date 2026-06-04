@@ -51,3 +51,4 @@ export type {
   OutboundIntent,
   Stoppable,
 } from "./types.ts";
+export { WhatsAppHandler, type WhatsAppHandlerOptions } from "./whatsapp.ts";

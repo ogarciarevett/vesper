@@ -17,6 +17,8 @@ export interface ConnectionConfig {
   /** NAME of the vault entry holding the channel credential (never the value). */
   readonly vaultKey: string;
   readonly allowedHosts: readonly string[];
+  /** Non-secret per-channel params (e.g. WhatsApp `phoneNumberId`). Never a secret. */
+  readonly params?: Readonly<Record<string, string>>;
 }
 
 /** The `~/.vesper/config.json` shape. */
@@ -135,7 +137,17 @@ function normalizeConnection(id: string, raw: unknown): ConnectionConfig | undef
     requested === undefined
       ? descriptor.allowedHosts
       : requested.filter((h) => descriptor.allowedHosts.includes(h));
-  return { enabled: raw.enabled === true, vaultKey, allowedHosts };
+  const params = isObject(raw.params)
+    ? (Object.fromEntries(
+        Object.entries(raw.params).filter(([, v]) => typeof v === "string"),
+      ) as Record<string, string>)
+    : undefined;
+  return {
+    enabled: raw.enabled === true,
+    vaultKey,
+    allowedHosts,
+    ...(params !== undefined && Object.keys(params).length > 0 ? { params } : {}),
+  };
 }
 
 /** Coerce untrusted `connections` config; drops entries for unknown channels or bad shape. */

@@ -21,10 +21,10 @@ describe("CHANNEL_CATALOG", () => {
     }
   });
 
-  test("telegram + discord are ready; whatsapp + signal are deferred", () => {
+  test("telegram + discord + whatsapp are ready; signal is deferred", () => {
     expect(channelById("telegram")?.status).toBe("ready");
     expect(channelById("discord")?.status).toBe("ready");
-    expect(channelById("whatsapp")?.status).toBe("deferred");
+    expect(channelById("whatsapp")?.status).toBe("ready");
     expect(channelById("signal")?.status).toBe("deferred");
   });
 

@@ -840,3 +840,38 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
 - Follow-ups: Discord handler (second plugin, same contract); browser enable/disable behind the approval
   token; hot enable/disable without a daemon restart; persisted Telegram-chat -> session mapping; MCP
   enable/disable.
+
+---
+
+## Discord + WhatsApp channel plugins — SHIPPED
+
+- The two follow-up channels, validating the channels-as-a-plugin design: each was a new handler + one
+  CHANNEL_PLUGINS entry + a catalog status flag. The daemon, CLI, and UI iterate the registry and did NOT
+  change for either (the WhatsApp `params` plumbing was the only cross-cutting addition). Authorized by Omar
+  2026-06-04. Issue-capped: cycle-log + commits are the record (Rule 11).
+- DISCORD (commit c9e21b6) — two-way, but receive needs the Gateway WebSocket (no long-poll). A minimal
+  Gateway client: HELLO -> IDENTIFY (intents GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT) ->
+  heartbeat -> MESSAGE_CREATE -> sink (ignoring bot/self), reconnecting with a fresh identify on a dropped
+  socket; replies via REST POST /channels/{id}/messages. The WebSocket factory is INJECTED so the suite
+  connects to nothing, and the socket is opened only after the SAME NETWORK_FETCH + host-allowlist guard as
+  allowlistedFetch (gateway.discord.gg added to the descriptor allowlist). Setup needs the privileged
+  MESSAGE_CONTENT intent (tutorial, not code).
+- WHATSAPP — SEND-ONLY v1 (Omar chose "send-only now, two-way later"). WhatsApp has NO free behind-NAT
+  inbound: receive needs a public webhook (tunnel) or the rejected reverse-engineered WA-Web client, so
+  `receive` is a no-op and two-way is deferred to a webhook-endpoint follow-up. `send` posts a text via the
+  Cloud API (graph.facebook.com) through allowlistedFetch. The Cloud API needs the business `phoneNumberId`
+  (the sender) beyond the token -> added a generic, NON-secret `params` field to a channel's config
+  (`ConnectionConfig.params`, threaded through `ChannelBuildOptions` + the wiring) so the token stays in the
+  vault while `phoneNumberId` lives in config; `OutboundIntent.chatId` is the recipient's number.
+- NEW `vesper connections send <id> <chatId>` (message via stdin) makes send-only genuinely usable today
+  (and works for every channel) — without it WhatsApp send would be latent (no pipeline-notify trigger yet).
+  `set <id> [key=value ...]` now captures non-secret params (e.g. `set whatsapp phoneNumberId=PN1`).
+- Whack-a-mole lesson: each shipped channel flips a catalog id from unavailable -> available, breaking the
+  "no shipped handler" test assertions. Moved them down the catalog (discord -> whatsapp -> signal); Signal
+  is the remaining unavailable id (no handler — local signal-cli, deferred).
+- Verified: 813 tests / 0 fail (+18 across both); biome ci clean; tsc 0; no provider SDKs. Live at the CLI:
+  `connections list` shows Telegram/Discord/WhatsApp available; `set whatsapp phoneNumberId=PN1` wrote the
+  config params + vault token; the `send` command is wired. Real Bot/Gateway/Cloud-API round-trips are
+  covered by mocked transport (WS + fetch) unit tests — not exercised against live services (no tokens).
+- Follow-ups: WhatsApp two-way (webhook endpoint + tunnel decision); a pipeline-notify trigger that calls
+  handler.send; Signal (local signal-cli) if wanted; Discord live verification with a real bot token.

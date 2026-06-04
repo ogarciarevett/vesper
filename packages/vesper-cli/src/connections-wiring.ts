@@ -48,6 +48,7 @@ export async function buildChannelRegistry(opts: {
       granted: CHANNEL_GRANTS,
       vaultKey: conn.vaultKey,
       allowedHosts: conn.allowedHosts,
+      ...(conn.params !== undefined ? { params: conn.params } : {}),
       ...(opts.fetchFn !== undefined ? { fetchFn: opts.fetchFn } : {}),
     });
     try {
