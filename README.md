@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/imgs/vesper-world.png" alt="Vesper World — watch your personal agents work" width="100%">
+  <img src="docs/imgs/vesper-app.png" alt="Vesper — a local-first desktop app for your personal automation agents" width="100%">
 </p>
 
 <h1 align="center">Vesper</h1>
@@ -12,17 +12,18 @@
   <img src="https://img.shields.io/badge/LLM-bring%20your%20own%20CLI-ffd479?style=flat-square" alt="Bring your own CLI">
 </p>
 
-<p align="center"><b>A local-first runtime for your personal automation agents — that you can actually watch work.</b></p>
+<p align="center"><b>A local-first runtime for your personal automation agents — with a native desktop app you actually want to open.</b></p>
 
 Vesper runs on your machine and hosts small automation **pipelines** (your "agents") under one host
 process. It drives **the AI CLI you already pay for** — `claude`, `codex`, `opencode`, or `gemini` —
 so it holds **no API keys** and ships **no provider SDKs**. Nothing leaves your machine except the
-calls your own CLI makes. And instead of a cold dashboard, you watch your agents in a little
-pixel-art world: tap one to see, in plain language, what it just did — or to put it to work.
+calls your own CLI makes. You talk to it in a premium dark-glass desktop app: chat with Vesper, watch
+exactly what it's doing as it works, and manage every pipeline, channel, schedule, and permission from
+one window — with a macOS menu-bar popover for a quick glance.
 
 <table>
 <tr><td width="34%"><b>Bring your own CLI — no keys</b></td><td>Orchestrates <code>claude</code> / <code>codex</code> / <code>opencode</code> / <code>gemini</code> over a subprocess. You pay once for your CLI; Vesper adds no per-call billing and stores no LLM credentials. Pick the model per request.</td></tr>
-<tr><td><b>Watch your agents work</b></td><td>A pixel-art world (<i>Vesper World</i>) where each agent is a character — busier ones grow, the world livens up with use. Click one for a plain-language result + a big <b>Run</b> button. Built for someone who has never opened a terminal.</td></tr>
+<tr><td><b>Chat with Vesper &amp; watch it work</b></td><td>A native dark-glass desktop app: chat with Vesper and it picks the right pipeline, runs it, and streams every step in a live activity rail. A sectioned sidebar manages pipelines, channels, schedules, runtime, permissions, and more — plus a macOS menu-bar popover.</td></tr>
 <tr><td><b>Local-first &amp; private</b></td><td>SQLite storage + OS-keychain secrets, all on your machine. The UI binds to <code>127.0.0.1</code> only. No accounts, no cloud, no telemetry.</td></tr>
 <tr><td><b>Capability-sandboxed pipelines</b></td><td>Every agent declares what it may touch — invoke a CLI, read/write storage, touch files — and the host enforces it (deny-by-default) before any side effect.</td></tr>
 <tr><td><b>Self-improving skills</b></td><td>The <code>skill-train</code> engine optimizes a skill's playbook against its own test set (SkillOpt-style: epochs, held-out validation, greedy accept) — using your CLI, never a provider key.</td></tr>
@@ -35,21 +36,30 @@ pixel-art world: tap one to see, in plain language, what it just did — or to p
 
 ---
 
-## Vesper World
+## The app
 
 ```sh
 vesper daemon start   # hosts the runtime + the UI (background)
-vesper ui             # opens a browser tab — http://127.0.0.1:4317
+vesper ui             # open it in your browser — http://127.0.0.1:4317
 ```
 
+Or run the **native desktop app** — a [Tauri](https://tauri.app) shell over the same daemon — from
+`packages/vesper-desktop` (`bun run dev`): a frameless window with a macOS menu-bar (tray) popover, no
+browser involved.
+
 <p align="center">
-  <img src="docs/imgs/vesper-card.png" alt="Click an agent to see what it just did, in plain language" width="80%">
+  <img src="docs/imgs/vesper-runtime.png" alt="Runtime — daemon health, helper-CLI status, storage" width="49%">
+  <img src="docs/imgs/vesper-diagnostics.png" alt="Diagnostics — CLI probes, recent runs, and the agents running on your machine" width="49%">
+</p>
+<p align="center">
+  <img src="docs/imgs/vesper-settings.png" alt="Settings — theme picker and runtime configuration" width="70%">
 </p>
 
-Tap an agent → a plain-language card shows what it last did and lets you run it. The world is a live
-projection of your real runtime (pipelines, runs, schedules) — nothing is faked. It's deliberately
-simple, and built to extend: a planned **Voice** module will let an agent *speak* its result aloud.
-See [docs/ui.md](docs/ui.md).
+Chat with Vesper and it routes your message to the right pipeline and streams the run live in a Vesper
+activity rail. Every section reads your **real** runtime — nothing is faked: **Runtime** (daemon +
+helper-CLI health), **Diagnostics** (CLI probes, recent runs, and the agents running on your machine),
+**Channels**, **Schedule**, **Pipelines**, **Permissions**, **Settings** (theme + config), and more.
+Dark glass is the default; a light and a warm theme ship too. See [docs/ui.md](docs/ui.md).
 
 ## Bring your own CLI
 
@@ -82,7 +92,7 @@ vesper init          # create ~/.vesper, initialize storage, detect installed CL
 vesper cli list      # show each CLI + probe status (ok / not-authenticated / not-installed)
 vesper hello         # ask your configured CLI to reply — proves orchestration works
 vesper daemon start  # start the runtime + UI (background)
-vesper ui            # open Vesper World in your browser
+vesper ui            # open the Vesper app in your browser
 ```
 
 `vesper hello` is the proof the model works: a fixed prompt to your CLI, reply printed — no
@@ -152,7 +162,7 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 invocation if a tool changes its flags. `storage.redactRunSummaries` (opt-in) stores run summaries as
 size-only metadata instead of raw CLI output.
 
-`presence` tunes the live agent view in Vesper World (the running agents it "echoes"). Vesper ships an
+`presence` tunes the live agent view in the **Diagnostics** section (the running agents it "echoes"). Vesper ships an
 allowlist for `claude`, `codex`, `opencode`, `gemini`, and `zeroclaw`; `presence.matchers` **adds**
 your own without touching code. Each matcher is `{ id, label, kind: "cli" | "app", pattern, exclude? }`,
 where `pattern`/`exclude` are regexes matched (case-insensitively) against a process's full command
