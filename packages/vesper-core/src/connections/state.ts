@@ -30,6 +30,8 @@ export interface ChannelState {
   readonly enabled: boolean;
   /** A handler for this channel is currently running in the daemon registry. */
   readonly running: boolean;
+  /** The handler supports QR/link pairing (scan-to-connect). */
+  readonly pairable: boolean;
   readonly docsUrl: string;
   readonly allowedHosts: readonly string[];
 }
@@ -45,7 +47,8 @@ export function channelStates(opts: {
   return CHANNEL_CATALOG.map((descriptor) => {
     const wiring = opts.wiring?.[descriptor.id];
     const vaultKey = wiring?.vaultKey ?? descriptor.vaultKeys[0];
-    const available = channelPluginById(descriptor.id) !== undefined;
+    const plugin = channelPluginById(descriptor.id);
+    const available = plugin !== undefined;
     return {
       id: descriptor.id,
       displayName: descriptor.displayName,
@@ -55,6 +58,7 @@ export function channelStates(opts: {
       enabled: wiring?.enabled === true,
       // A channel with no shipped handler can never run, regardless of the input.
       running: available && running.has(descriptor.id),
+      pairable: plugin?.pairable === true,
       docsUrl: descriptor.docsUrl,
       allowedHosts: wiring?.allowedHosts ?? descriptor.allowedHosts,
     };

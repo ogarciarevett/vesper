@@ -17,12 +17,17 @@ import { assertCapabilities, type Capability } from "../capabilities/index.ts";
 import { channelById } from "./catalog.ts";
 import { ConnectionError } from "./errors.ts";
 import { allowlistedFetch, type FetchFn } from "./fetch.ts";
+import { newPairingNonce, PAIRING_TTL_MS } from "./pairing.ts";
 import type {
   ChannelDescriptor,
   ChannelHandler,
   ChatSink,
   InboundMessage,
   OutboundIntent,
+  Pairable,
+  PairingDeps,
+  PairingSession,
+  PairingUpdate,
   Stoppable,
 } from "./types.ts";
 
@@ -44,6 +49,13 @@ const OP = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RECONNECT: 7, INVALID_SESSI
 
 /** Delay before reconnecting after a dropped Gateway socket. */
 const RECONNECT_DELAY_MS = 1_500;
+
+/**
+ * Bot-invite permissions for the pairing URL: View Channel (1<<10),
+ * Send Messages (1<<11), Read Message History (1<<16) = 67648. The minimum a
+ * transport handler needs to read a channel and reply in it.
+ */
+const INVITE_PERMISSIONS = (1 << 10) | (1 << 11) | (1 << 16);
 
 /** A minimal Gateway WebSocket — the subset the handler drives. Injected for tests. */
 export interface GatewaySocket {
@@ -87,6 +99,11 @@ interface DiscordUser {
   readonly bot?: boolean;
 }
 
+/** The `GET /oauth2/applications/@me` result; `id` is the OAuth2 client id. */
+interface OAuth2Application {
+  readonly id: string;
+}
+
 interface DiscordMessage {
   readonly channel_id: string;
   readonly content?: string;
@@ -115,7 +132,7 @@ function parsePayload(data: string): GatewayPayload | null {
   }
 }
 
-export class DiscordHandler implements ChannelHandler {
+export class DiscordHandler implements ChannelHandler, Pairable {
   readonly descriptor: ChannelDescriptor = DISCORD_DESCRIPTOR;
   readonly #granted: readonly Capability[];
   readonly #fetchFn: FetchFn | undefined;
@@ -124,6 +141,7 @@ export class DiscordHandler implements ChannelHandler {
   readonly #connect: GatewayConnect;
   #token: string | null = null;
   #selfId: string | null = null;
+  #appId: string | undefined = undefined;
 
   constructor(options: DiscordHandlerOptions) {
     this.#granted = options.granted;
@@ -175,6 +193,88 @@ export class DiscordHandler implements ChannelHandler {
   /** Deliver an outbound intent to a channel via REST. */
   async send(intent: OutboundIntent): Promise<void> {
     await this.#rest("POST", `/channels/${intent.chatId}/messages`, { content: intent.text });
+  }
+
+  /**
+   * Scan-to-connect: resolve the bot's OAuth2 client id, build an
+   * `oauth2/authorize` invite URL (rendered as a QR), and wait for the bot's
+   * receive loop to see `pair <nonce>` in a channel — at which point that
+   * channel's id is captured automatically (no copying ids). Inbound is observed
+   * through the daemon-multiplexed {@link PairingDeps.subscribeInbound} seam, so
+   * pairing never opens a second Gateway consumer. The nonce rides the invite URL
+   * as a harmless `&state=<nonce>` param (preserved through the OAuth2 flow) so the
+   * same value is shown in the QR and expected back in the channel.
+   */
+  startPairing(deps: PairingDeps): PairingSession {
+    let stopped = false;
+    let subscription: Stoppable | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settle!: (update: PairingUpdate) => void;
+    const outcome = new Promise<PairingUpdate>((resolve) => {
+      settle = resolve;
+    });
+
+    const cleanup = (): void => {
+      subscription?.stop();
+      if (timer !== undefined) clearTimeout(timer);
+    };
+
+    const resolveAppId = async (): Promise<string | undefined> => {
+      if (this.#appId !== undefined) return this.#appId;
+      try {
+        const app = await this.#rest<OAuth2Application>("GET", "/oauth2/applications/@me");
+        this.#appId = app.id;
+        return app.id;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const run = async function* (): AsyncGenerator<PairingUpdate> {
+      const appId = await resolveAppId();
+      if (appId === undefined) {
+        yield { status: "error", reason: "could not resolve the discord application id" };
+        return;
+      }
+      if (deps.subscribeInbound === undefined) {
+        yield { status: "error", reason: "no inbound stream available for discord pairing" };
+        return;
+      }
+      const nonce = newPairingNonce();
+      const expected = `pair ${nonce}`;
+      const inviteUrl =
+        `https://discord.com/oauth2/authorize?client_id=${appId}` +
+        `&scope=bot+applications.commands&permissions=${INVITE_PERMISSIONS}&state=${nonce}`;
+      yield {
+        status: "awaiting",
+        prompt: {
+          kind: "link",
+          data: inviteUrl,
+          humanHint: `Point your phone camera at this code to add the bot to your server, then type 'pair ${nonce}' in the channel you want Vesper to use.`,
+          expiresAt: Date.now() + PAIRING_TTL_MS,
+        },
+      };
+      if (stopped) return;
+      subscription = deps.subscribeInbound((message) => {
+        if (message.channel === "discord" && message.text.trim() === expected) {
+          settle({ status: "linked", chatId: message.chatId, label: message.from });
+        }
+      });
+      timer = setTimeout(() => settle({ status: "expired" }), PAIRING_TTL_MS);
+      const final = await outcome;
+      cleanup();
+      yield final;
+    };
+
+    return {
+      updates: () => run(),
+      stop: () => {
+        if (stopped) return;
+        stopped = true;
+        cleanup();
+        settle({ status: "expired" });
+      },
+    };
   }
 
   /** Assert NETWORK_FETCH and that the Gateway host is allowlisted before connecting. */

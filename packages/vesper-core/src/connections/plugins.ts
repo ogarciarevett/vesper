@@ -35,6 +35,8 @@ export interface ChannelBuildOptions {
 /** A pluggable channel: an id + a factory that builds its handler. */
 export interface ChannelPlugin {
   readonly id: ChannelId;
+  /** True when {@link build} returns a handler that also implements `Pairable` (QR onboarding). */
+  readonly pairable?: boolean;
   build(opts: ChannelBuildOptions): ChannelHandler;
 }
 
@@ -42,6 +44,7 @@ export interface ChannelPlugin {
 export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
   {
     id: "telegram",
+    pairable: true,
     build: (opts) =>
       new TelegramHandler({
         granted: opts.granted,
@@ -52,6 +55,7 @@ export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
   },
   {
     id: "discord",
+    pairable: true,
     build: (opts) =>
       new DiscordHandler({
         granted: opts.granted,

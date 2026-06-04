@@ -875,3 +875,55 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   covered by mocked transport (WS + fetch) unit tests — not exercised against live services (no tokens).
 - Follow-ups: WhatsApp two-way (webhook endpoint + tunnel decision); a pipeline-notify trigger that calls
   handler.send; Signal (local signal-cli) if wanted; Discord live verification with a real bot token.
+
+## Scan-to-connect — QR channel onboarding (Telegram + Discord), dependency-free v1 — SHIPPED
+- Priority-0 ask from Omar: "set up Telegram/WhatsApp/Discord (or ANY channel) just by reading a QR from the
+  UI — as easy as possible — and the QR also shows in the CLI. Check how OpenClaw did it." SPEC at
+  `specs/scan-to-connect.md` (local/gitignored). Issue-capped: this entry + the commit are the record (Rule 11).
+- RESEARCH (OpenClaw, public): their `openclaw qr` is DEVICE pairing (mobile app <-> gateway, an opaque
+  bootstrapToken in a QR), NOT channel onboarding. Per-channel reality on their integrations page: WhatsApp =
+  "QR pairing via Baileys", Telegram = "Bot API via grammY" (NO QR), Discord = bot token (NO QR), Signal =
+  signal-cli. The asymmetry that shaped the spec: only PERSONAL-account channels (WhatsApp-Web/Signal) are
+  fully QR-pairable, and they need heavy/reverse-engineered libs; bot-token channels (Telegram/Discord) can't
+  replace the token with a QR — but a QR CAN do the painful part (auto-capturing the chat). Omar chose the
+  dependency-free "bot-token + QR-chat-link" path for v1 (Baileys WhatsApp-Web greenlit as a separate follow-up).
+- THE WIN (Telegram, flagship): a QR of `https://t.me/<bot>?start=<nonce>` — scan, tap Start, and the bot's
+  long-poll receives `/start <nonce>`, so Vesper captures the chat id AUTOMATICALLY (no copying ids). The bot
+  token is still a one-time stdin/CLI step; the QR handles the genuinely hard part. Discord is the analogue:
+  an OAuth2 invite-URL QR (`&state=<nonce>` so the nonce survives OAuth) + a first `pair <nonce>` message
+  captures the target channel id.
+- ARCHITECTURE: an OPTIONAL `Pairable` capability a `ChannelHandler` may also implement (`startPairing(deps)
+  -> PairingSession` streaming `PairingUpdate`s: awaiting/linked/error/expired). Handlers stay decoupled from
+  the daemon via an injected `subscribeInbound` seam. A daemon-side `PairingCoordinator` owns the SINGLE
+  inbound long-poll and multiplexes it (via `tap(sink)`) to BOTH the chat sink and any active pairing session
+  — so pairing never opens a second `getUpdates` consumer (Telegram allows only one). A configured-but-not-
+  running channel gets a TRANSIENT receive loop for the pairing window only. On `linked` the captured chat id
+  is persisted as the non-secret `params.defaultChatId` and the channel is enabled (then "restart to apply",
+  the same contract as `connections set`). Token NEVER transits the pairing path; only nonces/links/QRs + the
+  chat id, and audit redacts `nonce`/`qr`.
+- QR everywhere from ONE encoder: ported the public-domain Nayuki QR generator into `vesper-core/media/qr.ts`
+  (zero deps — cross-checked BYTE-FOR-BYTE vs upstream across modes/ECC/versions) + a half-block ANSI terminal
+  renderer. CLI `vesper connections pair <id>` renders the QR in the terminal and streams status to "Linked!".
+  UI (`channels.ts`) draws the same matrix on a canvas via a new `GET /api/qr?data=` (the browser can't import
+  the @vesper/core barrel — it pulls bun:sqlite). Both consume ONE uniform transport: `POST
+  /api/connections/:id/pair` -> `application/x-ndjson` stream of PairingUpdates (close = cancel via req.signal).
+- DEVIATIONS (all deliberate): (1) uniform `params.defaultChatId` for both channels — Discord's chatId IS its
+  channel id — instead of the spec's separate `defaultChannelId`. (2) Decision-5 (UI bot-token entry over
+  loopback) SCOPED OUT: doing it SECURELY needs the existing out-of-band approval-code gate (like template
+  edits), which undercuts "easy" — so token bootstrap stays CLI and the UI does QR pairing only; the
+  unconfigured-channel hint points at `vesper connections set`. (3) transient-receiver pairing relies on the
+  existing "restart to apply" UX (no live hot-registration in v1). (4) the running-channel tap also forwards
+  the `/start <nonce>` message to the chatbot (cosmetic; a filter is a possible follow-up).
+- PARALLELISM: lead-owned integration (B types, C Telegram, D coordinator+endpoint+CLI) while 3 file-disjoint
+  sub-agents owned the QR-encoder port (A), Discord pairing (F), and the UI Connect card (E). The lead ran
+  integrated biome + bun test + tsc + a REVIEW pass; fixed 3 NEW tsc errors the agents introduced under
+  strict/exactOptional (partial Vault doubles; a void-returning ChatSink callback; closure narrowing of a
+  module-const descriptor). CI gate (biome + bun test) is GREEN; tsc is a manual self-check (CI skips it —
+  pre-existing `as`-cast/exactOptional errors in unchanged code remain, none new from this work).
+- Verified: 854 tests / 0 fail (+~40); biome clean; tsc adds 0 new errors; ZERO new dependencies (lockfile has
+  no baileys/provider SDK); every network + inbound seam mocked (no live tokens exercised). Not yet validated
+  against a real Telegram/Discord bot (no tokens) — the end-to-end scan is covered by unit + endpoint tests.
+- DELEGATED (next cycle): WhatsApp-Web via Baileys (Omar greenlit) — a new opt-in `@vesper/channel-whatsapp-web`
+  package (Baileys isolated + lazy-imported so core stays dep-free) + a rotating-QR pairing session + the
+  `.ai/context.md` amendment carving out that one dependency. Also: Signal (signal-cli, real QR device-link);
+  optionally browser token entry behind the approval gate; filtering the pairing `/start` message from the chat.

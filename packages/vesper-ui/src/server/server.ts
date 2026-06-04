@@ -3,12 +3,13 @@ import { fileURLToPath } from "node:url";
 import type {
   ApprovalTokenStore,
   ChannelState,
+  PairingSession,
   RunOutcome,
   RunTreeNode,
   Scheduler,
   Store,
 } from "@vesper/core";
-import { ApprovalError, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
+import { ApprovalError, encodeQr, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
 import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
@@ -86,6 +87,15 @@ export interface UiServerDeps {
    */
   readonly connections?: {
     list(): Promise<readonly ChannelState[]>;
+  };
+  /**
+   * Pairing (scan-to-connect) provider. `startPairing` begins a QR/link pairing
+   * attempt for one channel and returns a streamed {@link PairingSession}; the
+   * `POST /api/connections/:id/pair` route relays its updates as ndjson. Absent ->
+   * the route returns 503 (the daemon wired no pairing coordinator).
+   */
+  readonly pairing?: {
+    startPairing(channelId: string): Promise<PairingSession>;
   };
   /**
    * Prebuilt client assets. When set, the server serves these instead of reading
@@ -394,6 +404,61 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // no provider is wired, returns [] so the page degrades gracefully.
       if (req.method === "GET" && pathname === "/api/connections") {
         return json(deps.connections === undefined ? [] : await deps.connections.list());
+      }
+
+      // GET /api/qr?data=... — encode a string as a QR matrix ({size, modules}) so the
+      // browser can draw a scannable code on a canvas WITHOUT bundling the core encoder
+      // (the @vesper/core barrel pulls bun:sqlite, which cannot run in the browser).
+      // Local-only (guarded above); length-bounded so a giant payload can't hog CPU.
+      if (req.method === "GET" && pathname === "/api/qr") {
+        const data = url.searchParams.get("data") ?? "";
+        if (data.length === 0) return json({ error: "data is required" }, 400);
+        if (data.length > 2048) return json({ error: "data too long" }, 413);
+        try {
+          return json(encodeQr(data));
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : "qr encode failed" }, 400);
+        }
+      }
+
+      // POST /api/connections/:id/pair — begin scan-to-connect pairing for one channel
+      // and stream PairingUpdates as newline-delimited JSON (consumed identically by the
+      // `vesper connections pair` CLI and the Vesper World Connect card). Local-only
+      // (guarded above); the stream carries non-secret nonces/links + the captured chat
+      // id, never a token. Closing the connection cancels the session.
+      const pairMatch = pathname.match(/^\/api\/connections\/([^/]+)\/pair$/);
+      if (req.method === "POST" && pairMatch) {
+        if (deps.pairing === undefined) {
+          return json({ error: "pairing is not available" }, 503);
+        }
+        const channelId = decodeURIComponent(pairMatch[1] ?? "");
+        const session = await deps.pairing.startPairing(channelId);
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const onAbort = (): void => session.stop();
+            req.signal.addEventListener("abort", onAbort);
+            try {
+              for await (const update of session.updates()) {
+                controller.enqueue(encoder.encode(`${JSON.stringify(update)}\n`));
+                // awaiting may repeat (rotating QR); any other status is terminal.
+                if (update.status !== "awaiting") break;
+              }
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err);
+              controller.enqueue(
+                encoder.encode(`${JSON.stringify({ status: "error", reason })}\n`),
+              );
+            } finally {
+              req.signal.removeEventListener("abort", onAbort);
+              session.stop();
+              controller.close();
+            }
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
+        });
       }
 
       // GET /api/runs?limit= — recent runs (newest-first) for Diagnostics.
