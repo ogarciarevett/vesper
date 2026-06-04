@@ -92,6 +92,62 @@ describe("normalizeConfig", () => {
   });
 });
 
+describe("normalizeConfig — connections", () => {
+  test("keeps a well-formed telegram connection", () => {
+    const cfg = normalizeConfig({
+      connections: {
+        telegram: {
+          enabled: true,
+          vaultKey: "telegram_bot_token",
+          allowedHosts: ["api.telegram.org"],
+        },
+      },
+    });
+    expect(cfg.connections?.telegram).toEqual({
+      enabled: true,
+      vaultKey: "telegram_bot_token",
+      allowedHosts: ["api.telegram.org"],
+    });
+  });
+
+  test("drops a channel id not in the catalog", () => {
+    expect(
+      normalizeConfig({ connections: { slack: { enabled: true } } }).connections,
+    ).toBeUndefined();
+  });
+
+  test("defaults vaultKey to the catalog descriptor when absent", () => {
+    const cfg = normalizeConfig({ connections: { telegram: { enabled: true } } });
+    expect(cfg.connections?.telegram?.vaultKey).toBe("telegram_bot_token");
+  });
+
+  test("narrows allowedHosts against the catalog — never widens", () => {
+    const cfg = normalizeConfig({
+      connections: {
+        telegram: { enabled: true, allowedHosts: ["api.telegram.org", "evil.example"] },
+      },
+    });
+    // "evil.example" is not in the telegram descriptor's allowedHosts -> dropped.
+    expect(cfg.connections?.telegram?.allowedHosts).toEqual(["api.telegram.org"]);
+  });
+
+  test("falls back to the descriptor allowedHosts when config omits them", () => {
+    const cfg = normalizeConfig({ connections: { telegram: { enabled: true } } });
+    expect(cfg.connections?.telegram?.allowedHosts).toEqual(["api.telegram.org"]);
+  });
+
+  test("coerces a non-boolean enabled to false", () => {
+    const cfg = normalizeConfig({ connections: { telegram: { enabled: "yes" } } });
+    expect(cfg.connections?.telegram?.enabled).toBe(false);
+  });
+
+  test("omits connections entirely when absent or all entries are invalid", () => {
+    expect(normalizeConfig({ cli: { adapters: {} } }).connections).toBeUndefined();
+    expect(normalizeConfig({ connections: {} }).connections).toBeUndefined();
+    expect(normalizeConfig({ connections: "nope" }).connections).toBeUndefined();
+  });
+});
+
 describe("loadConfig / saveConfig", () => {
   test("missing file yields the default", async () => {
     expect(await loadConfig(tempConfigPath())).toEqual(DEFAULT_CONFIG);

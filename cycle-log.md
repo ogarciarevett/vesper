@@ -795,3 +795,48 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   flat grant) and added an orchestrate-route test asserting `["SPAWN_SUBAGENT","WRITE_STORAGE"]`.
 - Verified: 766 tests / 0 fail; Biome clean; tsc 0 errors; end-to-end via the daemon (chat -> router ok ->
   selftest ok, with real context pills). No provider SDKs.
+
+---
+
+## Connections surface — Telegram live (CLI + daemon wiring + live page) — SHIPPED
+
+- Spec: `specs/connections-surface.md` (local; sub-slice of `connections.md`). Issue-capped — this log +
+  commit are the record (Rule 11). Authorized by Omar 2026-06-04. The Connections CORE was already built +
+  tested (`vesper-core/connections/`: catalog, registry, TelegramHandler, allowlistedFetch, audit) but 100%
+  UNWIRED — the Channels page told users to "configure with the vesper CLI" while no such command, no
+  `/api/connections` route, and no daemon registry existed. This slice connects the core to its CLI/daemon/
+  UI surfaces so a Telegram message actually reaches the chatbot and replies.
+- Channels are a PLUGIN (Omar's ask). New `connections/plugins.ts` is the single extension point
+  (`CHANNEL_PLUGINS` / `ChannelPlugin` / `channelPluginById` + `CHANNEL_GRANTS`). Telegram is the only
+  plugin; Discord/WhatsApp/Signal report `available:false` -> "soon" honestly. Adding a channel later = one
+  plugin entry + a handler + a catalog flag; daemon/CLI/UI iterate the registry and do not change.
+- WhatsApp DECISION (deferred, recorded — Omar delegated it): when built it is a plugin using a PURE-HTTP
+  transport through `allowlistedFetch` — Meta Cloud API or an unofficial REST+webhook gateway
+  (Whapi/Maytapi). Baileys / whatsmeow / open-wa are REJECTED (a heavy reverse-engineered WhatsApp-Web
+  client is a runtime dependency + ToS/ban liability vs Vesper's zero-runtime-dep posture). Polling
+  preferred over a public webhook (stay behind NAT, local-first).
+- What shipped: core `plugins.ts` + pure `state.ts` (`channelStates()` shared by the CLI + the API route);
+  config `connections` block + `normalizeConnections` (narrow-never-widen allowedHosts vs the catalog);
+  `vesper connections list|set|test|enable|disable` (set/test read the credential from STDIN -> vault;
+  config holds only the vault KEY name); `connections-wiring.ts` (`buildChannelRegistry` builds +
+  authenticates + registers every available+enabled+credentialed channel, isolating + auditing a bad
+  token; `makeChannelSink` bridges inbound -> POST /api/chat -> reply back via `handler.send`, per-chatId
+  session map); server `GET /api/connections` + a `reply` field on `POST /api/chat`; daemon opens the
+  Vault, builds the registry, passes a state provider to the UI, and `startAll(sink)` AFTER the UI is
+  listening (stops on shutdown); the LIVE Channels page (real state + accurate `vesper connections` hints +
+  setup links; MCP stays read-only).
+- Scope reductions (deliberate, vs the parent spec): UI is READ-ONLY — channel mutations are CLI-only (the
+  trusted stdin path), so no browser enable/disable route + no approval-token gate THIS slice (the shipped
+  `requireApproval` is ready for it as a follow-up). The ChatSink uses a localhost self-POST to the
+  existing `/api/chat` (faithful to connections.md's "no new execution path") instead of extracting a
+  shared run function. `normalizeConnections` drops malformed entries silently (matching the shipped
+  `normalizePresence`).
+- Verified: 795 tests / 0 fail (+29); `biome ci` clean (2 pre-existing `!important` warnings); tsc 0; no
+  provider SDKs. Live on an isolated home: `connections set telegram` (stdin) wrote config + vault; the
+  daemon built the registry + attempted getMe; `GET /api/connections` reported telegram
+  available+configured+enabled, running=false on a FAKE token (auth isolated + audited); the live Channels
+  page rendered "check token" honestly. (A real Bot API round-trip is covered by mocked-fetch unit tests;
+  not exercised against live Telegram — no token.)
+- Follow-ups: Discord handler (second plugin, same contract); browser enable/disable behind the approval
+  token; hot enable/disable without a daemon restart; persisted Telegram-chat -> session mapping; MCP
+  enable/disable.

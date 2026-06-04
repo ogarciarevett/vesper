@@ -20,7 +20,19 @@ export {
   allowlistedFetch,
   type FetchFn,
 } from "./fetch.ts";
+export {
+  CHANNEL_GRANTS,
+  CHANNEL_PLUGINS,
+  type ChannelBuildOptions,
+  type ChannelPlugin,
+  channelPluginById,
+} from "./plugins.ts";
 export { ChannelRegistry } from "./registry.ts";
+export {
+  type ChannelState,
+  type ChannelWiring,
+  channelStates,
+} from "./state.ts";
 export { TelegramHandler, type TelegramHandlerOptions } from "./telegram.ts";
 export type {
   ChannelDescriptor,

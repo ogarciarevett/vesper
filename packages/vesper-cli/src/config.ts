@@ -1,10 +1,22 @@
-import type { AgentMatcherSpec } from "@vesper/core";
+import { type AgentMatcherSpec, channelById } from "@vesper/core";
 import { configPath } from "./paths.ts";
 
 /** Per-adapter overrides for a CLI tool's headless invocation. */
 export interface AdapterConfig {
   readonly command?: string;
   readonly args?: readonly string[];
+}
+
+/**
+ * Non-secret wiring for one messaging channel (the token itself lives in the vault,
+ * keyed by `vaultKey`). `allowedHosts` is the host-allowlist seam for outbound
+ * `NETWORK_FETCH`, intersected with the catalog descriptor (narrowed, never widened).
+ */
+export interface ConnectionConfig {
+  readonly enabled: boolean;
+  /** NAME of the vault entry holding the channel credential (never the value). */
+  readonly vaultKey: string;
+  readonly allowedHosts: readonly string[];
 }
 
 /** The `~/.vesper/config.json` shape. */
@@ -31,6 +43,8 @@ export interface VesperConfig {
     /** Default renderer theme id (e.g. "hearth", "cyberpunk"). Unknown ids fall back. */
     readonly theme?: string;
   };
+  /** Per-channel messaging wiring (Connections). Secrets stay in the vault. */
+  readonly connections?: Readonly<Record<string, ConnectionConfig>>;
 }
 
 /** A fresh config with no default and no overrides. */
@@ -103,6 +117,38 @@ function normalizePresence(raw: unknown): VesperConfig["presence"] | undefined {
   return { pollMs };
 }
 
+/**
+ * Coerce one untrusted connection entry. Returns undefined (dropped) when the id is
+ * not a catalog channel or `raw` is not an object. `vaultKey` defaults to the
+ * descriptor's first key; `allowedHosts` is INTERSECTED with the descriptor's
+ * allowlist (narrowed, never widened) — an omitted list inherits the descriptor's.
+ */
+function normalizeConnection(id: string, raw: unknown): ConnectionConfig | undefined {
+  const descriptor = channelById(id);
+  if (descriptor === undefined || !isObject(raw)) return undefined;
+  const vaultKey = asString(raw.vaultKey) ?? descriptor.vaultKeys[0];
+  if (vaultKey === undefined) return undefined;
+  const requested = Array.isArray(raw.allowedHosts)
+    ? raw.allowedHosts.filter((h): h is string => typeof h === "string")
+    : undefined;
+  const allowedHosts =
+    requested === undefined
+      ? descriptor.allowedHosts
+      : requested.filter((h) => descriptor.allowedHosts.includes(h));
+  return { enabled: raw.enabled === true, vaultKey, allowedHosts };
+}
+
+/** Coerce untrusted `connections` config; drops entries for unknown channels or bad shape. */
+function normalizeConnections(raw: unknown): VesperConfig["connections"] | undefined {
+  if (!isObject(raw)) return undefined;
+  const result: Record<string, ConnectionConfig> = {};
+  for (const [id, value] of Object.entries(raw)) {
+    const conn = normalizeConnection(id, value);
+    if (conn !== undefined) result[id] = conn;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 /** Coerce untrusted `ui` config; keeps only a string `theme`. */
 function normalizeUi(raw: unknown): VesperConfig["ui"] | undefined {
   if (!isObject(raw)) return undefined;
@@ -135,6 +181,8 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   if (presence !== undefined) result = { ...result, presence };
   const ui = normalizeUi(raw.ui);
   if (ui !== undefined) result = { ...result, ui };
+  const connections = normalizeConnections(raw.connections);
+  if (connections !== undefined) result = { ...result, connections };
   return result;
 }
 

@@ -1,6 +1,13 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ApprovalTokenStore, RunOutcome, RunTreeNode, Scheduler, Store } from "@vesper/core";
+import type {
+  ApprovalTokenStore,
+  ChannelState,
+  RunOutcome,
+  RunTreeNode,
+  Scheduler,
+  Store,
+} from "@vesper/core";
 import { ApprovalError, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
@@ -72,6 +79,14 @@ export interface UiServerDeps {
    * refused (403) — fail-closed; the chatbot/template surface is then read-only.
    */
   readonly approvalTokens?: ApprovalTokenStore;
+  /**
+   * Connections (messaging channels) surface. `list` resolves each catalog channel's
+   * live state (available / configured / enabled / running) for `GET /api/connections`.
+   * Absent -> the route returns an empty list (the daemon wired no channel provider).
+   */
+  readonly connections?: {
+    list(): Promise<readonly ChannelState[]>;
+  };
   /**
    * Prebuilt client assets. When set, the server serves these instead of reading
    * `client/index.html` and bundling `client/main.ts` from disk — required for the
@@ -374,6 +389,13 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         return json(presences);
       }
 
+      // GET /api/connections — messaging-channel state (Connections page). Read-only
+      // + local-only; channel mutations are CLI-only (`vesper connections ...`). When
+      // no provider is wired, returns [] so the page degrades gracefully.
+      if (req.method === "GET" && pathname === "/api/connections") {
+        return json(deps.connections === undefined ? [] : await deps.connections.list());
+      }
+
       // GET /api/runs?limit= — recent runs (newest-first) for Diagnostics.
       if (req.method === "GET" && pathname === "/api/runs") {
         const limitRaw = Number(url.searchParams.get("limit") ?? "50");
@@ -496,7 +518,9 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           kind: "message",
           payload: { sessionId, turnId, runId: outcome.runId },
         });
-        return json({ sessionId, turnId, runId: outcome.runId });
+        // `reply` lets a non-browser caller (the Telegram ChatSink) deliver the
+        // assistant's response back over its channel from this single round-trip.
+        return json({ sessionId, turnId, runId: outcome.runId, reply: assistantText });
       }
 
       // GET /api/chat/sessions — the session list (newest-first) for the home.

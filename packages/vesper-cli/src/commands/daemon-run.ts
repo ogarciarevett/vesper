@@ -2,9 +2,11 @@ import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
   ApprovalTokenStore,
+  channelStates,
   DEFAULT_AGENT_MATCHERS,
   detectAvailableCLIs,
   HandlerRegistry,
+  KeychainVault,
   openStore,
   Scheduler,
   startIpcServer,
@@ -14,6 +16,7 @@ import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
 import { makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig } from "../config.ts";
+import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
 import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
@@ -84,6 +87,18 @@ export const daemonRunCommand: Command = {
     // Out-of-band approval tokens for privileged config mutations (template edits).
     // In-memory + per-process: a daemon restart invalidates every outstanding code.
     const approvalTokens = new ApprovalTokenStore();
+
+    // Connections: open the vault and build the messaging-channel registry from config.
+    // Only channels that ship a handler AND are enabled AND have a stored credential
+    // start; a bad token is isolated + audited, never blocking the others. Inbound
+    // messages bridge to the chatbot's EXISTING run path (see makeChannelSink); the
+    // loops start AFTER the UI (their POST target) is listening.
+    const vault = new KeychainVault();
+    const channels = await buildChannelRegistry({
+      connections: config.connections,
+      vault,
+      store: uiStore,
+    });
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
@@ -95,9 +110,25 @@ export const daemonRunCommand: Command = {
       detectClis: async () => installed.map((name) => ({ name, status: "installed", ok: true })),
       detectPresences: presenceDetectorFor(presenceMatchers),
       approvalTokens,
+      connections: {
+        list: async () =>
+          channelStates({
+            wiring: config.connections,
+            storedKeys: await vault.list(),
+            runningIds: channels.runningIds,
+          }),
+      },
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),
     });
+
+    // The UI (the chat sink's POST target) is now listening — start the inbound loops.
+    const channelStop = channels.registry.startAll(
+      makeChannelSink({ baseUrl: ui.url, registry: channels.registry }),
+    );
+    if (channels.runningIds.length > 0) {
+      line(dim(`  channels:  ${channels.runningIds.join(", ")}`));
+    }
 
     // Start the cron tick loop. The scheduler records per-task errors for any
     // task whose handler is not registered — pipelines are now loaded above.
@@ -138,6 +169,7 @@ export const daemonRunCommand: Command = {
         // best-effort audit; never block shutdown.
       }
       removePidFile(pidPath());
+      channelStop.stop();
       ui.stop();
       uiStore.close();
       db.close();

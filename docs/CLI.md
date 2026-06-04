@@ -15,6 +15,11 @@ Every `vesper` command, generated from the command registry
 | `vesper cli list` | List supported CLIs with version, working status, and remediation hints. |
 | `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
+| `vesper connections list` | List messaging channels with availability, credential, and enabled status. |
+| `vesper connections set <id>   # token via stdin` | Store a channel credential (read from stdin) and enable it. |
+| `vesper connections test <id>` | Authenticate a channel's stored credential (e.g. Telegram getMe). |
+| `vesper connections enable <id>` | Enable a channel (the daemon starts it on next launch). |
+| `vesper connections disable <id>` | Disable a channel (deregisters it; the stored token is kept). |
 | `vesper status` | Show versions and the health of every subsystem. |
 | `vesper daemon run` | Run the daemon in the foreground (IPC + scheduler + UI). Ctrl-C to stop. |
 | `vesper daemon start` | Start the daemon in the background (detached). |
@@ -35,3 +40,4 @@ Every `vesper` command, generated from the command registry
 | `vesper skill diff <name> [--skills-dir <dir>]` | Diff the committed SKILL.md against the trained best candidate. |
 | `vesper skill accept <name> [--skills-dir <dir>] [--yes]` | Adopt the trained best candidate into the committed SKILL.md (checkpointed; revertible). |
 | `vesper skill revert <name> [--skills-dir <dir>]` | Restore the committed SKILL.md from the latest accept checkpoint. |
+| `vesper evolve list` | Show the latest auto-evolve report and open skill/fix proposals. |

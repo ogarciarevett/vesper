@@ -1,5 +1,6 @@
 import type { Registrable } from "../dispatch.ts";
 import { cliGroup } from "./cli.ts";
+import { connectionsGroup } from "./connections.ts";
 import { daemonGroup } from "./daemon.ts";
 import { evolveGroup } from "./evolve.ts";
 import { helloCommand } from "./hello.ts";
@@ -17,6 +18,7 @@ export const registry: readonly Registrable[] = [
   helloCommand,
   vaultGroup,
   cliGroup,
+  connectionsGroup,
   statusCommand,
   daemonGroup,
   uiCommand,

@@ -116,6 +116,12 @@ describe("UI server", () => {
     expect(await res.json()).toEqual([]);
   });
 
+  test("GET /api/connections is [] when no channel provider is wired", async () => {
+    const res = await fetch(`${handle.url}/api/connections`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+  });
+
   test("GET / serves the client shell", async () => {
     const res = await fetch(`${handle.url}/`);
     expect(res.status).toBe(200);
@@ -458,9 +464,17 @@ describe("UI server — chat + templates", () => {
       body: JSON.stringify({ message: "run a self test" }),
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { sessionId: string; turnId: string; runId: string };
+    const body = (await res.json()) as {
+      sessionId: string;
+      turnId: string;
+      runId: string;
+      reply: string;
+    };
     expect(UUID_RE.test(body.sessionId)).toBe(true);
     expect(body.runId).not.toBeNull();
+    // `reply` carries the assistant text so a channel sink can deliver it in one round-trip.
+    expect(typeof body.reply).toBe("string");
+    expect(body.reply.length).toBeGreaterThan(0);
 
     // The transcript has the user turn + an assistant turn carrying the runId.
     const turnsRes = await fetch(
