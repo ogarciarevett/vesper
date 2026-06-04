@@ -18,7 +18,9 @@ import type {
   ListRunsOptions,
   ListTurnsOptions,
   PipelineTemplateRow,
+  RecordRunContextInput,
   RecordRunInput,
+  RunContext,
   RunEventKind,
   RunEventRow,
   RunRow,
@@ -51,6 +53,9 @@ interface RawRunRow {
   summary: unknown;
   parent_run_id: unknown;
   status_updated_at: unknown;
+  ctx_used_tokens: unknown;
+  ctx_limit: unknown;
+  ctx_model: unknown;
 }
 
 /** Raw shape returned for the `run_events` table. */
@@ -140,6 +145,7 @@ const RUN_EVENT_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>([
   "progress",
   "spawn",
   "complete",
+  "usage",
 ]);
 
 function assertRunEventKind(value: unknown, column: string): RunEventKind {
@@ -175,6 +181,15 @@ function toEventRow(raw: RawEventRow): EventRow {
 }
 
 function toRunRow(raw: RawRunRow): RunRow {
+  const usedTokens = assertNumberOrNull(raw.ctx_used_tokens, "ctx_used_tokens");
+  const limit = assertNumberOrNull(raw.ctx_limit, "ctx_limit");
+  const model = assertStringOrNull(raw.ctx_model, "ctx_model");
+
+  let context: RunContext | null = null;
+  if (usedTokens !== null && limit !== null) {
+    context = { usedTokens, limit, model };
+  }
+
   return {
     id: assertString(raw.id, "id"),
     ts: assertNumber(raw.ts, "ts"),
@@ -183,6 +198,7 @@ function toRunRow(raw: RawRunRow): RunRow {
     summary: assertString(raw.summary, "summary"),
     parentRunId: assertStringOrNull(raw.parent_run_id, "parent_run_id"),
     statusUpdatedAt: assertNumberOrNull(raw.status_updated_at, "status_updated_at"),
+    context,
   };
 }
 
@@ -423,6 +439,21 @@ export class SqliteStore implements Store {
     }
   }
 
+  recordRunContext(input: RecordRunContextInput): void {
+    try {
+      this.#db
+        .query<void, [number, number, string | null, string]>(
+          `UPDATE runs
+           SET ctx_used_tokens = ?, ctx_limit = ?, ctx_model = ?
+           WHERE id = ?`,
+        )
+        .run(input.usedTokens, input.limit, input.model, input.runId);
+      // Best-effort: no error when the row does not exist (changes === 0 is acceptable).
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to record run context", { cause });
+    }
+  }
+
   appendRunEvent(input: AppendRunEventInput): string {
     // Guard the WRITE side the same way the read side (assertRunEventKind) does:
     // a single out-of-allowlist kind would otherwise make every later
@@ -490,7 +521,8 @@ export class SqliteStore implements Store {
   #getRunById(id: string): RunRow | null {
     const row = this.#db
       .query<RawRunRow, [string]>(
-        `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at
+        `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at,
+                ctx_used_tokens, ctx_limit, ctx_model
          FROM runs WHERE id = ?`,
       )
       .get(id);
@@ -543,7 +575,7 @@ export class SqliteStore implements Store {
         params.push(options.limit);
       }
 
-      const sql = `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at FROM runs${where} ORDER BY ts ASC${limitClause}`;
+      const sql = `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at, ctx_used_tokens, ctx_limit, ctx_model FROM runs${where} ORDER BY ts ASC${limitClause}`;
       const rows = this.#db.query<RawRunRow, (string | number)[]>(sql).all(...params);
       return rows.map(toRunRow);
     } catch (cause) {

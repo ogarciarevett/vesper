@@ -138,4 +138,17 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     `,
   },
+  {
+    // Context-window visibility (agent-context-window spec, task T2).
+    // Persists the latest CLI completion's context-window fill on the `runs` row so
+    // the run tree can surface it without scanning `run_events`. All three columns are
+    // nullable — a run with no recorded usage simply has NULL in each column, and
+    // `RunRow.context` is null for that row. Forward-only; appended AFTER 007.
+    id: "008_run_context",
+    sql: `
+      ALTER TABLE runs ADD COLUMN ctx_used_tokens INTEGER;
+      ALTER TABLE runs ADD COLUMN ctx_limit INTEGER;
+      ALTER TABLE runs ADD COLUMN ctx_model TEXT;
+    `,
+  },
 ];

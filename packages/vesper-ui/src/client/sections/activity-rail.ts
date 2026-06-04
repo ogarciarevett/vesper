@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-import type { RunEventInfo, RunTreeInfo } from "../../world/types.ts";
+import type { RunContextInfo, RunEventInfo, RunTreeInfo } from "../../world/types.ts";
 import { injectStyle, type LiveMessage, type SectionContext } from "../shell/section.ts";
 
 const RAIL_CSS = `
@@ -14,7 +14,14 @@ const RAIL_CSS = `
   .atop .adot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
   .atop .adot.ok { background: var(--ok); } .atop .adot.error { background: var(--danger); }
   .aname { font-size: 14px; font-weight: 600; color: var(--ink); }
-  .astatus { font-size: 12px; color: var(--ink-soft); margin-left: auto; }
+  .astatus { font-size: 12px; color: var(--ink-soft); margin-left: 10px; }
+  .ctx-pill { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 11px; color: var(--ink-soft); }
+  .ctx-pill .ctx-track { width: 46px; height: 6px; border-radius: 3px; background: var(--surface-strong, rgba(127,127,127,0.18)); overflow: hidden; }
+  .ctx-pill .ctx-fill { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width 0.3s ease; }
+  .ctx-pill.warn .ctx-fill { background: #e0b341; }
+  .ctx-pill.hot .ctx-fill, .ctx-pill.crit .ctx-fill { background: var(--danger); }
+  .ctx-pill .ctx-pct { font-variant-numeric: tabular-nums; }
+  .ctx-pill.muted { opacity: 0.55; }
   .alog { margin-top: 9px; display: flex; flex-direction: column; gap: 5px; max-height: 220px; overflow-y: auto; }
   .aevent { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
   .akind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-2); min-width: 58px; }
@@ -116,10 +123,21 @@ export class ActivityRail {
   }
 
   #appendLive(ev: RunEventInfo): void {
+    // A `usage` step is not a log line — it updates the run's context pill in place.
+    if (ev.kind === "usage") {
+      this.#updatePill(ev.runId, contextFromEventData(ev.data));
+      return;
+    }
     const log = this.#logFor(ev.runId);
     if (log === null) return;
     if (log.querySelector(`[data-event-id="${ev.id}"]`) !== null) return;
     appendEventRow(log, ev);
+  }
+
+  #updatePill(runId: string, context: RunContextInfo | null): void {
+    if (context === null) return;
+    const pill = this.#body.querySelector<HTMLElement>(`.ctx-pill[data-ctx-run-id="${runId}"]`);
+    if (pill !== null) renderContextPill(pill, context);
   }
 
   #render(tree: RunTreeInfo, events: RunEventInfo[]): void {
@@ -163,15 +181,19 @@ function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]
   const name = document.createElement("span");
   name.className = "aname";
   name.textContent = node.run.pipeline;
+  const pill = document.createElement("span");
+  pill.dataset.ctxRunId = node.run.id;
+  renderContextPill(pill, node.run.context);
   const status = document.createElement("span");
   status.className = "astatus";
   status.textContent = node.run.status;
-  top.append(dot, name, status);
+  top.append(dot, name, pill, status);
 
   const log = document.createElement("div");
   log.className = "alog";
   log.dataset.runId = node.run.id;
-  const own = events.filter((e) => e.runId === node.run.id);
+  // `usage` steps drive the context pill (above), not the step log.
+  const own = events.filter((e) => e.runId === node.run.id && e.kind !== "usage");
   if (own.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
@@ -183,4 +205,57 @@ function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]
 
   row.append(top, log);
   return row;
+}
+
+/** Percentage fill for a run's context, or null when no usage is known. */
+function pctOf(context: RunContextInfo | null): number | null {
+  if (context === null || context.limit <= 0) return null;
+  return Math.min(100, Math.round((context.usedTokens / context.limit) * 100));
+}
+
+/** Severity bucket mirroring the statusline HUD: ok <50, warn >=50, hot >=75, crit >=90. */
+function ctxClass(pct: number): "ok" | "warn" | "hot" | "crit" {
+  if (pct >= 90) return "crit";
+  if (pct >= 75) return "hot";
+  if (pct >= 50) return "warn";
+  return "ok";
+}
+
+/** Render (or re-render) a context pill in place: a small track + fill + percentage. */
+function renderContextPill(pill: HTMLElement, context: RunContextInfo | null): void {
+  pill.className = "ctx-pill";
+  pill.replaceChildren();
+  const pct = pctOf(context);
+  if (pct === null) {
+    pill.classList.add("muted");
+    const label = document.createElement("span");
+    label.textContent = "ctx --";
+    pill.append(label);
+    pill.title = "this agent's CLI did not report context usage";
+    return;
+  }
+  const bucket = ctxClass(pct);
+  if (bucket !== "ok") pill.classList.add(bucket);
+  const track = document.createElement("span");
+  track.className = "ctx-track";
+  const fill = document.createElement("span");
+  fill.className = "ctx-fill";
+  fill.style.width = `${pct}%`;
+  track.append(fill);
+  const txt = document.createElement("span");
+  txt.className = "ctx-pct";
+  txt.textContent = `${pct}%`;
+  pill.append(track, txt);
+  if (context !== null) {
+    const model = context.model !== null ? ` (${context.model})` : "";
+    pill.title = `context ${context.usedTokens.toLocaleString()} / ${context.limit.toLocaleString()} tokens${model}`;
+  }
+}
+
+/** Narrow a `usage` run-event's `data` payload into a {@link RunContextInfo}. */
+function contextFromEventData(data: Record<string, unknown> | undefined): RunContextInfo | null {
+  if (data === undefined) return null;
+  const { usedTokens, limit, model } = data;
+  if (typeof usedTokens !== "number" || typeof limit !== "number") return null;
+  return { usedTokens, limit, model: typeof model === "string" ? model : null };
 }

@@ -18,6 +18,13 @@ export interface EventRow {
   readonly payload: Record<string, unknown>;
 }
 
+/** The latest context-window fill recorded for a run (from its most recent CLI completion). */
+export interface RunContext {
+  readonly usedTokens: number;
+  readonly limit: number;
+  readonly model: string | null;
+}
+
 /** A row from the `runs` table. */
 export interface RunRow {
   readonly id: string;
@@ -30,10 +37,16 @@ export interface RunRow {
   readonly parentRunId: string | null;
   /** Unix timestamp (ms) the status was last changed (set by startRun/finishRun). */
   readonly statusUpdatedAt: number | null;
+  /**
+   * The latest context-window fill recorded for this run; null when no usage has been
+   * recorded. Optional so partial RunRow literals (test doubles, signal snapshots) need
+   * not specify it; `openStore`'s row mapper always populates it (value or null).
+   */
+  readonly context?: RunContext | null;
 }
 
 /** The kind of a {@link RunEventRow} — a step in the live per-run trace. */
-export type RunEventKind = "step" | "log" | "progress" | "spawn" | "complete";
+export type RunEventKind = "step" | "log" | "progress" | "spawn" | "complete" | "usage";
 
 /** A row from the `run_events` table — a single live-trace step for a run. */
 export interface RunEventRow {
@@ -67,6 +80,14 @@ export interface AppendRunEventInput {
   readonly runId: string;
   readonly kind: RunEventKind;
   readonly payload: Record<string, unknown>;
+}
+
+/** Input for {@link Store.recordRunContext}. */
+export interface RecordRunContextInput {
+  readonly runId: string;
+  readonly usedTokens: number;
+  readonly limit: number;
+  readonly model: string | null;
 }
 
 /** Optional filters for {@link Store.listRunEvents}. */
@@ -271,6 +292,14 @@ export interface Store {
    * row matches `input.runId`.
    */
   finishRun(input: FinishRunInput): void;
+
+  /**
+   * Record (or overwrite) the latest context-window usage for a run. Updates the
+   * three `ctx_*` columns on the `runs` row so the value is available without
+   * scanning `run_events`. No-op when `input.runId` does not exist (best-effort —
+   * mirrors the non-destructive design decision in the spec).
+   */
+  recordRunContext(input: RecordRunContextInput): void;
 
   /**
    * Append a live-trace event for a run and return its generated id.

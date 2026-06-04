@@ -5,7 +5,7 @@ import {
   runProcess,
 } from "../../process/run.ts";
 import { CLIError } from "../errors.ts";
-import type { CLIAdapter, CompleteOptions, CompleteResult } from "../types.ts";
+import type { CLIAdapter, CompleteOptions, CompleteResult, CompleteUsage } from "../types.ts";
 
 /** Auth-related patterns in stderr that indicate the user needs to log in. */
 const AUTH_STDERR_RE = /not.*(authenticat|logged in|api key)|unauthorized|login/i;
@@ -60,6 +60,17 @@ export abstract class BaseAdapter implements CLIAdapter {
     return this.#args ?? this.defaultArgs;
   }
 
+  /**
+   * Parse the raw stdout from a completed CLI process into a text string and
+   * optional token usage. The default implementation returns the trimmed stdout
+   * with no usage. Subclasses that emit machine-readable output (e.g. JSON)
+   * override this to extract structured data; they MUST NOT throw — any parse
+   * failure must fall back to `{ text: stdout.trim() }`.
+   */
+  protected parseOutput(stdout: string): { text: string; usage?: CompleteUsage } {
+    return { text: stdout.trim() };
+  }
+
   async complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult> {
     const argv = [...this.resolvedArgs, prompt];
 
@@ -72,12 +83,16 @@ export abstract class BaseAdapter implements CLIAdapter {
         throw this.#mapNonzero(res.exitCode, res.stderr);
       }
 
+      const parsed = this.parseOutput(res.stdout);
+
       return {
-        text: res.stdout.trim(),
+        text: parsed.text,
         exit_code: res.exitCode,
         raw_stdout: res.stdout,
         raw_stderr: res.stderr,
         duration_ms: res.durationMs,
+        // Omit the key entirely when absent (exactOptionalPropertyTypes).
+        ...(parsed.usage !== undefined ? { usage: parsed.usage } : {}),
       };
     } catch (err) {
       if (err instanceof CLIError) throw err;

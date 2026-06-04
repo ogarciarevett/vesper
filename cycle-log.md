@@ -726,3 +726,40 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   template editing in Pipelines (read-only view); Windows/Linux window chrome (macOS-first per Omar); the
   one `!important` (reduced-motion) biome warning; the menu-bar popover app + internal-pipelines auto-skills
   feature (next requests).
+
+---
+
+## Agent context-window visibility (orchestrator + sub-agents) — SHIPPED
+
+- Spec: `specs/agent-context-window.md` (local; Linear issue cap active — spec + this log + commit are the
+  record, Rule 11). Authorized by Omar 2026-06-04. Parallels the Claude Code statusline HUD built the same
+  day (`~/.claude/statusline-context.ts`): the same context-fill signal, now on Vesper's OWN runs in the
+  Chat activity rail.
+- What shipped: a per-run context pill (`ctx <bar> <pct>%`, green/amber/red/bright by fill) on the
+  orchestrator row AND each sub-agent row.
+  - CAPTURE (cli): `CompleteResult.usage?` + a `parseOutput` hook on BaseAdapter; the Claude adapter now runs
+    `claude -p --output-format json` and unwraps `{ result, usage }` (graceful fallback to plain text + no
+    usage on any non-JSON / old-CLI output — never throws).
+  - RECORD (scheduler): `ctx.complete` records the LATEST completion's prompt size (input + cache tokens,
+    matching the HUD; output excluded) via `store.recordRunContext` + a `usage` run_event + a RUN_EVENT bus
+    emit, all best-effort (a capture failure can never break a completion). Sub-agents inherit it for free
+    (same `buildPipelineContext`). New core helper `contextWindowFor(model)` (1m hint -> 1M, else 200k).
+  - PERSIST (storage): migration `008_run_context` (ctx_used_tokens/ctx_limit/ctx_model on `runs`),
+    `recordRunContext`, `RunEventKind` += `usage`, optional `RunRow.context`.
+  - EXPOSE/RENDER (ui): `RunTreeInfo.run.context` + server tree map; the activity rail renders the pill from
+    the tree snapshot and updates it live from `usage` frames (already published generically — zero new
+    server WS code), excluding `usage` from the step log.
+- Decisions (Omar): latest-completion metric; "ctx --" for CLIs that report no usage (no estimation);
+  compact header pill; Claude `--output-format json`.
+- Parallel build: lead pre-defined the shared types, then ran T1 (cli) + T2 (storage) as two file-disjoint
+  sub-agents concurrently; lead integrated T3 (scheduler) + T4 (server) + T5 (rail) and owned the barrel
+  re-exports.
+- Gotchas: (1) `exactOptionalPropertyTypes` rejects assigning `undefined` to optional props — used
+  conditional spreads for `usage` + cache fields. (2) Making `RunRow.context` REQUIRED broke partial RunRow
+  literals in tests (gather/context) — made it optional (`context?`), which the store mapper always fills.
+  (3) Completions now emit a `usage` world pulse, so a WS test that grabbed the FIRST frame had to filter for
+  `run:completed`.
+- Verified: 762 tests / 0 fail (+29); Biome clean (2 pre-existing `!important` warnings); tsc 31 = exact
+  merge baseline (0 new); no provider SDKs (usage parsed from the user's own CLI). DEFERRED: live browser
+  visual verify of the pill (data path is integration-tested server-side); a peak-vs-latest toggle; usage
+  for non-Claude CLIs that do not emit it.

@@ -2,6 +2,7 @@ import { gatherSignals } from "../auto-evolve/gather.ts";
 import { assertCapabilities } from "../capabilities/assert.ts";
 import type { Capability } from "../capabilities/index.ts";
 import { CLIError } from "../cli/errors.ts";
+import type { CompleteUsage } from "../cli/types.ts";
 import type { Store } from "../storage/types.ts";
 import { SchedulerError } from "./errors.ts";
 import type { EventBus } from "./events.ts";
@@ -27,6 +28,15 @@ const DEFAULT_SIGNAL_WINDOW_MS = 24 * 60 * 60 * 1_000;
  */
 export function redactSummary(summary: string): string {
   return `[redacted: ${summary.length} chars]`;
+}
+
+/**
+ * Context-window size (tokens) for a model id, mirroring the statusline HUD: a "1m"
+ * variant tag selects the 1,000,000-token window, otherwise the standard 200,000.
+ * Used to turn a completion's reported usage into a fill percentage downstream.
+ */
+export function contextWindowFor(model: string | null): number {
+  return model?.toLowerCase().includes("1m") ? 1_000_000 : 200_000;
 }
 
 /** Dependencies needed to build a {@link PipelineContext} for a single invocation. */
@@ -99,6 +109,35 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
     deps;
   const params = options?.params ?? {};
 
+  // Record the latest context-window fill from a completion's usage. Best-effort:
+  // observability must NEVER break a completion. Mirrors emitProgress's
+  // persist-then-publish-with-id so a live `usage` frame de-dupes against its
+  // backfilled twin on the client. "Used" = the prompt that was sent (input + cache
+  // tokens), matching the statusline HUD — output tokens are not part of the window.
+  const recordContextUsage = (usage: CompleteUsage | undefined): void => {
+    if (usage === undefined) return;
+    try {
+      const usedTokens =
+        usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0);
+      const model = usage.model ?? null;
+      const limit = contextWindowFor(model);
+      store.recordRunContext({ runId, usedTokens, limit, model });
+      const payload: Record<string, unknown> = { usedTokens, limit, model };
+      const eventId = store.appendRunEvent({ runId, kind: "usage", payload });
+      deps.events?.emit(RUN_EVENT, {
+        id: eventId,
+        ts: Date.now(),
+        runId,
+        parentRunId,
+        kind: "usage",
+        message: `context ${usedTokens}/${limit}`,
+        data: payload,
+      });
+    } catch {
+      // best-effort: a context-capture failure must not affect the completion.
+    }
+  };
+
   // Built first so `spawn` can hand the parent context to the injected spawn fn.
   const self: PipelineContext = {
     task,
@@ -116,7 +155,9 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         );
       }
       const cli = opts?.cli ?? options?.cli;
-      return complete(prompt, cli !== undefined ? { cli } : {});
+      const result = await complete(prompt, cli !== undefined ? { cli } : {});
+      recordContextUsage(result.usage);
+      return result;
     },
 
     recordRun({ status, summary }) {

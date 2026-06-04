@@ -1,3 +1,13 @@
+/** Token usage reported by a CLI completion, when the CLI emits it. All counts are tokens. */
+export interface CompleteUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheCreationTokens?: number;
+  /** Model id the CLI reported, if any (used downstream to pick the context window). */
+  readonly model?: string | null;
+}
+
 /**
  * The result of a single `CLIAdapter.complete` call. All fields are populated
  * even on success so callers can log the raw output and timing without having
@@ -14,6 +24,8 @@ export interface CompleteResult {
   readonly raw_stderr: string;
   /** Wall-clock milliseconds from spawn to exit. */
   readonly duration_ms: number;
+  /** Token usage from the CLI, if the adapter was able to parse it. */
+  readonly usage?: CompleteUsage;
 }
 
 /**

@@ -6,7 +6,9 @@
 /**
  * A single live-trace step of a run, as the activity rail needs it — the UI-facing
  * shape of a `@vesper/core` `RunEventRow`. `kind` is one of
- * `step|log|progress|spawn|complete`.
+ * `step|log|progress|spawn|complete|usage`. A `usage` step's `data` carries
+ * `{ usedTokens, limit, model }` — the activity rail uses it to update the run's
+ * context pill live rather than appending a step row.
  */
 export interface RunEventInfo {
   readonly id: string;
@@ -16,6 +18,18 @@ export interface RunEventInfo {
   readonly kind: string;
   readonly message: string;
   readonly data?: Record<string, unknown>;
+}
+
+/**
+ * The latest context-window fill recorded for a run — the UI-facing shape of a
+ * `@vesper/core` `RunContext`. `usedTokens` is the prompt size of the run's most
+ * recent CLI completion; `limit` is that model's window. Null when no usage was
+ * captured (e.g. a CLI that does not report token usage).
+ */
+export interface RunContextInfo {
+  readonly usedTokens: number;
+  readonly limit: number;
+  readonly model: string | null;
 }
 
 /**
@@ -31,6 +45,8 @@ export interface RunTreeInfo {
     /** Unix ms. */
     readonly ts: number;
     readonly parentRunId: string | null;
+    /** Latest context-window fill, or null if no usage was recorded for this run. */
+    readonly context: RunContextInfo | null;
   };
   readonly children: readonly RunTreeInfo[];
 }

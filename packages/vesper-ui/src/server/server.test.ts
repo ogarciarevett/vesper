@@ -20,6 +20,13 @@ const fakeComplete: CompleteFn = async () => ({
   raw_stdout: "pong",
   raw_stderr: "",
   duration_ms: 1,
+  usage: {
+    inputTokens: 1_234,
+    outputTokens: 56,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    model: "claude-opus-4-8[1m]",
+  },
 });
 
 let dir: string;
@@ -189,8 +196,16 @@ describe("UI server", () => {
 
   test("a run is pushed to a live WebSocket subscriber", async () => {
     const ws = new WebSocket(`${handle.url.replace("http", "ws")}/api/live`);
-    const message = new Promise<string>((resolve) => {
-      ws.addEventListener("message", (e) => resolve(String(e.data)), { once: true });
+    // A completing run now also emits a `usage` step (a `run:event:lite` world pulse),
+    // which can arrive before `run:completed` — so wait for the completion frame
+    // specifically rather than assuming it is the first message.
+    const completed = new Promise<{ type: string; outcome: { taskId: string } }>((resolve) => {
+      ws.addEventListener("message", (e) => {
+        const m = JSON.parse(String(e.data)) as { type: string; outcome?: { taskId: string } };
+        if (m.type === "run:completed" && m.outcome !== undefined) {
+          resolve({ type: m.type, outcome: m.outcome });
+        }
+      });
     });
     await new Promise<void>((resolve) =>
       ws.addEventListener("open", () => resolve(), { once: true }),
@@ -198,7 +213,7 @@ describe("UI server", () => {
 
     await fetch(`${handle.url}/api/pipelines/echo/run`, { method: "POST" });
 
-    const payload = JSON.parse(await message) as { type: string; outcome: { taskId: string } };
+    const payload = await completed;
     expect(payload.type).toBe("run:completed");
     expect(payload.outcome.taskId).toBe("echo");
     ws.close();
@@ -239,6 +254,25 @@ describe("UI server", () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("unknown run");
+  });
+
+  test("GET /api/runs/:runId/tree surfaces the run's context-window fill", async () => {
+    // The `echo` handler calls ctx.complete, whose fake usage records run context.
+    const outcome = (await (
+      await fetch(`${handle.url}/api/pipelines/echo/run`, { method: "POST" })
+    ).json()) as { runId: string };
+    expect(outcome.runId).not.toBeNull();
+
+    const res = await fetch(`${handle.url}/api/runs/${outcome.runId}/tree`);
+    expect(res.status).toBe(200);
+    const tree = (await res.json()) as {
+      run: { context: { usedTokens: number; limit: number; model: string | null } | null };
+    };
+    expect(tree.run.context).toEqual({
+      usedTokens: 1_234,
+      limit: 1_000_000,
+      model: "claude-opus-4-8[1m]",
+    });
   });
 
   test("GET /api/runs/:runId/events replays persisted trace events (backfill)", async () => {

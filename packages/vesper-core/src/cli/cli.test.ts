@@ -87,7 +87,7 @@ describe("ClaudeCodeAdapter.complete", () => {
     };
     const adapter = new ClaudeCodeAdapter({ run });
     await adapter.complete("my prompt");
-    expect(capturedArgs).toEqual(["-p", "my prompt"]);
+    expect(capturedArgs).toEqual(["-p", "--output-format", "json", "my prompt"]);
   });
 
   test("passes command correctly", async () => {
@@ -244,6 +244,168 @@ describe("ClaudeCodeAdapter.complete", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ClaudeCodeAdapter — JSON envelope / usage parsing
+// ---------------------------------------------------------------------------
+
+describe("ClaudeCodeAdapter.complete — usage parsing", () => {
+  /** Build a minimal valid Claude JSON envelope string. */
+  function makeEnvelope(
+    result: string,
+    opts: {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheRead?: number;
+      cacheCreation?: number;
+      model?: string;
+      modelUsage?: Record<string, unknown>;
+    } = {},
+  ): string {
+    return JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      duration_ms: 100,
+      result,
+      session_id: "sess-abc",
+      total_cost_usd: 0.001,
+      usage: {
+        input_tokens: opts.inputTokens ?? 10,
+        output_tokens: opts.outputTokens ?? 5,
+        cache_read_input_tokens: opts.cacheRead ?? 0,
+        cache_creation_input_tokens: opts.cacheCreation ?? 0,
+      },
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.modelUsage !== undefined ? { modelUsage: opts.modelUsage } : {}),
+    });
+  }
+
+  test("JSON envelope: text is the result field, usage has mapped token counts", async () => {
+    const envelope = makeEnvelope("The answer is 42.", {
+      inputTokens: 120,
+      outputTokens: 8,
+      cacheRead: 60,
+      cacheCreation: 30,
+      model: "claude-opus-4-5",
+    });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: envelope })),
+    });
+    const result = await adapter.complete("what is 6 times 7?");
+
+    expect(result.text).toBe("The answer is 42.");
+    expect(result.usage).toBeDefined();
+    expect(result.usage?.inputTokens).toBe(120);
+    expect(result.usage?.outputTokens).toBe(8);
+    expect(result.usage?.cacheReadTokens).toBe(60);
+    expect(result.usage?.cacheCreationTokens).toBe(30);
+    expect(result.usage?.model).toBe("claude-opus-4-5");
+  });
+
+  test("JSON envelope: model resolved from modelUsage first key when top-level model absent", async () => {
+    const envelope = makeEnvelope("ok", {
+      inputTokens: 50,
+      outputTokens: 3,
+      modelUsage: { "claude-sonnet-4-6": { input_tokens: 50, output_tokens: 3 } },
+    });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: envelope })),
+    });
+    const result = await adapter.complete("ping");
+
+    expect(result.text).toBe("ok");
+    expect(result.usage?.model).toBe("claude-sonnet-4-6");
+  });
+
+  test("JSON envelope: model is null when neither model nor modelUsage is present", async () => {
+    const envelope = makeEnvelope("hi", { inputTokens: 10, outputTokens: 2 });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: envelope })),
+    });
+    const result = await adapter.complete("ping");
+
+    expect(result.usage?.model).toBeNull();
+  });
+
+  test("plain (non-JSON) stdout: text is trimmed stdout, usage is undefined, no throw", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "  plain text response  \n" })),
+    });
+    const result = await adapter.complete("say something");
+
+    expect(result.text).toBe("plain text response");
+    expect(result.usage).toBeUndefined();
+  });
+
+  test("malformed JSON stdout: graceful fallback, usage undefined, no throw", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "{not valid json!!!" })),
+    });
+    const result = await adapter.complete("say something");
+
+    expect(result.text).toBe("{not valid json!!!");
+    expect(result.usage).toBeUndefined();
+  });
+
+  test("JSON object without result field: fallback to raw trimmed text, usage undefined", async () => {
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: JSON.stringify({ type: "something_else", value: 1 }) })),
+    });
+    const result = await adapter.complete("ping");
+
+    // No result field — falls back to raw trimmed text.
+    expect(result.usage).toBeUndefined();
+    expect(typeof result.text).toBe("string");
+  });
+
+  test("JSON envelope missing usage tokens: usage is undefined", async () => {
+    const noUsageEnvelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      result: "hello world",
+      // no usage field
+    });
+    const adapter = new ClaudeCodeAdapter({
+      run: fixedRunner(okResult({ stdout: noUsageEnvelope })),
+    });
+    const result = await adapter.complete("ping");
+
+    expect(result.text).toBe("hello world");
+    expect(result.usage).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-Claude adapters — usage is always undefined (default parseOutput)
+// ---------------------------------------------------------------------------
+
+describe("non-Claude adapters — usage is undefined", () => {
+  test("OpenCodeAdapter: complete() usage is undefined", async () => {
+    const adapter = new OpenCodeAdapter({
+      run: fixedRunner(okResult({ stdout: "some output\n" })),
+    });
+    const result = await adapter.complete("ping");
+    expect(result.usage).toBeUndefined();
+    expect(result.text).toBe("some output");
+  });
+
+  test("CodexAdapter: complete() usage is undefined", async () => {
+    const adapter = new CodexAdapter({ run: fixedRunner(okResult({ stdout: "codex reply\n" })) });
+    const result = await adapter.complete("ping");
+    expect(result.usage).toBeUndefined();
+    expect(result.text).toBe("codex reply");
+  });
+
+  test("GeminiCLIAdapter: complete() usage is undefined", async () => {
+    const adapter = new GeminiCLIAdapter({
+      run: fixedRunner(okResult({ stdout: "gemini reply\n" })),
+    });
+    const result = await adapter.complete("ping");
+    expect(result.usage).toBeUndefined();
+    expect(result.text).toBe("gemini reply");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // probe()
 // ---------------------------------------------------------------------------
 
@@ -369,7 +531,7 @@ describe("CLIAdapter.version", () => {
 // ---------------------------------------------------------------------------
 
 describe("adapter names and default invocations", () => {
-  test("ClaudeCodeAdapter name='claude' args=['-p']", async () => {
+  test("ClaudeCodeAdapter name='claude' args=['-p','--output-format','json']", async () => {
     let cmd = "";
     let args: readonly string[] = [];
     const run: ProcessRunner = async (c, a) => {
@@ -381,7 +543,7 @@ describe("adapter names and default invocations", () => {
     expect(adapter.name).toBe("claude");
     await adapter.complete("p");
     expect(cmd).toBe("claude");
-    expect(args).toEqual(["-p", "p"]);
+    expect(args).toEqual(["-p", "--output-format", "json", "p"]);
   });
 
   test("OpenCodeAdapter name='opencode' args=['run']", async () => {

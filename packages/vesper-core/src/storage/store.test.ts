@@ -613,7 +613,9 @@ describe("migration 006 — agent orchestration and trace", () => {
     // Forward-compat acceptance: a genuine pre-006 row (written before the
     // ALTER TABLE runs ADD COLUMN) must read back with the new columns NULL.
     // The old "legacy recordRun" test opens an ALL-migrations store first, so it
-    // never exercises this — here we apply 001..005, insert, THEN apply 006.
+    // never exercises this — here we apply 001..005, insert, THEN apply 006 onward.
+    // All subsequent migrations (007, 008) are also applied so the SqliteStore's
+    // queries — which reference all columns — can execute against a complete schema.
     const db = new Database(":memory:");
     const idx006 = MIGRATIONS.findIndex((m) => m.id.startsWith("006"));
     expect(idx006).toBeGreaterThan(0);
@@ -625,8 +627,10 @@ describe("migration 006 — agent orchestration and trace", () => {
     db.run(
       "INSERT INTO runs (id, ts, pipeline, status, summary) VALUES ('legacy-1', 1000, 'echo', 'ok', 'pre-006')",
     );
-    // Now apply migration 006 (the ALTER TABLE ADD COLUMN + run_events).
-    for (const stmt of statementsOf(MIGRATIONS[idx006]?.sql ?? "")) db.run(stmt);
+    // Apply migration 006 and all subsequent migrations so the schema is complete.
+    for (const m of MIGRATIONS.slice(idx006)) {
+      for (const stmt of statementsOf(m.sql)) db.run(stmt);
+    }
 
     const runs = new SqliteStore(db).listRuns({ pipeline: "echo" });
     db.close();
@@ -635,6 +639,8 @@ describe("migration 006 — agent orchestration and trace", () => {
     expect(runs[0]?.id).toBe("legacy-1");
     expect(runs[0]?.parentRunId).toBeNull();
     expect(runs[0]?.statusUpdatedAt).toBeNull();
+    // The 008 columns default to NULL for a pre-006 row — context is absent.
+    expect(runs[0]?.context).toBeNull();
   });
 
   test("schema_migrations records 006 and reopen is idempotent (run_events queryable)", () => {
@@ -1103,5 +1109,199 @@ describe("migration 007 — chat home", () => {
     const idx007 = MIGRATIONS.findIndex((m) => m.id === "007_chat_home");
     expect(idx006).toBeGreaterThanOrEqual(0);
     expect(idx007).toBeGreaterThan(idx006);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Migration 008 — run context (forward-only)
+// ---------------------------------------------------------------------------
+
+describe("migration 008 — run context", () => {
+  let path: string;
+
+  beforeEach(() => {
+    path = tempDbPath();
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("schema_migrations records 008_run_context and reopen is idempotent (ctx columns queryable)", () => {
+    const first = openStore(path);
+    first.close();
+    const second = openStore(path);
+    second.close();
+
+    const db = new Database(path, { readonly: true });
+    const ids = db
+      .query<{ id: string }, []>("SELECT id FROM schema_migrations")
+      .all()
+      .map((r) => r.id);
+    // The three new columns must exist and be queryable.
+    expect(() =>
+      db.query("SELECT ctx_used_tokens, ctx_limit, ctx_model FROM runs").all(),
+    ).not.toThrow();
+    db.close();
+
+    expect(ids).toContain("008_run_context");
+    expect(ids.filter((id) => id === "008_run_context")).toHaveLength(1);
+  });
+
+  test("008 is sequenced AFTER 007 (forward-only ordering)", () => {
+    const idx007 = MIGRATIONS.findIndex((m) => m.id === "007_chat_home");
+    const idx008 = MIGRATIONS.findIndex((m) => m.id === "008_run_context");
+    expect(idx007).toBeGreaterThanOrEqual(0);
+    expect(idx008).toBeGreaterThan(idx007);
+  });
+
+  test("a runs row written BEFORE migration 008 reads back context null", () => {
+    // Apply 001..007, insert a row, then apply 008 — the new columns default to NULL.
+    const db = new Database(":memory:");
+    const idx008 = MIGRATIONS.findIndex((m) => m.id === "008_run_context");
+    expect(idx008).toBeGreaterThan(0);
+
+    for (const m of MIGRATIONS.slice(0, idx008)) {
+      for (const stmt of statementsOf(m.sql)) db.run(stmt);
+    }
+    // Pre-008 row: only the original columns exist at this point.
+    db.run(
+      "INSERT INTO runs (id, ts, pipeline, status, summary) VALUES ('pre-008', 1000, 'p', 'ok', 'legacy')",
+    );
+    // Apply migration 008.
+    for (const stmt of statementsOf(MIGRATIONS[idx008]?.sql ?? "")) db.run(stmt);
+
+    const store = new SqliteStore(db);
+    const runs = store.listRuns({ pipeline: "p" });
+    db.close();
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.id).toBe("pre-008");
+    expect(runs[0]?.context).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recordRunContext
+// ---------------------------------------------------------------------------
+
+describe("recordRunContext", () => {
+  let path: string;
+  let store: Store;
+
+  beforeEach(() => {
+    path = tempDbPath();
+    store = openStore(path);
+  });
+
+  afterEach(() => {
+    store.close();
+    try {
+      rmSync(path, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  test("a run with no recorded context returns context null via listRuns", () => {
+    store.startRun({ pipeline: "p" });
+    const runs = store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.context).toBeNull();
+  });
+
+  test("a run with no recorded context returns context null via runTree", () => {
+    const id = store.startRun({ pipeline: "p" });
+    const tree = store.runTree(id);
+    expect(tree).not.toBeNull();
+    expect(tree?.run.context).toBeNull();
+  });
+
+  test("recordRunContext updates the row; listRuns returns the exact context values", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.recordRunContext({ runId, usedTokens: 42000, limit: 200000, model: "claude-3-5-sonnet" });
+
+    const runs = store.listRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.context).not.toBeNull();
+    expect(runs[0]?.context?.usedTokens).toBe(42000);
+    expect(runs[0]?.context?.limit).toBe(200000);
+    expect(runs[0]?.context?.model).toBe("claude-3-5-sonnet");
+  });
+
+  test("recordRunContext with null model stores null model on the context", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.recordRunContext({ runId, usedTokens: 10, limit: 200000, model: null });
+
+    const runs = store.listRuns();
+    expect(runs[0]?.context?.model).toBeNull();
+    expect(runs[0]?.context?.usedTokens).toBe(10);
+  });
+
+  test("recordRunContext updates the row; runTree returns the exact context values", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.recordRunContext({ runId, usedTokens: 5000, limit: 1000000, model: "claude-opus-4" });
+
+    const tree = store.runTree(runId);
+    expect(tree).not.toBeNull();
+    expect(tree?.run.context?.usedTokens).toBe(5000);
+    expect(tree?.run.context?.limit).toBe(1000000);
+    expect(tree?.run.context?.model).toBe("claude-opus-4");
+  });
+
+  test("recordRunContext overwrites a previously recorded context (latest wins)", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.recordRunContext({ runId, usedTokens: 1000, limit: 200000, model: "m1" });
+    store.recordRunContext({ runId, usedTokens: 99000, limit: 200000, model: "m2" });
+
+    const runs = store.listRuns();
+    expect(runs[0]?.context?.usedTokens).toBe(99000);
+    expect(runs[0]?.context?.model).toBe("m2");
+  });
+
+  test("recordRunContext on an unknown runId is a no-op (best-effort, does not throw)", () => {
+    expect(() =>
+      store.recordRunContext({
+        runId: "does-not-exist",
+        usedTokens: 1,
+        limit: 200000,
+        model: null,
+      }),
+    ).not.toThrow();
+  });
+
+  test("context survives close and reopen (durable)", () => {
+    const runId = store.startRun({ pipeline: "p" });
+    store.recordRunContext({ runId, usedTokens: 7777, limit: 200000, model: "persisted-model" });
+    store.close();
+
+    const reopened = openStore(path);
+    const runs = reopened.listRuns();
+    reopened.close();
+
+    expect(runs[0]?.context?.usedTokens).toBe(7777);
+    expect(runs[0]?.context?.model).toBe("persisted-model");
+  });
+
+  test("child run context is independent of parent run context", () => {
+    const parentId = store.startRun({ pipeline: "parent" });
+    const childId = store.startRun({ pipeline: "child", parentRunId: parentId });
+
+    store.recordRunContext({ runId: parentId, usedTokens: 1000, limit: 200000, model: "big" });
+    store.recordRunContext({ runId: childId, usedTokens: 500, limit: 100000, model: "small" });
+
+    const tree = store.runTree(parentId);
+    expect(tree?.run.context?.usedTokens).toBe(1000);
+    expect(tree?.run.context?.model).toBe("big");
+    expect(tree?.children[0]?.run.context?.usedTokens).toBe(500);
+    expect(tree?.children[0]?.run.context?.model).toBe("small");
   });
 });

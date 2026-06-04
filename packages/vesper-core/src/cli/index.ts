@@ -6,4 +6,4 @@ export { OpenCodeAdapter } from "./adapters/opencode.ts";
 export { type AdapterName, detectAvailableCLIs, selectDefault } from "./detect.ts";
 export { CLIError, type CLIErrorReason } from "./errors.ts";
 export { ADAPTER_REGISTRY, type AdapterFactory, buildAdapter } from "./registry.ts";
-export type { CLIAdapter, CompleteOptions, CompleteResult } from "./types.ts";
+export type { CLIAdapter, CompleteOptions, CompleteResult, CompleteUsage } from "./types.ts";

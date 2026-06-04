@@ -129,6 +129,7 @@ function mapTreeToInfo(node: RunTreeNode): RunTreeInfo {
       summary: node.run.summary,
       ts: node.run.ts,
       parentRunId: node.run.parentRunId,
+      context: node.run.context ?? null,
     },
     children: node.children.map(mapTreeToInfo),
   };

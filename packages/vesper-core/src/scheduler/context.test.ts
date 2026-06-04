@@ -2,8 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { CapabilityError } from "../capabilities/errors.ts";
 import { CLIError } from "../cli/errors.ts";
 import type { CompleteResult } from "../cli/types.ts";
-import type { AppendRunEventInput, FinishRunInput, RunEventRow, Store } from "../storage/types.ts";
-import { buildPipelineContext, redactSummary } from "./context.ts";
+import type {
+  AppendRunEventInput,
+  FinishRunInput,
+  RecordRunContextInput,
+  RunEventRow,
+  Store,
+} from "../storage/types.ts";
+import { buildPipelineContext, contextWindowFor, redactSummary } from "./context.ts";
 import { EventBus, RUN_EVENT } from "./events.ts";
 import type {
   Capability,
@@ -52,9 +58,11 @@ function makeStore(): {
   store: Store;
   finished: FinishRunInput[];
   events: AppendRunEventInput[];
+  contexts: RecordRunContextInput[];
 } {
   const finished: FinishRunInput[] = [];
   const events: AppendRunEventInput[] = [];
+  const contexts: RecordRunContextInput[] = [];
   const store: Store = {
     migrate() {},
     appendEvent() {
@@ -71,6 +79,9 @@ function makeStore(): {
     },
     finishRun(input) {
       finished.push(input);
+    },
+    recordRunContext(input) {
+      contexts.push(input);
     },
     appendRunEvent(input) {
       events.push(input);
@@ -109,7 +120,7 @@ function makeStore(): {
     upsertTemplate() {},
     close() {},
   };
-  return { store, finished, events };
+  return { store, finished, events, contexts };
 }
 
 const NOW = new Date("2026-05-28T12:00:00.000Z");
@@ -250,6 +261,123 @@ describe("buildPipelineContext.complete", () => {
     });
     await ctx.complete("p");
     expect(opts?.cli).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// complete — context-window usage capture (best-effort, non-destructive)
+// ---------------------------------------------------------------------------
+
+describe("buildPipelineContext.complete — context usage capture", () => {
+  test("records the run's context fill and publishes a usage RUN_EVENT", async () => {
+    const { store, contexts, events } = makeStore();
+    const bus = new EventBus();
+    const published: unknown[] = [];
+    bus.on(RUN_EVENT, (p) => published.push(p));
+    const complete: CompleteFn = async () => ({
+      ...makeResult("pong"),
+      usage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 5_000,
+        cacheCreationTokens: 40_000,
+        model: "claude-opus-4-8[1m]",
+      },
+    });
+    const ctx = buildPipelineContext({
+      task: makeTask(["CLI_INVOKE"]),
+      now: NOW,
+      runId: RUN_ID,
+      parentRunId: "parent-7",
+      store,
+      events: bus,
+      complete,
+    });
+
+    const result = await ctx.complete("ping");
+
+    // The completion is returned unchanged.
+    expect(result.text).toBe("pong");
+    // used = input + cacheRead + cacheCreation (the prompt that was sent); output excluded.
+    expect(contexts).toEqual([
+      { runId: RUN_ID, usedTokens: 45_100, limit: 1_000_000, model: "claude-opus-4-8[1m]" },
+    ]);
+    // A persisted 'usage' run_event carries the same numbers for live + reconnect.
+    const usageEvent = events.find((e) => e.kind === "usage");
+    expect(usageEvent?.payload).toEqual({
+      usedTokens: 45_100,
+      limit: 1_000_000,
+      model: "claude-opus-4-8[1m]",
+    });
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      runId: RUN_ID,
+      parentRunId: "parent-7",
+      kind: "usage",
+      data: { usedTokens: 45_100, limit: 1_000_000, model: "claude-opus-4-8[1m]" },
+    });
+  });
+
+  test("defaults to the 200k window when the model has no 1m hint", async () => {
+    const { store, contexts } = makeStore();
+    const complete: CompleteFn = async () => ({
+      ...makeResult("ok"),
+      usage: { inputTokens: 1_000, outputTokens: 10, model: "claude-sonnet-4-6" },
+    });
+    const ctx = build({ task: makeTask(["CLI_INVOKE"]), now: NOW, store, complete });
+    await ctx.complete("p");
+    expect(contexts[0]).toEqual({
+      runId: RUN_ID,
+      usedTokens: 1_000,
+      limit: 200_000,
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  test("records nothing when the completion reports no usage", async () => {
+    const { store, contexts, events } = makeStore();
+    const ctx = build({
+      task: makeTask(["CLI_INVOKE"]),
+      now: NOW,
+      store,
+      complete: async () => makeResult("no-usage"),
+    });
+    await ctx.complete("p");
+    expect(contexts).toHaveLength(0);
+    expect(events.find((e) => e.kind === "usage")).toBeUndefined();
+  });
+
+  test("a context-capture failure never breaks the completion (best-effort)", async () => {
+    const { store } = makeStore();
+    const throwingStore: Store = {
+      ...store,
+      recordRunContext() {
+        throw new Error("storage boom");
+      },
+    };
+    const complete: CompleteFn = async () => ({
+      ...makeResult("survived"),
+      usage: { inputTokens: 10, outputTokens: 1, model: null },
+    });
+    const ctx = build({
+      task: makeTask(["CLI_INVOKE"]),
+      now: NOW,
+      store: throwingStore,
+      complete,
+    });
+    const result = await ctx.complete("p");
+    expect(result.text).toBe("survived");
+  });
+});
+
+describe("contextWindowFor", () => {
+  test("a 1m model tag selects the 1,000,000-token window", () => {
+    expect(contextWindowFor("claude-opus-4-8[1m]")).toBe(1_000_000);
+    expect(contextWindowFor("Opus 4.8 (1M)")).toBe(1_000_000);
+  });
+  test("everything else (including null) defaults to 200,000", () => {
+    expect(contextWindowFor("claude-sonnet-4-6")).toBe(200_000);
+    expect(contextWindowFor(null)).toBe(200_000);
   });
 });
 
