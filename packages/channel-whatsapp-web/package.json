@@ -1,0 +1,14 @@
+{
+  "name": "@vesper/channel-whatsapp-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vesper/core": "workspace:*",
+    "baileys": "7.0.0-rc13"
+  }
+}

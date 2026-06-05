@@ -11,13 +11,13 @@
 import type { Vault } from "../vault/index.ts";
 
 /** The messaging channels Vesper knows about. Catalog-only; no arbitrary channels. */
-export type ChannelId = "telegram" | "discord" | "whatsapp" | "signal";
+export type ChannelId = "telegram" | "discord" | "whatsapp" | "whatsapp-web" | "signal";
 
 /** Whether a channel is BUILT in v1 or declared-but-deferred (catalog + tutorial only). */
 export type ChannelStatus = "ready" | "deferred";
 
 /** The transport a channel handler uses to reach its service. */
-export type ChannelTransport = "long-poll" | "webhook" | "bot-api" | "local-cli";
+export type ChannelTransport = "long-poll" | "webhook" | "bot-api" | "local-cli" | "qr-web";
 
 /** An outbound message the chatbot asks a handler to deliver. */
 export interface OutboundIntent {

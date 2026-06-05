@@ -37,6 +37,14 @@ export interface ChannelPlugin {
   readonly id: ChannelId;
   /** True when {@link build} returns a handler that also implements `Pairable` (QR onboarding). */
   readonly pairable?: boolean;
+  /**
+   * Whether pairing observes the daemon's inbound stream (default `true`, for chat-link
+   * channels like Telegram/Discord that watch for a `/start <nonce>` message). Set `false`
+   * for SELF-DRIVING pairing (e.g. WhatsApp-Web, where the handler drives its own socket and
+   * establishes auth via the scan itself) — the coordinator then skips the authenticate
+   * precondition and the transient receive loop.
+   */
+  readonly pairingNeedsInbound?: boolean;
   build(opts: ChannelBuildOptions): ChannelHandler;
 }
 
@@ -79,7 +87,25 @@ export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
   },
 ];
 
-/** Look up a channel plugin by id, or undefined when no handler ships for it. */
+/**
+ * Runtime-registered OPTIONAL plugins (e.g. the opt-in `@vesper/channel-whatsapp-web`
+ * package). Kept separate from the built-ins so core ships ZERO optional dependencies — the
+ * daemon/CLI lazily imports the package at boot and registers its plugin here, and core never
+ * imports it. A channel with no built-in and no registered plugin reports `available: false`.
+ */
+const REGISTERED_PLUGINS = new Map<string, ChannelPlugin>();
+
+/** Register an optional channel plugin at runtime (idempotent; a re-register replaces). */
+export function registerChannelPlugin(plugin: ChannelPlugin): void {
+  REGISTERED_PLUGINS.set(plugin.id, plugin);
+}
+
+/** Remove a runtime-registered optional plugin (test/teardown helper). */
+export function unregisterChannelPlugin(id: string): void {
+  REGISTERED_PLUGINS.delete(id);
+}
+
+/** Look up a channel plugin by id — built-ins first, then runtime-registered optionals. */
 export function channelPluginById(id: string): ChannelPlugin | undefined {
-  return CHANNEL_PLUGINS.find((plugin) => plugin.id === id);
+  return CHANNEL_PLUGINS.find((plugin) => plugin.id === id) ?? REGISTERED_PLUGINS.get(id);
 }

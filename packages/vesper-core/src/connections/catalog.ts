@@ -41,6 +41,20 @@ export const CHANNEL_CATALOG: readonly ChannelDescriptor[] = [
     status: "ready",
   },
   {
+    id: "whatsapp-web",
+    displayName: "WhatsApp (personal)",
+    // Personal-account linking via the WhatsApp-Web protocol (Baileys). Handler ships
+    // ONLY when the opt-in @vesper/channel-whatsapp-web package is installed + registered,
+    // so `available` (not `status`) is the honest gate.
+    transport: "qr-web",
+    // Baileys drives its own WhatsApp-Web WebSocket; these hosts are informational
+    // (egress is not routed through allowlistedFetch for this transport).
+    allowedHosts: ["web.whatsapp.com", "g.whatsapp.com"],
+    vaultKeys: ["whatsapp_web_session"],
+    docsUrl: "https://baileys.wiki/docs/intro/",
+    status: "ready",
+  },
+  {
     id: "signal",
     displayName: "Signal",
     transport: "local-cli",
