@@ -17,6 +17,8 @@ export type ConnectionEventKind =
   | "connection_pairing_started"
   | "connection_paired"
   | "connection_pairing_failed"
+  | "notification_sent"
+  | "notification_failed"
   | "mcp_enabled"
   | "mcp_disabled";
 

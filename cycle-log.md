@@ -969,3 +969,46 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   (the plugin is registered only in the daemon — the UI/daemon is the source of truth; the CLI doesn't load Baileys
   for a list); the compiled `vesper-desktop` binary omits whatsapp-web (dynamic import not bundled) until Launch wires
   it; re-pairing an already-live whatsapp-web opens a second socket (rare edge). Signal (signal-cli) still open.
+
+## Pipeline notify (`ctx.notify` — proactive channel delivery) — SHIPPED
+- The outbound, pipeline-initiated complement to the shipped inbound `ChatSink` flow. A running pipeline can now
+  push a notification to the user out a connected channel. `OutboundIntent.kind:"notify"` + `ChannelHandler.send`
+  already existed (used only by the operator `vesper connections send`); the gap was a pipeline-facing seam.
+  Spec: `specs/pipeline-notify.md`. Issue-capped: this entry + the commit are the record (Rule 11). Omar approved
+  SPEC + PLAN at the advancement gates; chose graceful-degradation + reuse-`NETWORK_FETCH` over throw + new cap.
+- DESIGN (mirror `complete`, stay decoupled): `ctx.notify(text, opts?)` on `PipelineContext`, gated by
+  `NETWORK_FETCH` (the egress cap `send` already needs). A `NotifyFn` is injected through `BuildContextDeps` +
+  `SchedulerOptions` exactly where `complete` is threaded (top-level run AND the `subagent.ts` child context).
+  KEY DECISION: the core `NotifyIntent`/`NotifyOutcome` use `channel?: string`, NOT the connections `ChannelId`
+  union — so `vesper-core/scheduler` keeps ZERO dependency on the connections feature layer (the import is
+  cycle-safe either way; decoupling is the better architecture). The host (`makeNotifyFn`, CLI) owns channel
+  identity. DIVERGENCE from `complete`: a missing resolver is GRACEFUL (`{delivered:false, reason:"unavailable"}`),
+  never throws — a side-channel must not crash a pipeline; only a capability violation throws.
+- HOST RESOLUTION (`packages/vesper-cli/src/make-notify.ts`): channel = explicit `intent.channel` (must be running)
+  -> `config.notify.defaultChannel` (if running) -> first running channel with a paired owner. chatId = explicit
+  -> `config.connections.<id>.params.defaultChatId` (the destination scan-to-connect ALREADY persists at pairing,
+  `pairing-coordinator.ts#persistLinked`) — so a pipeline never handles a chat id. Sends through the daemon's
+  ALREADY-AUTHENTICATED running handler (`registry.list().find`), never a fresh handler (that stays the operator
+  `sendVia` path). Audits every actual send attempt on the `events` table (`notification_sent`/`notification_failed`,
+  reusing `recordConnectionEvent`, which strips `text`/body) — NO migration, payload is `{channel}` only (never the
+  body or chat id; a test asserts neither serializes).
+- DAEMON WIRING: the Scheduler is constructed BEFORE `buildChannelRegistry`, so `makeNotifyFn` late-binds the
+  registry through a `getRegistry: () => channelRegistry` getter read only at notify time (`channelRegistry` is a
+  `let` assigned right after the registry builds). Avoided reordering the whole startup; `uiStore` was moved a few
+  lines up so it can be the notify-audit sink passed into the constructor.
+- SPEC DELTA (the one deviation): the spec's acceptance said `normalizeNotify` "SHALL surface a dropped-record
+  warning". The codebase has NO warnings channel in `config.ts` — `normalizePresence`/`normalizeConnection` all
+  SILENTLY drop malformed input. Matched that precedent (drop, never throw) rather than invent a one-off warning
+  path; behavior is otherwise identical (unknown/non-string `defaultChannel` dropped). Reconcile the contract
+  wording if a warnings channel is ever added.
+- GOTCHA: adding `notify` to the `PipelineContext` interface broke 5 hand-rolled context mocks in pipeline +
+  subagent tests (tsc: "Property 'notify' is missing") — they had no notify stub. Fixed with a one-line
+  `notify: async () => ({ delivered:false })` per mock. A reminder that widening a core interface ripples into
+  every hand-rolled test double; a shared `fakeContext` factory would localize this (follow-up).
+- Verified: 890 tests / 0 fail (+20: 5 context + 2 scheduler-context + 4 config + 9 make-notify); 100% line+func
+  coverage on the two new units; biome clean (exit 0); tsc adds 0 NEW errors (the 5 mock errors fixed; pre-existing
+  exactOptional/`as`-cast errors in unchanged code remain, CI skips tsc); NO new dependency; NO migration; NO new
+  capability; transport mocked end-to-end (suite sends to nothing). NOT exercised against a live channel.
+- FOLLOW-UPS: rate-limiting/anti-spam on notifications (declared out-of-scope; every send is audited so abuse is
+  visible); rich/structured messages (plain text only in v1); a shared `fakeContext` test factory; downstream
+  consumers can now wire delivery (`pipeline-career.md`, `pipeline-secretary.md`) onto `ctx.notify`.

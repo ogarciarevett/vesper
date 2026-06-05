@@ -15,6 +15,7 @@ import { runSubAgent } from "./subagent.ts";
 import { withTimeout } from "./timeout.ts";
 import type {
   CompleteFn,
+  NotifyFn,
   PipelineContext,
   RegisterTaskInput,
   RunOptions,
@@ -49,6 +50,12 @@ export interface SchedulerOptions {
    * a clear {@link import("../cli/errors.ts").CLIError}.
    */
   readonly complete?: CompleteFn;
+  /**
+   * Resolver used by `ctx.notify` to deliver a proactive message out a connected
+   * channel. Injected by the host (CLI layer). If omitted, `ctx.notify` resolves
+   * to `{ delivered:false, reason:"unavailable" }` (never throws).
+   */
+  readonly notify?: NotifyFn;
   /**
    * When true, run summaries are persisted as size-only metadata (raw CLI output
    * is never stored in cleartext). Host policy from `~/.vesper/config.json`.
@@ -110,6 +117,7 @@ export class Scheduler {
   readonly #grants: readonly Capability[];
   readonly #store: Store;
   readonly #complete: CompleteFn | undefined;
+  readonly #notify: NotifyFn | undefined;
   readonly #redactSummaries: boolean;
   readonly #maxFanout: number;
 
@@ -139,6 +147,7 @@ export class Scheduler {
     this.#grants = options.grants ?? [];
     this.#store = new SqliteStore(options.db);
     this.#complete = options.complete;
+    this.#notify = options.notify;
     this.#redactSummaries = options.redactSummaries ?? false;
     this.#maxFanout = Math.max(1, options.maxFanout ?? DEFAULT_MAX_FANOUT);
 
@@ -503,6 +512,7 @@ export class Scheduler {
         },
         redactSummaries: this.#redactSummaries,
         ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
+        ...(this.#notify !== undefined ? { notify: this.#notify } : {}),
         ...(options !== undefined ? { options } : {}),
       });
 
@@ -642,6 +652,7 @@ export class Scheduler {
         grants: this.#grants,
         parentTaskCapabilities: parentTask.required_capabilities,
         ...(this.#complete !== undefined ? { complete: this.#complete } : {}),
+        ...(this.#notify !== undefined ? { notify: this.#notify } : {}),
         redactSummaries: this.#redactSummaries,
         parentRemainingMs,
         depth: 0,

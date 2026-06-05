@@ -75,6 +75,41 @@ export type CompleteFn = (
   opts?: { readonly cli?: string },
 ) => Promise<CompleteResult>;
 
+/**
+ * A proactive notification a pipeline asks the host to deliver out a connected
+ * messaging channel (the outbound complement to the inbound chatbot flow).
+ * `channel`/`chatId` are host concerns: when omitted the host resolves the
+ * configured default channel and the paired owner destination. `channel` is a
+ * plain string here so `vesper-core/scheduler` stays decoupled from the
+ * connections feature layer — the host validates it against the channel catalog.
+ */
+export interface NotifyIntent {
+  readonly text: string;
+  readonly channel?: string;
+  readonly chatId?: string;
+}
+
+/** Why a {@link NotifyOutcome} did not deliver (`delivered === false`). */
+export type NotifyFailReason = "unavailable" | "no_channel" | "no_destination" | "send_failed";
+
+/** The result of a {@link PipelineContext.notify} call. */
+export interface NotifyOutcome {
+  readonly delivered: boolean;
+  /** The channel id the host resolved/used, when one was chosen. */
+  readonly channel?: string;
+  /** Set only when `delivered` is false. */
+  readonly reason?: NotifyFailReason;
+}
+
+/**
+ * Resolver that delivers a pipeline notification through a connected channel.
+ * Injected into the {@link import("./scheduler.ts").Scheduler} by the host (CLI
+ * layer) so `vesper-core` never imports channel/registry/config code. It returns
+ * an outcome and NEVER throws for a missing channel/destination — a side-channel
+ * must not crash a pipeline (contrast {@link CompleteFn}, which is load-bearing).
+ */
+export type NotifyFn = (intent: NotifyIntent) => Promise<NotifyOutcome>;
+
 /** Overrides for a single manual run (transient — not stored on the task). */
 export interface RunOptions {
   /** Per-run CLI override (highest priority during adapter resolution). */
@@ -152,6 +187,7 @@ export interface ProgressEvent {
  * - `emitProgress` (`WRITE_STORAGE`) — persists a live-trace step and publishes it
  * - `spawn` (`SPAWN_SUBAGENT`) — runs a registered handler as an in-process child
  * - `readSignals` (`READ_STORAGE`) — returns a frozen runtime-health snapshot
+ * - `notify` (`NETWORK_FETCH`) — delivers a proactive message out a connected channel
  */
 export interface PipelineContext {
   readonly task: ScheduledTask;
@@ -188,6 +224,19 @@ export interface PipelineContext {
    * live store — a handler cannot read past its window or write through it.
    */
   readSignals(opts?: { readonly windowMs?: number }): EvolveSignals;
+  /**
+   * Deliver a proactive notification to the user through a connected messaging
+   * channel. Requires the task to declare `NETWORK_FETCH` (the egress capability
+   * `ChannelHandler.send` already requires). The channel and destination are
+   * resolved by the host — `opts.channel`/`opts.chatId` override, otherwise the
+   * configured default channel and the paired owner are used. A missing channel,
+   * destination, or host resolver yields `{ delivered:false, reason }`; only a
+   * capability violation throws.
+   */
+  notify(
+    text: string,
+    opts?: { readonly channel?: string; readonly chatId?: string },
+  ): Promise<NotifyOutcome>;
 }
 
 /**

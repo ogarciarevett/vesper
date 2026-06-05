@@ -11,6 +11,7 @@ import type { TaskPersistence } from "./persistence.ts";
 import type { HandlerRegistry } from "./registry.ts";
 import type {
   CompleteFn,
+  NotifyFn,
   PipelineContext,
   RunOptions,
   ScheduledTask,
@@ -61,6 +62,13 @@ export interface BuildContextDeps {
    * {@link PipelineContext.complete} throws a clear {@link CLIError}.
    */
   readonly complete?: CompleteFn;
+  /**
+   * Resolver that delivers a pipeline notification out a connected channel.
+   * Injected by the host. When absent, `ctx.notify` resolves to
+   * `{ delivered:false, reason:"unavailable" }` — a missing side-channel must not
+   * crash a pipeline.
+   */
+  readonly notify?: NotifyFn;
   /** Per-run overrides (manual run): transient CLI override + params. */
   readonly options?: RunOptions;
   /**
@@ -214,6 +222,20 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         },
         { sinceMs },
       );
+    },
+
+    async notify(text, opts) {
+      assertCapabilities(["NETWORK_FETCH"], task.required_capabilities);
+      // A missing resolver is graceful: a notification is a side-channel, not the
+      // pipeline's reason to exist (contrast `complete`, which throws when unset).
+      if (deps.notify === undefined) {
+        return { delivered: false, reason: "unavailable" };
+      }
+      return deps.notify({
+        text,
+        ...(opts?.channel !== undefined ? { channel: opts.channel } : {}),
+        ...(opts?.chatId !== undefined ? { chatId: opts.chatId } : {}),
+      });
     },
   };
 

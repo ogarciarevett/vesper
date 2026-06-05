@@ -130,6 +130,7 @@ describe("orchestrator-demo pipeline", () => {
       readSignals: () => {
         throw new Error("unused");
       },
+      notify: async () => ({ delivered: false }),
     });
 
     expect(recorded).toEqual([{ status: "ok", summary: "research complete" }]);

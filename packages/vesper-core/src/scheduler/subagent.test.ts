@@ -157,6 +157,7 @@ describe("ctx.spawn — sub-agent orchestration", () => {
       readSignals: () => {
         throw new Error("unused");
       },
+      notify: async () => ({ delivered: false }),
     };
 
     expect(() =>

@@ -27,6 +27,7 @@ import type { HandlerRegistry } from "./registry.ts";
 import { remainingBudgetMs, withTimeout } from "./timeout.ts";
 import type {
   CompleteFn,
+  NotifyFn,
   PipelineContext,
   RunOutcome,
   ScheduledTask,
@@ -47,6 +48,7 @@ export interface RunSubAgentArgs {
   /** Parent task's grant — descriptor caps must be a subset of this. */
   readonly parentTaskCapabilities: readonly Capability[];
   readonly complete?: CompleteFn;
+  readonly notify?: NotifyFn;
   readonly redactSummaries: boolean;
   /** Time the parent still has before ITS cap fires; null = unbounded. */
   readonly parentRemainingMs: number | null;
@@ -72,6 +74,7 @@ export function runSubAgent(args: RunSubAgentArgs): SubAgentHandle {
     grants,
     parentTaskCapabilities,
     complete,
+    notify,
     redactSummaries,
     parentRemainingMs,
     depth,
@@ -155,6 +158,7 @@ export function runSubAgent(args: RunSubAgentArgs): SubAgentHandle {
     parentTaskCapabilities: descriptorCaps,
     maxFanout,
     ...(complete !== undefined ? { complete } : {}),
+    ...(notify !== undefined ? { notify } : {}),
     // Thread the descriptor's params through to the child's `ctx.params`, so a
     // parent can parameterize each sub-agent it fans out.
     ...(descriptor.params !== undefined ? { options: { params: descriptor.params } } : {}),

@@ -7,7 +7,7 @@ import { RUN_COMPLETED } from "./events.ts";
 import { TaskPersistence } from "./persistence.ts";
 import { HandlerRegistry } from "./registry.ts";
 import { Scheduler } from "./scheduler.ts";
-import type { CompleteFn, RunOutcome } from "./types.ts";
+import type { CompleteFn, NotifyIntent, NotifyOutcome, RunOutcome } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers — an in-memory DB with migrations applied, plus a recording resolver.
@@ -92,6 +92,53 @@ describe("Scheduler — pipeline runtime context", () => {
     const task = new TaskPersistence(db).get("echo");
     expect(task?.last_run_at).not.toBeNull();
     expect(task?.last_error).toBeNull();
+  });
+
+  test("ctx.notify reaches the injected resolver and returns its outcome", async () => {
+    const seen: NotifyIntent[] = [];
+    const notify = async (intent: NotifyIntent): Promise<NotifyOutcome> => {
+      seen.push(intent);
+      return { delivered: true, channel: "telegram" };
+    };
+    let handlerOutcome: NotifyOutcome | undefined;
+    registry.register("notifier", async (ctx) => {
+      handlerOutcome = await ctx.notify("run finished");
+      ctx.recordRun({ status: "ok", summary: "notified" });
+    });
+
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES, notify });
+    scheduler.register({
+      id: "notifier",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "notifier",
+      required_capabilities: ["NETWORK_FETCH", "WRITE_STORAGE"],
+    });
+
+    await scheduler.run("notifier");
+
+    expect(seen).toEqual([{ text: "run finished" }]);
+    expect(handlerOutcome).toEqual({ delivered: true, channel: "telegram" });
+  });
+
+  test("ctx.notify yields unavailable (never throws) when no resolver is injected", async () => {
+    let handlerOutcome: NotifyOutcome | undefined;
+    registry.register("notifier", async (ctx) => {
+      handlerOutcome = await ctx.notify("hello");
+      ctx.recordRun({ status: "ok", summary: "" });
+    });
+
+    const scheduler = new Scheduler({ db, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "notifier",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "notifier",
+      required_capabilities: ["NETWORK_FETCH", "WRITE_STORAGE"],
+    });
+
+    await scheduler.run("notifier");
+    expect(handlerOutcome).toEqual({ delivered: false, reason: "unavailable" });
   });
 
   test("a handler that records a run then throws keeps the recorded status (no error clobber)", async () => {
