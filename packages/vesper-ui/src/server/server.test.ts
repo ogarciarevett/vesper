@@ -110,6 +110,32 @@ describe("UI server", () => {
     expect(Array.isArray(await res.json())).toBe(true);
   });
 
+  test("presence is detected on demand (no background poll) and cached within the TTL", async () => {
+    let calls = 0;
+    const scheduler = new Scheduler({ db, registry: new HandlerRegistry(), grants: CAPABILITIES });
+    const h = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      presencePollMs: 10_000,
+      detectPresences: async () => {
+        calls += 1;
+        return [];
+      },
+    });
+    try {
+      // No startup or background scan — the detector is untouched until a request.
+      expect(calls).toBe(0);
+      await fetch(`${h.url}/api/presence`);
+      await fetch(`${h.url}/api/presence`);
+      // The second request is served from the cache within presencePollMs.
+      expect(calls).toBe(1);
+    } finally {
+      h.stop();
+    }
+  });
+
   test("GET /api/runs is empty before any run", async () => {
     const res = await fetch(`${handle.url}/api/runs`);
     expect(res.status).toBe(200);

@@ -13,7 +13,7 @@ import { ApprovalError, encodeQr, RUN_COMPLETED, RUN_EVENT, SchedulerError } fro
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
 import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
-import { defaultPresenceDetector, type PresenceDetector, presenceSignature } from "./presence.ts";
+import { defaultPresenceDetector, type PresenceDetector } from "./presence.ts";
 
 /** A helper-CLI's detected status for the `/api/status` route + titlebar pill. */
 interface CliStatusRow {
@@ -69,7 +69,7 @@ export interface UiServerDeps {
   readonly modules?: readonly UiModule[];
   /** Detects agents running on this machine. Defaults to the real `ps` scanner. */
   readonly detectPresences?: PresenceDetector;
-  /** How often to re-scan for running agents (ms). Default 3000. */
+  /** Min interval (ms) between on-demand presence scans for `/api/presence` (cache TTL). Default 3000. */
   readonly presencePollMs?: number;
   /** Default Vesper World theme id, stamped into the page for the client to read. */
   readonly defaultTheme?: string;
@@ -315,11 +315,11 @@ async function resolveClientAssets(deps: UiServerDeps): Promise<ClientAssets> {
 /**
  * Start the local Vesper World UI server (HTTP + WebSocket) on `127.0.0.1`.
  *
- * Routes: `GET /` (client shell), `GET /app.js` (bundled client), `GET /api/world`
- * (current {@link import("../world/types.ts").SceneGraph}), `POST /api/pipelines/:id/run`
+ * Routes: `GET /` (client shell), `GET /app.js` (bundled client), `GET /api/status`
+ * + `GET /api/presence` (Diagnostics), `POST /api/pipelines/:id/run`
  * (run a pipeline -> {@link RunOutcome}), `GET /api/runs/:runId/events?afterTs=`
  * (replay a run's persisted live trace), `GET /api/runs/:runId/tree` (the run +
- * sub-agent hierarchy), and `WS /api/live` (pushes `run:completed`, `presence`,
+ * sub-agent hierarchy), and `WS /api/live` (pushes `run:completed` +
  * `run:event:lite`; a `{type:'subscribe'|'unsubscribe', runId}` frame joins/leaves a
  * single run's `run:event` stream).
  *
@@ -347,12 +347,20 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       : assets.indexHtml;
   const appJs = assets.appJs;
 
-  // Live presence: the agents running on this machine right now. Detected once at
-  // startup, then re-scanned on an interval; the latest set feeds every /api/world.
+  // Live presence: the agents running on this machine right now. Detected ON DEMAND
+  // for the Diagnostics view (GET /api/presence) only — the home no longer renders
+  // presence, so there is no background poll. A short cache (presencePollMs) bounds
+  // how often a burst of requests re-scans the process table.
   const detect = deps.detectPresences ?? defaultPresenceDetector();
-  const pollMs = deps.presencePollMs ?? 3_000;
-  let presences: PresenceInfo[] = await detect();
-  let presenceSig = presenceSignature(presences);
+  const presenceTtlMs = deps.presencePollMs ?? 3_000;
+  let presenceCache: { at: number; value: PresenceInfo[] } | null = null;
+  const presenceNow = async (): Promise<PresenceInfo[]> => {
+    const now = Date.now();
+    if (presenceCache === null || now - presenceCache.at >= presenceTtlMs) {
+      presenceCache = { at: now, value: await detect() };
+    }
+    return presenceCache.value;
+  };
 
   const server = Bun.serve({
     port,
@@ -396,7 +404,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // GET /api/presence — agents running on this machine (Diagnostics; relocated
       // from the retired pixel-art home).
       if (req.method === "GET" && pathname === "/api/presence") {
-        return json(presences);
+        return json(await presenceNow());
       }
 
       // GET /api/connections — messaging-channel state (Connections page). Read-only
@@ -480,7 +488,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       }
 
       // GET /api/runs/:runId/events?afterTs= — replay/backfill the persisted
-      // live-trace for one run (the durable analogue of /api/world; a late or
+      // live-trace for one run (the durable analogue of the live WS stream; a late or
       // reconnecting client reads this before joining the live stream).
       const eventsMatch = pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
       if (req.method === "GET" && eventsMatch) {
@@ -725,26 +733,11 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   };
   scheduler.eventBus.on(RUN_EVENT, onRunEvent);
 
-  // Re-scan running agents on an interval; push a refresh only when the set
-  // actually changes (an agent started/stopped), so idle ticks are silent.
-  const poll = async (): Promise<void> => {
-    const next = await detect();
-    const nextSig = presenceSignature(next);
-    if (nextSig === presenceSig) return;
-    presences = next;
-    presenceSig = nextSig;
-    server.publish("world", JSON.stringify({ type: "presence" }));
-  };
-  const pollTimer = setInterval(() => {
-    void poll();
-  }, pollMs);
-
   const url = `http://${hostname}:${server.port}`;
   return {
     port: server.port,
     url,
     stop() {
-      clearInterval(pollTimer);
       scheduler.eventBus.off(RUN_COMPLETED, onRun);
       scheduler.eventBus.off(RUN_EVENT, onRunEvent);
       server.stop(true);

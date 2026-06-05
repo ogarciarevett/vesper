@@ -323,7 +323,11 @@ validation split for skill-train (`--val-fraction`). See `cycle-log.md` for per-
 Canvas 2D pixel-art client (seeded creatures, mood glow, click→plain-language inspect card + Run,
 live updates), a `UiModule` registry (zero modules; locks the Voice contract), and `vesper ui`
 (daemon-required). Bun/TS/web only — no Rust/Tauri (Hard rule 14). Verified end-to-end in a real
-browser. See `docs/ui.md`.
+browser. See `docs/ui.md`. **SUPERSEDED:** the Canvas pixel-art world was retired (Omar: "honestly
+terrible") and replaced by the dark-glass sectioned shell (PR #8) — chat + a Vesper-only activity rail,
+with agent presence relocated to a Diagnostics section (`specs/vesper-world-rebuild.md`, SHIPPED). The
+machine-wide presence poll was retired too: `/api/presence` now detects on-demand for Diagnostics (no
+background scan); the `/api/world` SceneGraph route is gone.
 
 **Echo (live agent presence) + daemon lifecycle SHIPPED.** Vesper World now shows the agents
 actually running on this machine (`vesper-core/presence` — an allowlist over the process table:
@@ -366,7 +370,7 @@ no new dependency. A missing channel/destination/resolver is graceful (`{deliver
 a capability violation throws. Issue-capped: the record is the spec + `cycle-log.md` + the commit (Rule 11).
 
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **916 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **917 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);

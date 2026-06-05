@@ -6,7 +6,6 @@ export {
   defaultPresenceDetector,
   type PresenceDetector,
   presenceDetectorFor,
-  presenceSignature,
 } from "./server/presence.ts";
 export {
   buildClientAssets,

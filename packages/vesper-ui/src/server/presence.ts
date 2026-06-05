@@ -39,15 +39,3 @@ export function presenceDetectorFor(matchers: readonly AgentMatcherSpec[]): Pres
 export function defaultPresenceDetector(): PresenceDetector {
   return presenceDetectorFor(DEFAULT_AGENT_MATCHERS);
 }
-
-/**
- * A cheap, order-independent signature of the presence set — changes only when an
- * agent starts/stops or its process count changes, so the poll loop pushes an
- * update only on a real change (not every tick).
- */
-export function presenceSignature(presences: readonly PresenceInfo[]): string {
-  return presences
-    .map((p) => `${p.id}:${p.procCount}`)
-    .sort()
-    .join("|");
-}

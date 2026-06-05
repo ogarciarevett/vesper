@@ -1053,3 +1053,32 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   the documented evolution; egress would then ride `allowlistedFetch` to 127.0.0.1); group messaging /
   attachments; verifying the probe + link line formats against a real signal-cli build. With Signal shipped, the
   connections channel set (Telegram, Discord, WhatsApp Cloud, WhatsApp-Web, Signal) is complete.
+
+## Vesper World rebuild — already shipped; leftover presence/world cleanup — SHIPPED
+- Picked `specs/vesper-world-rebuild.md` (Omar-authorized 2026-06-02: the pixel-art "Vesper World" screen he
+  called "honestly terrible") as the next slice — then DISCOVERED it was already built. The dark-glass sectioned
+  shell (PR #8) + the section work on `main` already satisfy every acceptance criterion: no pixel canvas, no
+  Chat/World/Helpers pills, a dark-glass chat transcript+composer (`sections/chat.ts`), an activity rail that
+  follows ONLY Vesper's run with a "resting" state + reconnect-safe backfill (`sections/activity-rail.ts`), and
+  presence relocated to a Diagnostics section. `git ls-files` shows ZERO sprite/world/render/hearth/scene code
+  remaining. Surfaced the spec-vs-reality delta to Omar (did NOT re-build shipped work); he chose "cleanup + mark
+  shipped" — the spec's only leftover (task #4).
+- THE CLEANUP (server-side only, `vesper-ui/src/server/server.ts`): the `/api/world` route was ALREADY gone
+  (only stale doc-comments referenced it — fixed). Replaced the always-on 3s presence POLL + its dead
+  `{type:"presence"}` WS publish with ON-DEMAND detection for `GET /api/presence` (only consumer = the
+  Diagnostics section, fetched on mount), bounded by a small `presencePollMs` cache TTL so a burst of requests
+  doesn't re-scan the process table. `presencePollMs`/`config.presence.pollMs` kept + repurposed as that TTL — NO
+  config.ts or daemon-run churn. The `world` WS topic stays (it still carries `run:completed` + `run:event:lite`
+  to the activity rail).
+- SIMPLIFY: removing the poll orphaned `presenceSignature` (its only consumer was the poll's change-detection);
+  deleted it from `presence.ts` + the `@vesper/ui` index export (dead code I created — no other consumer, no test).
+- GOTCHA (verified, not a regression): `server.ts` has two PRE-EXISTING tsc errors (TS7022/7023, the Bun.serve
+  self-reference quirk) — confirmed present on a clean `main` via `git stash` (lines 357/360 there, 365/368 after
+  my added lines). My change adds ZERO new tsc errors (CI skips tsc; these are in the known ~16-error baseline).
+- The machine-wide presence/echo CAPABILITY is intact (the detector + the Diagnostics view); only the background
+  poll + the dead live-broadcast were removed. The pixel-art World retirement itself happened earlier (PR #8 /
+  the shell redesign), preserved in git history — not a silent delete (Hard rule 4).
+- Verified: 917 tests / 0 fail (+1: on-demand presence cache test); biome clean; tsc 0 new errors.
+  `vesper-world-rebuild.md` marked SHIPPED; its D2 (presence -> Diagnostics, not deleted) holds.
+- FOLLOW-UP: Omar still has "a design prompt in hand" for a FURTHER UI redesign beyond the shipped dark-glass
+  shell — a separate, not-yet-written spec (the contract's "Next" UI item remains open for that).
