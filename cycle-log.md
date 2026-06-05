@@ -1082,3 +1082,38 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   `vesper-world-rebuild.md` marked SHIPPED; its D2 (presence -> Diagnostics, not deleted) holds.
 - FOLLOW-UP: Omar still has "a design prompt in hand" for a FURTHER UI redesign beyond the shipped dark-glass
   shell — a separate, not-yet-written spec (the contract's "Next" UI item remains open for that).
+
+## Voice core ("Talk to Vesper") — TS slice SHIPPED; native shell deferred
+- Omar picked Voice (`specs/voice-conversation.md`) as the next slice. The spec is mostly a Tauri/Rust
+  native audio shell (mic, Silero VAD, Whisper STT, global hotkey, focus-aware Mode-B dictation) that
+  CANNOT be unit-tested in the Bun suite and carries a Hard-rule-14 decision. SCOPE CALL (surfaced to Omar,
+  not improvised): cut the fully-testable TS-core vertical and DEFER the native shell + the opt-in ElevenLabs
+  cloud path to their own follow-up cycles. The spec itself draws the >=80%-coverage line exactly here.
+- SPEC delta resolved: the contract's "Voice needs a Hard-rule-12 amendment" note referenced the OLDER
+  `voice-modalities.md` (ElevenLabs-as-brain). `voice-conversation.md` supersedes it — brain stays the CLI
+  (`ctx.complete`), so Hard rule 12 is INTACT and NO amendment was needed. The contract "Next" line was
+  corrected (it had carried the stale amendment claim).
+- BUILT (test-first, all in `vesper-core/voice/` + cli): `VoiceError` (typed reasons); `VoiceProvider` seam +
+  `LocalVoiceProvider` (TTS via the `ProcessRunner` seam -> macOS `say`; `transcribe` rejects
+  `stt_unavailable` since real STT lives in the native shell); `streamSentences`/`splitSentences` chunker
+  (consumes an `AsyncIterable<string>` so it serves BOTH today's batch `CompleteFn` and a future token stream
+  — `CLIAdapter.complete` is batch, NOT streaming, so a literal "stream the reply" was not built); `runVoiceTurn`
+  orchestrator (transcript -> brain -> sentence-chunked speak -> ONE `events` audit row); `auditVoiceTurn`
+  (payload = provider/brain/modality/duration/sentenceCount; the input TYPE has no transcript/secret field, so
+  a leak is impossible by construction); a hand-rolled `voice` config block (`normalizeVoice`, brain default
+  `"cli"`, no zod — matches repo convention); and `vesper voice say|ask|chat|setup|mic-test`.
+- KEY DEVIATIONS from the spec (noted at REVIEW): provider method is `speak(text)` not `synthesize(): AsyncIterable
+  | "shell"` (local `say` plays directly — a fire-and-play model is the honest local shape); ElevenLabs provider
+  is a deferred `createVoiceProvider("elevenlabs")` -> `unknown_provider` stub (cloud path is its own slice);
+  Mode B / hotkey / mic / Whisper STT all deferred to the native shell.
+- SIMPLIFY: extracted `resolveVoiceRuntime(flags)` to kill the ask/chat duplication; switched a needless dynamic
+  `import("../cli-resolver.ts")` to a static import.
+- VERIFIED LIVE on this Mac (not just mocked): `vesper voice say "..."` plays real TTS; `vesper voice ask --cli
+  claude "..."` returns a real reply via the Claude brain (~5s) and writes exactly one `events` row
+  (`voice_conversed {provider:local,brain:cli,modality:conversation,durationMs,sentenceCount}`, NO transcript) —
+  confirmed by querying the real DB. 954 tests / 0 fail (+37); biome clean; tsc 0 new errors in my files; no new
+  dependency, no migration.
+- FOLLOW-UPS: (1) the Tauri/Rust voice shell — mic/VAD/Whisper STT/hotkey/Mode-B injection (needs Omar's
+  Hard-rule-14 nod + a Mac/Rust build + manual hardware verification); (2) the opt-in ElevenLabs cloud provider +
+  CAI brain (NETWORK_FETCH + READ_VAULT + `allowlistedFetch("api.elevenlabs.io")`); (3) wiring `runVoiceTurn` to a
+  real token stream if/when the daemon `complete` endpoint streams. Issue-capped: record = this entry + spec + commit.

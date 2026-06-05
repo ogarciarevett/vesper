@@ -369,13 +369,29 @@ through the daemon's already-authenticated running handler, and audits each send
 no new dependency. A missing channel/destination/resolver is graceful (`{delivered:false, reason}`); only
 a capability violation throws. Issue-capped: the record is the spec + `cycle-log.md` + the commit (Rule 11).
 
+**Voice core ("Talk to Vesper") — TS slice SHIPPED; native shell deferred.** The host-side half of
+`specs/voice-conversation.md`: a local-first conversational-voice core where **the brain stays the CLI**
+(`ctx.complete`, Hard rule 12 intact — NO amendment needed; the older ElevenLabs-as-brain framing in
+`voice-modalities.md` is superseded). New `vesper-core/voice/`: a `VoiceProvider` seam (`LocalVoiceProvider`
+plays TTS through macOS `say` via the `ProcessRunner` seam; STT rejects `stt_unavailable` until the native
+shell lands), a streaming sentence-chunker (`streamSentences` — speaks sentence-by-sentence, works for a
+batch reply today and a token stream later), the `runVoiceTurn` orchestrator (transcript -> brain ->
+chunked speak -> one `events` audit row recording provider/brain/modality/duration/sentenceCount, NEVER the
+transcript/reply/secret), and a `voice` config block (`brain` default `"cli"`). New `vesper voice
+say|ask|chat|setup|mic-test` — `vesper voice ask "..."` is a real "talk to Vesper" loop today (verified
+live against `claude`). **Deferred to a follow-up (needs Omar's Hard-rule-14 nod + a Mac/Rust build):** the
+Tauri/Rust audio shell — mic capture, Silero VAD, Whisper STT, global hotkey, focus-aware Mode-B dictation;
+and the opt-in ElevenLabs cloud provider/CAI brain. No new dependency, no migration. Issue-capped: the
+record is the spec + `cycle-log.md` + the commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **917 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **954 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
-Voice (`specs/voice-modalities.md`, needs the Hard-rule-12 contract amendment first); the one-line
-installer + npm publish (`specs/installer-distribution.md`, Launch). Update this section after each ship.
+the Voice **native shell** follow-up (Tauri/Rust audio + Whisper STT + hotkey + Mode-B dictation, gated on
+Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice; the one-line installer + npm publish
+(`specs/installer-distribution.md`, Launch). Update this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the

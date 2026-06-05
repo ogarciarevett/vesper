@@ -116,8 +116,10 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
 | `vesper connections list` | List messaging channels with availability, credential, and enabled status. |
-| `vesper connections set <id>   # token via stdin` | Store a channel credential (read from stdin) and enable it. |
+| `vesper connections set <id> [key=value ...]   # token via stdin` | Store a channel credential (stdin) + any key=value params, and enable it. |
+| `vesper connections pair <id>` | Scan a QR to connect a channel (auto-captures your chat). Daemon must be running. |
 | `vesper connections test <id>` | Authenticate a channel's stored credential (e.g. Telegram getMe). |
+| `vesper connections send <id> <chatId>   # message via stdin` | Send a one-off message to a channel recipient (message via stdin). |
 | `vesper connections enable <id>` | Enable a channel (the daemon starts it on next launch). |
 | `vesper connections disable <id>` | Disable a channel (deregisters it; the stored token is kept). |
 | `vesper status` | Show versions and the health of every subsystem. |
@@ -141,6 +143,11 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper skill accept <name> [--skills-dir <dir>] [--yes]` | Adopt the trained best candidate into the committed SKILL.md (checkpointed; revertible). |
 | `vesper skill revert <name> [--skills-dir <dir>]` | Restore the committed SKILL.md from the latest accept checkpoint. |
 | `vesper evolve list` | Show the latest auto-evolve report and open skill/fix proposals. |
+| `vesper voice say "<text>"` | Speak text aloud with the local system voice (macOS `say`). |
+| `vesper voice ask "<question>" [--cli <name>] [--silent]` | Ask Vesper (your CLI is the brain); print the reply and speak it aloud. |
+| `vesper voice chat [--cli <name>] [--silent]` | Hold a back-and-forth conversation — one line per turn, until EOF. |
+| `vesper voice setup` | Prepare the local voice runtime (model directory + guidance). |
+| `vesper voice mic-test` | Check the voice output path (mic capture ships with the native shell). |
 
 <!-- END COMMANDS -->
 
@@ -180,6 +187,13 @@ the re-scan interval (default 3000). Malformed matchers (bad `kind`, uncompilabl
 A `vesper-core` host (vault · SQLite storage · CLI adapters · capabilities · scheduler · IPC) runs
 your pipelines; `vesper-cli` is the developer surface; `vesper-ui` is the consumer surface. Every LLM
 call is a shell-out to your CLI — there is no provider SDK anywhere in the dependency tree.
+
+**Talk to Vesper (local-first voice).** `vesper voice ask "..."` holds a spoken conversation where your
+CLI is the brain and your machine does the speech: the reply is read aloud sentence-by-sentence through
+the system voice (macOS `say`), nothing leaves the machine, and each turn is audited without storing the
+words. Hands-free microphone capture, on-device Whisper transcription, and a global push-to-talk hotkey
+arrive with the native voice shell; premium ElevenLabs voices are an opt-in. Today: `vesper voice
+say|ask|chat|setup|mic-test`.
 
 ## Development
 

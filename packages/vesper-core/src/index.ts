@@ -22,3 +22,4 @@ export * from "./scheduler/index.ts";
 export * from "./skill-train/index.ts";
 export * from "./storage/index.ts";
 export * from "./vault/index.ts";
+export * from "./voice/index.ts";

@@ -1,4 +1,12 @@
-import { type AgentMatcherSpec, channelById } from "@vesper/core";
+import {
+  type AgentMatcherSpec,
+  channelById,
+  DEFAULT_VOICE_SETTINGS,
+  type VoiceBackend,
+  type VoiceBrain,
+  type VoiceRoute,
+  type VoiceSettings,
+} from "@vesper/core";
 import { configPath } from "./paths.ts";
 
 /** Per-adapter overrides for a CLI tool's headless invocation. */
@@ -56,6 +64,12 @@ export interface VesperConfig {
      */
     readonly defaultChannel?: string;
   };
+  /**
+   * Voice-phase settings ("Talk to Vesper"). Fully local by default (Whisper STT +
+   * system TTS, brain on the CLI). Present only when the user set `voice`; the host
+   * falls back to {@link DEFAULT_VOICE_SETTINGS} when absent.
+   */
+  readonly voice?: VoiceSettings;
 }
 
 /** A fresh config with no default and no overrides. */
@@ -183,6 +197,45 @@ function normalizeNotify(raw: unknown): VesperConfig["notify"] | undefined {
   return { defaultChannel };
 }
 
+const VOICE_ROUTES: ReadonlySet<VoiceRoute> = new Set(["auto", "vesper", "dictate"]);
+const VOICE_BRAINS: ReadonlySet<VoiceBrain> = new Set(["cli", "elevenlabs-cai"]);
+const VOICE_BACKENDS: ReadonlySet<VoiceBackend> = new Set(["local", "elevenlabs"]);
+
+/** Return `value` only when it is one of the allowed string-union members. */
+function asEnum<T extends string>(value: unknown, allowed: ReadonlySet<T>): T | undefined {
+  return typeof value === "string" && allowed.has(value as T) ? (value as T) : undefined;
+}
+
+function asBool(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  const s = asString(value);
+  return s !== undefined && s.length > 0 ? s : undefined;
+}
+
+/**
+ * Coerce untrusted `voice` config into a complete {@link VoiceSettings}. Any unset
+ * or invalid field falls back to {@link DEFAULT_VOICE_SETTINGS} (the fully-local
+ * default), so a partial config is filled rather than rejected. Returns undefined
+ * only when `voice` is absent/not-an-object — the host then uses the default.
+ */
+function normalizeVoice(raw: unknown): VoiceSettings | undefined {
+  if (!isObject(raw)) return undefined;
+  const d = DEFAULT_VOICE_SETTINGS;
+  return {
+    route: asEnum(raw.route, VOICE_ROUTES) ?? d.route,
+    brain: asEnum(raw.brain, VOICE_BRAINS) ?? d.brain,
+    stt: asEnum(raw.stt, VOICE_BACKENDS) ?? d.stt,
+    tts: asEnum(raw.tts, VOICE_BACKENDS) ?? d.tts,
+    hotkey: asNonEmptyString(raw.hotkey) ?? d.hotkey,
+    model: asNonEmptyString(raw.model) ?? d.model,
+    bargeIn: asBool(raw.bargeIn) ?? d.bargeIn,
+    speakReplies: asBool(raw.speakReplies) ?? d.speakReplies,
+  };
+}
+
 /** Coerce untrusted `ui` config; keeps only a string `theme`. */
 function normalizeUi(raw: unknown): VesperConfig["ui"] | undefined {
   if (!isObject(raw)) return undefined;
@@ -219,6 +272,8 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   if (connections !== undefined) result = { ...result, connections };
   const notify = normalizeNotify(raw.notify);
   if (notify !== undefined) result = { ...result, notify };
+  const voice = normalizeVoice(raw.voice);
+  if (voice !== undefined) result = { ...result, voice };
   return result;
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_VOICE_SETTINGS } from "@vesper/core";
 import { DEFAULT_CONFIG, loadConfig, normalizeConfig, saveConfig } from "./config.ts";
 
 function tempConfigPath(): string {
@@ -174,6 +175,49 @@ describe("normalizeConfig — notify", () => {
     expect(normalizeConfig({ cli: { adapters: {} } }).notify).toBeUndefined();
     expect(normalizeConfig({ notify: "nope" }).notify).toBeUndefined();
     expect(normalizeConfig({ notify: {} }).notify).toBeUndefined();
+  });
+});
+
+describe("normalizeConfig — voice", () => {
+  test("an empty voice object resolves to the fully-local default", () => {
+    expect(normalizeConfig({ voice: {} }).voice).toEqual(DEFAULT_VOICE_SETTINGS);
+  });
+
+  test("keeps valid overrides", () => {
+    const cfg = normalizeConfig({
+      voice: {
+        route: "dictate",
+        brain: "elevenlabs-cai",
+        tts: "elevenlabs",
+        hotkey: "Cmd+Shift+Space",
+        bargeIn: false,
+        speakReplies: false,
+      },
+    });
+    expect(cfg.voice).toMatchObject({
+      route: "dictate",
+      brain: "elevenlabs-cai",
+      tts: "elevenlabs",
+      hotkey: "Cmd+Shift+Space",
+      bargeIn: false,
+      speakReplies: false,
+    });
+  });
+
+  test("falls back to defaults for invalid enum/types (never rejects a partial block)", () => {
+    const cfg = normalizeConfig({
+      voice: { brain: "gpt-5", stt: "azure", route: 7, hotkey: "", bargeIn: "yes" },
+    });
+    expect(cfg.voice?.brain).toBe(DEFAULT_VOICE_SETTINGS.brain); // "cli"
+    expect(cfg.voice?.stt).toBe(DEFAULT_VOICE_SETTINGS.stt); // "local"
+    expect(cfg.voice?.route).toBe(DEFAULT_VOICE_SETTINGS.route); // "auto"
+    expect(cfg.voice?.hotkey).toBe(DEFAULT_VOICE_SETTINGS.hotkey); // empty -> default
+    expect(cfg.voice?.bargeIn).toBe(DEFAULT_VOICE_SETTINGS.bargeIn);
+  });
+
+  test("omits voice entirely when absent or not an object", () => {
+    expect(normalizeConfig({ cli: { adapters: {} } }).voice).toBeUndefined();
+    expect(normalizeConfig({ voice: "nope" }).voice).toBeUndefined();
   });
 });
 

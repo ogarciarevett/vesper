@@ -11,6 +11,7 @@ import { skillGroup } from "./skill.ts";
 import { statusCommand } from "./status.ts";
 import { uiCommand } from "./ui.ts";
 import { vaultGroup } from "./vault.ts";
+import { voiceGroup } from "./voice.ts";
 
 /** Top-level command registry. New commands/groups register here — no central switch. */
 export const registry: readonly Registrable[] = [
@@ -26,4 +27,5 @@ export const registry: readonly Registrable[] = [
   runsGroup,
   skillGroup,
   evolveGroup,
+  voiceGroup,
 ];
