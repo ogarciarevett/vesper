@@ -14,6 +14,8 @@ import { EventBus, RUN_EVENT } from "./events.ts";
 import type {
   Capability,
   CompleteFn,
+  NotifyFn,
+  NotifyIntent,
   PipelineContext,
   ScheduledTask,
   SubAgentHandle,
@@ -577,6 +579,65 @@ describe("buildPipelineContext.readSignals", () => {
     expect(signals.runs).toHaveLength(1);
     expect(signals.runs[0]?.id).toBe("r1");
     expect(signals.rollups[0]).toEqual({ pipeline: "p", total: 1, errors: 1 });
+  });
+});
+
+describe("buildPipelineContext.notify", () => {
+  test("throws CapabilityError when NETWORK_FETCH is not declared", async () => {
+    const { store } = makeStore();
+    const ctx = build({
+      task: makeTask(["WRITE_STORAGE"]),
+      now: NOW,
+      store,
+      notify: async () => ({ delivered: true }),
+    });
+    await expect(ctx.notify("hi")).rejects.toBeInstanceOf(CapabilityError);
+  });
+
+  test("does not invoke the resolver when the capability is denied", async () => {
+    const { store } = makeStore();
+    let calls = 0;
+    const notify: NotifyFn = async () => {
+      calls++;
+      return { delivered: true };
+    };
+    const ctx = build({ task: makeTask([]), now: NOW, store, notify });
+    await expect(ctx.notify("hi")).rejects.toBeInstanceOf(CapabilityError);
+    expect(calls).toBe(0);
+  });
+
+  test("returns unavailable (never throws) when no resolver is configured", async () => {
+    const { store } = makeStore();
+    const ctx = build({ task: makeTask(["NETWORK_FETCH"]), now: NOW, store });
+    expect(await ctx.notify("hi")).toEqual({ delivered: false, reason: "unavailable" });
+  });
+
+  test("delegates to the resolver and returns its outcome", async () => {
+    const { store } = makeStore();
+    let seen: NotifyIntent | undefined;
+    const notify: NotifyFn = async (intent) => {
+      seen = intent;
+      return { delivered: true, channel: "telegram" };
+    };
+    const ctx = build({ task: makeTask(["NETWORK_FETCH"]), now: NOW, store, notify });
+    const outcome = await ctx.notify("done", { channel: "telegram", chatId: "42" });
+    expect(seen).toEqual({ text: "done", channel: "telegram", chatId: "42" });
+    expect(outcome).toEqual({ delivered: true, channel: "telegram" });
+  });
+
+  test("omits channel/chatId from the intent when not supplied", async () => {
+    const { store } = makeStore();
+    let seen: NotifyIntent | undefined;
+    const notify: NotifyFn = async (intent) => {
+      seen = intent;
+      return { delivered: false, reason: "no_channel" };
+    };
+    const ctx = build({ task: makeTask(["NETWORK_FETCH"]), now: NOW, store, notify });
+    const outcome = await ctx.notify("ping");
+    expect(seen).toEqual({ text: "ping" });
+    expect(Object.hasOwn(seen ?? {}, "channel")).toBe(false);
+    expect(Object.hasOwn(seen ?? {}, "chatId")).toBe(false);
+    expect(outcome.delivered).toBe(false);
   });
 });
 

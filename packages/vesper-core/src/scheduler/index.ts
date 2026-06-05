@@ -18,6 +18,10 @@ export { remainingBudgetMs, withTimeout } from "./timeout.ts";
 export type {
   CompleteFn,
   FailedTask,
+  NotifyFailReason,
+  NotifyFn,
+  NotifyIntent,
+  NotifyOutcome,
   PipelineContext,
   ProgressEvent,
   ProgressKind,

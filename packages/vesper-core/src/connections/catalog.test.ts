@@ -21,11 +21,11 @@ describe("CHANNEL_CATALOG", () => {
     }
   });
 
-  test("telegram + discord + whatsapp are ready; signal is deferred", () => {
+  test("telegram + discord + whatsapp + signal are ready", () => {
     expect(channelById("telegram")?.status).toBe("ready");
     expect(channelById("discord")?.status).toBe("ready");
     expect(channelById("whatsapp")?.status).toBe("ready");
-    expect(channelById("signal")?.status).toBe("deferred");
+    expect(channelById("signal")?.status).toBe("ready");
   });
 
   test("telegram declares api.telegram.org and the bot-token vault key", () => {

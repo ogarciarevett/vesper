@@ -23,14 +23,16 @@ describe("channelStates", () => {
     });
   });
 
-  test("a channel with no shipped handler is never available or running", () => {
-    const states = channelStates({ runningIds: ["signal"] });
-    const signal = byId(states, "signal");
-    expect(signal.available).toBe(false);
+  test("a channel with no built-in handler is never available or running", () => {
+    // whatsapp-web ships no BUILT-IN plugin (the opt-in package registers it at
+    // runtime in the daemon); in core it is unavailable.
+    const states = channelStates({ runningIds: ["whatsapp-web"] });
+    const wweb = byId(states, "whatsapp-web");
+    expect(wweb.available).toBe(false);
     // Even if runningIds claims it, an unavailable channel must never read as running.
-    expect(signal.running).toBe(false);
-    expect(signal.configured).toBe(false);
-    expect(signal.enabled).toBe(false);
+    expect(wweb.running).toBe(false);
+    expect(wweb.configured).toBe(false);
+    expect(wweb.enabled).toBe(false);
   });
 
   test("configured falls back to the descriptor vault key when wiring omits it", () => {

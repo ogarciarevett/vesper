@@ -47,6 +47,15 @@ export interface VesperConfig {
   };
   /** Per-channel messaging wiring (Connections). Secrets stay in the vault. */
   readonly connections?: Readonly<Record<string, ConnectionConfig>>;
+  /** Proactive-notification routing for `ctx.notify` (pipeline -> connected channel). */
+  readonly notify?: {
+    /**
+     * Catalog channel id `ctx.notify` delivers through when a pipeline names none.
+     * When unset the host resolves the first enabled+running channel with a paired
+     * destination. An unknown id is dropped during normalization.
+     */
+    readonly defaultChannel?: string;
+  };
 }
 
 /** A fresh config with no default and no overrides. */
@@ -161,6 +170,19 @@ function normalizeConnections(raw: unknown): VesperConfig["connections"] | undef
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/**
+ * Coerce untrusted `notify` config. Keeps `defaultChannel` only when it names a
+ * known catalog channel (mirrors `normalizeConnection`'s catalog gate); an unknown
+ * or non-string id is dropped, never thrown. Returns undefined when nothing valid
+ * remains so the host falls back to first-eligible resolution.
+ */
+function normalizeNotify(raw: unknown): VesperConfig["notify"] | undefined {
+  if (!isObject(raw)) return undefined;
+  const defaultChannel = asString(raw.defaultChannel);
+  if (defaultChannel === undefined || channelById(defaultChannel) === undefined) return undefined;
+  return { defaultChannel };
+}
+
 /** Coerce untrusted `ui` config; keeps only a string `theme`. */
 function normalizeUi(raw: unknown): VesperConfig["ui"] | undefined {
   if (!isObject(raw)) return undefined;
@@ -195,6 +217,8 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   if (ui !== undefined) result = { ...result, ui };
   const connections = normalizeConnections(raw.connections);
   if (connections !== undefined) result = { ...result, connections };
+  const notify = normalizeNotify(raw.notify);
+  if (notify !== undefined) result = { ...result, notify };
   return result;
 }
 

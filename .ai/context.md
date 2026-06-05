@@ -348,9 +348,25 @@ invite QR + `pair <nonce>`. A daemon `PairingCoordinator` multiplexes the single
 canvas-QR card and `vesper connections pair`. **WhatsApp-Web (personal account)** lands as the opt-in
 `@vesper/channel-whatsapp-web` package — the SOLE runtime dependency (Baileys; see the opt-in carve-out
 under Stack), lazy-registered by the daemon, with rotating-QR pairing into a vault-backed session.
+**Signal (`specs/signal-channel.md`)** completes the channel set — a send-only v1 CORE handler over the
+external `signal-cli` binary (no SDK, no new dependency; the `ProcessRunner` seam, like the LLM CLIs),
+with self-driving device-link QR pairing (`signal-cli link`) that reuses the whatsapp-web coordinator
+branch. Egress is a subprocess (allowlist N/A; `send` asserts `NETWORK_FETCH`); signal-cli owns the
+session keys, the vault holds only the account number. Paired Signal is a `ctx.notify` target (Note to Self).
+
+**Pipeline notify (`ctx.notify`) SHIPPED.** The outbound, pipeline-initiated complement to the inbound
+chatbot flow (`specs/pipeline-notify.md`): a running pipeline can push a notification to the user out a
+connected channel. `PipelineContext.notify(text, opts?)` is gated by `NETWORK_FETCH` and backed by a
+`NotifyFn` injected through `BuildContextDeps` + `SchedulerOptions` exactly where `complete` is threaded
+(top-level + sub-agent). Core stays decoupled (`channel?: string`, not the connections `ChannelId`); the
+host `makeNotifyFn` (CLI) resolves the channel + the pairing-persisted owner `defaultChatId`, sends
+through the daemon's already-authenticated running handler, and audits each send on the `events` table
+(`notification_sent`/`notification_failed`, body/chat id never logged) — no migration, no new capability,
+no new dependency. A missing channel/destination/resolver is graceful (`{delivered:false, reason}`); only
+a capability violation throws. Issue-capped: the record is the spec + `cycle-log.md` + the commit (Rule 11).
 
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **870 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **916 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);

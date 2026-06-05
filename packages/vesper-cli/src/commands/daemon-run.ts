@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
   ApprovalTokenStore,
+  type ChannelRegistry,
   channelStates,
   DEFAULT_AGENT_MATCHERS,
   detectAvailableCLIs,
@@ -19,6 +20,7 @@ import { loadConfig, saveConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
+import { makeNotifyFn } from "../make-notify.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
 import { PairingCoordinator } from "../pairing-coordinator.ts";
 import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
@@ -62,20 +64,29 @@ export const daemonRunCommand: Command = {
     const installed = await detectAvailableCLIs();
     const complete = makeCompleteFn(config, installed);
 
+    // The UI store also serves the router's editable template default_params (#4)
+    // and is the audit sink for `ctx.notify`; opened before the scheduler so the
+    // notify resolver can be wired into the constructor.
+    const uiStore = openStore(dbPath());
+
+    // `ctx.notify` resolver: delivers a pipeline notification out a connected
+    // channel. The channel registry is built further below (after the scheduler), so
+    // the resolver late-binds it through a getter read only at notify time.
+    let channelRegistry: ChannelRegistry | undefined;
+    const notify = makeNotifyFn({ getRegistry: () => channelRegistry, config, store: uiStore });
+
     // Construct the Scheduler granting only the capabilities the built-in
-    // pipelines actually declare (deny-by-default), with the CLI resolver, then
-    // register the pipelines so their handlers + tasks are available to the tick loop.
+    // pipelines actually declare (deny-by-default), with the CLI + notify resolvers,
+    // then register the pipelines so their handlers + tasks are available to the tick loop.
     const registry = new HandlerRegistry();
     const scheduler = new Scheduler({
       db,
       registry,
       grants: grantedCapabilities(),
       complete,
+      notify,
       redactSummaries: config.storage?.redactRunSummaries === true,
     });
-    // The UI store is opened first so the router can read editable template
-    // default_params through it (#4) — an edited template then affects its runs.
-    const uiStore = openStore(dbPath());
     registerPipelines(scheduler, registry, {
       getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
     });
@@ -104,6 +115,8 @@ export const daemonRunCommand: Command = {
       vault,
       store: uiStore,
     });
+    // Late-bind the live registry into the notify resolver (declared before the scheduler).
+    channelRegistry = channels.registry;
     // Pairing (scan-to-connect): the coordinator multiplexes the daemon's single
     // inbound stream into active QR/link pairing sessions and persists the captured
     // chat id on link. Exposed to the UI's POST /api/connections/:id/pair route and

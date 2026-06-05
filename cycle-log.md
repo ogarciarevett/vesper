@@ -969,3 +969,87 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   (the plugin is registered only in the daemon — the UI/daemon is the source of truth; the CLI doesn't load Baileys
   for a list); the compiled `vesper-desktop` binary omits whatsapp-web (dynamic import not bundled) until Launch wires
   it; re-pairing an already-live whatsapp-web opens a second socket (rare edge). Signal (signal-cli) still open.
+
+## Pipeline notify (`ctx.notify` — proactive channel delivery) — SHIPPED
+- The outbound, pipeline-initiated complement to the shipped inbound `ChatSink` flow. A running pipeline can now
+  push a notification to the user out a connected channel. `OutboundIntent.kind:"notify"` + `ChannelHandler.send`
+  already existed (used only by the operator `vesper connections send`); the gap was a pipeline-facing seam.
+  Spec: `specs/pipeline-notify.md`. Issue-capped: this entry + the commit are the record (Rule 11). Omar approved
+  SPEC + PLAN at the advancement gates; chose graceful-degradation + reuse-`NETWORK_FETCH` over throw + new cap.
+- DESIGN (mirror `complete`, stay decoupled): `ctx.notify(text, opts?)` on `PipelineContext`, gated by
+  `NETWORK_FETCH` (the egress cap `send` already needs). A `NotifyFn` is injected through `BuildContextDeps` +
+  `SchedulerOptions` exactly where `complete` is threaded (top-level run AND the `subagent.ts` child context).
+  KEY DECISION: the core `NotifyIntent`/`NotifyOutcome` use `channel?: string`, NOT the connections `ChannelId`
+  union — so `vesper-core/scheduler` keeps ZERO dependency on the connections feature layer (the import is
+  cycle-safe either way; decoupling is the better architecture). The host (`makeNotifyFn`, CLI) owns channel
+  identity. DIVERGENCE from `complete`: a missing resolver is GRACEFUL (`{delivered:false, reason:"unavailable"}`),
+  never throws — a side-channel must not crash a pipeline; only a capability violation throws.
+- HOST RESOLUTION (`packages/vesper-cli/src/make-notify.ts`): channel = explicit `intent.channel` (must be running)
+  -> `config.notify.defaultChannel` (if running) -> first running channel with a paired owner. chatId = explicit
+  -> `config.connections.<id>.params.defaultChatId` (the destination scan-to-connect ALREADY persists at pairing,
+  `pairing-coordinator.ts#persistLinked`) — so a pipeline never handles a chat id. Sends through the daemon's
+  ALREADY-AUTHENTICATED running handler (`registry.list().find`), never a fresh handler (that stays the operator
+  `sendVia` path). Audits every actual send attempt on the `events` table (`notification_sent`/`notification_failed`,
+  reusing `recordConnectionEvent`, which strips `text`/body) — NO migration, payload is `{channel}` only (never the
+  body or chat id; a test asserts neither serializes).
+- DAEMON WIRING: the Scheduler is constructed BEFORE `buildChannelRegistry`, so `makeNotifyFn` late-binds the
+  registry through a `getRegistry: () => channelRegistry` getter read only at notify time (`channelRegistry` is a
+  `let` assigned right after the registry builds). Avoided reordering the whole startup; `uiStore` was moved a few
+  lines up so it can be the notify-audit sink passed into the constructor.
+- SPEC DELTA (the one deviation): the spec's acceptance said `normalizeNotify` "SHALL surface a dropped-record
+  warning". The codebase has NO warnings channel in `config.ts` — `normalizePresence`/`normalizeConnection` all
+  SILENTLY drop malformed input. Matched that precedent (drop, never throw) rather than invent a one-off warning
+  path; behavior is otherwise identical (unknown/non-string `defaultChannel` dropped). Reconcile the contract
+  wording if a warnings channel is ever added.
+- GOTCHA: adding `notify` to the `PipelineContext` interface broke 5 hand-rolled context mocks in pipeline +
+  subagent tests (tsc: "Property 'notify' is missing") — they had no notify stub. Fixed with a one-line
+  `notify: async () => ({ delivered:false })` per mock. A reminder that widening a core interface ripples into
+  every hand-rolled test double; a shared `fakeContext` factory would localize this (follow-up).
+- Verified: 890 tests / 0 fail (+20: 5 context + 2 scheduler-context + 4 config + 9 make-notify); 100% line+func
+  coverage on the two new units; biome clean (exit 0); tsc adds 0 NEW errors (the 5 mock errors fixed; pre-existing
+  exactOptional/`as`-cast errors in unchanged code remain, CI skips tsc); NO new dependency; NO migration; NO new
+  capability; transport mocked end-to-end (suite sends to nothing). NOT exercised against a live channel.
+- FOLLOW-UPS: rate-limiting/anti-spam on notifications (declared out-of-scope; every send is audited so abuse is
+  visible); rich/structured messages (plain text only in v1); a shared `fakeContext` test factory; downstream
+  consumers can now wire delivery (`pipeline-career.md`, `pipeline-secretary.md`) onto `ctx.notify`.
+
+## Signal channel via signal-cli (device-link pairing + send-only v1) — SHIPPED
+- The last DEFERRED connections channel. Spec: `specs/signal-channel.md`. Issue-capped: this entry + the commit
+  are the record (Rule 11). Omar approved SPEC + PLAN at the gates; chose send-only+pairing / per-call spawn /
+  vault account — the smallest correct increment, and (with the just-shipped `ctx.notify`) Signal is immediately
+  a notification target (a pipeline result -> the user's Signal "Note to Self").
+- ARCHITECTURE (the key call): signal-cli is an EXTERNAL BINARY (no hosted API, no npm SDK) — reached via the
+  existing `ProcessRunner` seam exactly as the LLM CLI adapters shell out to `claude`/`codex`. So Signal is a
+  CORE handler (`connections/signal.ts`), NOT an opt-in package (contrast whatsapp-web/Baileys, which bundled a
+  library). ZERO new npm dependency; the lockfile is unchanged. Egress is a subprocess, not HTTP — so
+  `allowlistedFetch`/the host-allowlist is N/A for the `local-cli` transport; `send` asserts `NETWORK_FETCH`
+  directly against the handler grant. No migration, no Capability-union change.
+- THE SEAM (`connections/signal-cli.ts`): a small injected `SignalCli` — `probe`/`send` ride the BATCH
+  `ProcessRunner` (`signal-cli --output=json listAccounts` to verify linked; `-a <acct> -o json send -m <text>
+  <recipient>`), and `link` rides a STREAMING `Bun.spawn` seam because `signal-cli link` prints the
+  `sgnl://linkdevice?...` URI WHILE it blocks awaiting a scan (the batch runner only returns at exit). The
+  fiddly streaming/merge glue (read+merge stdout+stderr into lines) is isolated in the default impl; the pure,
+  testable surface (`parseSignalLinkLine`, `linkEventsFromLines`, `streamLines`, `mergeStreamLines`) is unit-
+  tested with constructed ReadableStreams + a fake runner, so the suite spawns nothing.
+- PAIRING is self-driving QR device-linking (`pairingNeedsInbound:false`) — slots into the EXISTING
+  whatsapp-web coordinator branch with NO `PairingCoordinator` change. `startPairing` streams the URI as a
+  `PairingPrompt{kind:"code"}`, and on "Associated with: <number>" persists the account to the vault
+  (`signal_account`) and emits `linked{chatId:<number>}` (which the coordinator records as `params.defaultChatId`
+  -> the Note-to-Self notify destination). signal-cli owns the real session keys in its own encrypted data dir;
+  Vesper's vault holds ONLY the account number (documented deviation from "all creds in the vault").
+- REVIEW caught a real bug: in `startPairing` the `linked` flag was set BEFORE `await vault.set(...)`, so a
+  vault-write failure would end the stream with NO terminal update (the catch's `if (!linked)` skipped). Fixed by
+  persisting FIRST, then flipping `linked`; added a test (vault.set throws -> `error`, not a silent end).
+- SPEC DELTA: extended `ConnectionErrorReason` with `"not_installed"` (the spec referenced it but the union
+  lacked it) so a missing signal-cli surfaces an honest "brew install signal-cli" reason. No exhaustive switch on
+  the reason existed, so the variant is additive. Stale plugin/catalog doc-comments ("Signal is a catalog entry
+  with no plugin yet") were corrected; the `channelStates`/CLI tests that used `signal` as the "no handler"
+  example now use `whatsapp-web` (the only catalog id with no BUILT-IN plugin — it registers at runtime).
+- Verified: 916 tests / 0 fail (+26); coverage signal.ts 100%, signal-cli.ts 86% (uncovered = the `Bun.spawn`
+  glue, like `runProcess` itself); biome clean; tsc adds 0 new errors; NO new npm dependency; NO migration. NOT
+  exercised against a live signal-cli (none in CI) — the exact probe subcommand + the "Associated with" line
+  format are signal-cli-version-dependent and the main unverified risk (the seam is mocked end to end).
+- FOLLOW-UPS: inbound receive -> chatbot (needs the long-lived `signal-cli daemon --http` JSON-RPC transport —
+  the documented evolution; egress would then ride `allowlistedFetch` to 127.0.0.1); group messaging /
+  attachments; verifying the probe + link line formats against a real signal-cli build. With Signal shipped, the
+  connections channel set (Telegram, Discord, WhatsApp Cloud, WhatsApp-Web, Signal) is complete.

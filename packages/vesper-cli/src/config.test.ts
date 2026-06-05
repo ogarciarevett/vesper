@@ -155,6 +155,28 @@ describe("normalizeConfig — connections", () => {
   });
 });
 
+describe("normalizeConfig — notify", () => {
+  test("keeps a defaultChannel that names a catalog channel", () => {
+    expect(normalizeConfig({ notify: { defaultChannel: "telegram" } }).notify).toEqual({
+      defaultChannel: "telegram",
+    });
+  });
+
+  test("drops a defaultChannel that is not a catalog channel", () => {
+    expect(normalizeConfig({ notify: { defaultChannel: "slack" } }).notify).toBeUndefined();
+  });
+
+  test("drops a non-string defaultChannel", () => {
+    expect(normalizeConfig({ notify: { defaultChannel: 5 } }).notify).toBeUndefined();
+  });
+
+  test("omits notify entirely when absent or malformed", () => {
+    expect(normalizeConfig({ cli: { adapters: {} } }).notify).toBeUndefined();
+    expect(normalizeConfig({ notify: "nope" }).notify).toBeUndefined();
+    expect(normalizeConfig({ notify: {} }).notify).toBeUndefined();
+  });
+});
+
 describe("loadConfig / saveConfig", () => {
   test("missing file yields the default", async () => {
     expect(await loadConfig(tempConfigPath())).toEqual(DEFAULT_CONFIG);

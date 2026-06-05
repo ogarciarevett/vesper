@@ -2,6 +2,7 @@
 export type ConnectionErrorReason =
   | "host_not_allowed"
   | "not_authenticated"
+  | "not_installed"
   | "send_failed"
   | "receive_failed"
   | "unknown_channel"

@@ -84,6 +84,9 @@ function makeFakeContext(options: {
     readSignals() {
       throw new Error("readSignals is not supported in this fake context");
     },
+    async notify() {
+      return { delivered: false };
+    },
   };
 
   return { ctx, completeCalls, recordedRuns };

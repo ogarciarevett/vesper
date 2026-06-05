@@ -41,13 +41,19 @@ test("PAIRING_TTL_MS is a positive duration", () => {
 });
 
 describe("channelStates pairable flag", () => {
-  test("telegram + discord are pairable; cloud whatsapp + signal are not", () => {
+  test("telegram + discord + signal are pairable; cloud whatsapp is not", () => {
     const states = channelStates({});
     const byId = (id: string) => states.find((s) => s.id === id);
     expect(byId("telegram")?.pairable).toBe(true);
     expect(byId("discord")?.pairable).toBe(true);
     expect(byId("whatsapp")?.pairable).toBe(false);
-    expect(byId("signal")?.pairable).toBe(false);
+    expect(byId("signal")?.pairable).toBe(true);
+  });
+
+  test("signal ships a handler, so it reports available (send-only v1)", () => {
+    const signal = channelStates({}).find((s) => s.id === "signal");
+    expect(signal?.available).toBe(true);
+    expect(signal?.pairable).toBe(true);
   });
 });
 
