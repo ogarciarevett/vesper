@@ -126,8 +126,14 @@ describe("vesper connections — actions", () => {
     const states = await connectionStates(deps);
     const tg = states.find((s) => s.id === "telegram");
     expect(tg).toMatchObject({ available: true, configured: true, enabled: true });
-    // signal ships no handler yet -> not available.
-    expect(states.find((s) => s.id === "signal")?.available).toBe(false);
+    // signal now ships a handler -> available (though unconfigured here).
+    expect(states.find((s) => s.id === "signal")).toMatchObject({
+      available: true,
+      configured: false,
+      enabled: false,
+    });
+    // whatsapp-web has no built-in handler (runtime-registered by the daemon) -> not available.
+    expect(states.find((s) => s.id === "whatsapp-web")?.available).toBe(false);
   });
 
   test("testChannel builds the handler and authenticates it", async () => {

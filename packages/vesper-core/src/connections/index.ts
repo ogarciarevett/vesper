@@ -37,6 +37,15 @@ export {
   unregisterChannelPlugin,
 } from "./plugins.ts";
 export { ChannelRegistry } from "./registry.ts";
+export { SignalHandler, type SignalHandlerOptions } from "./signal.ts";
+export {
+  type LinkProcess,
+  type LinkSpawner,
+  makeSignalCli,
+  type SignalCli,
+  type SignalLinkEvent,
+  type SignalLinkSession,
+} from "./signal-cli.ts";
 export {
   type ChannelState,
   type ChannelWiring,

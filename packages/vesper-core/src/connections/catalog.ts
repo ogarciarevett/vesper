@@ -3,8 +3,8 @@
  * MCP servers. User input selects an id (a KEY); it never supplies an arbitrary
  * host or server URL (same trust posture as the agent install catalog).
  *
- * Channels: telegram + discord are `ready` (a handler exists / shares the
- * contract); whatsapp + signal are `deferred` (catalog entry + tutorial only).
+ * Channels: telegram, discord, whatsapp, and signal are `ready` (each ships a
+ * handler); whatsapp-web is registered at runtime by its opt-in package.
  */
 
 import type { ChannelDescriptor, ChannelId } from "./types.ts";
@@ -58,13 +58,12 @@ export const CHANNEL_CATALOG: readonly ChannelDescriptor[] = [
     id: "signal",
     displayName: "Signal",
     transport: "local-cli",
-    // Signal runs through a local signal-cli process, not a hosted host. The
-    // localhost REST bridge is the only egress; it is still declared so the
-    // allowlist seam holds (a deferred handler starts nothing in v1).
+    // Send-only v1 via the local signal-cli binary (no HTTP egress for this transport;
+    // 127.0.0.1 is declared so the allowlist seam holds if a future daemon-HTTP path lands).
     allowedHosts: ["127.0.0.1"],
     vaultKeys: ["signal_account"],
     docsUrl: "https://github.com/AsamK/signal-cli",
-    status: "deferred",
+    status: "ready",
   },
 ] as const;
 

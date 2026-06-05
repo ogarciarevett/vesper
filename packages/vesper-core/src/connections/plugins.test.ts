@@ -19,8 +19,20 @@ describe("channel plugins", () => {
     expect(channelPluginById("whatsapp")).toBeDefined();
   });
 
-  test("a channel with no shipped handler has no plugin (availability gate)", () => {
-    expect(channelPluginById("signal")).toBeUndefined();
+  test("signal ships a self-driving pairable plugin (local signal-cli)", () => {
+    const plugin = channelPluginById("signal");
+    expect(plugin).toBeDefined();
+    expect(plugin?.pairable).toBe(true);
+    expect(plugin?.pairingNeedsInbound).toBe(false);
+    const handler = plugin?.build({
+      granted: CHANNEL_GRANTS,
+      vaultKey: "signal_account",
+      allowedHosts: ["127.0.0.1"],
+    });
+    expect(handler?.descriptor.id).toBe("signal");
+  });
+
+  test("an unknown channel id has no plugin (availability gate)", () => {
     expect(channelPluginById("not-a-channel")).toBeUndefined();
   });
 

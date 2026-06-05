@@ -5,13 +5,14 @@
  * {@link ChannelPlugin} entry to {@link CHANNEL_PLUGINS}, (3) flip its catalog
  * status to "ready". The daemon, CLI, and UI all iterate this registry to learn
  * which channels are *available* (a handler ships), so none of them change when a
- * channel is added — channels are a plugin. Telegram is the only handler shipped
- * today; Discord/WhatsApp/Signal are catalog entries with no plugin yet.
+ * channel is added — channels are a plugin. Telegram, Discord, WhatsApp (Cloud API),
+ * and Signal (signal-cli) ship built-in plugins; WhatsApp-Web registers at runtime.
  */
 
 import type { Capability } from "../capabilities/index.ts";
 import { DiscordHandler } from "./discord.ts";
 import type { FetchFn } from "./fetch.ts";
+import { SignalHandler } from "./signal.ts";
 import { TelegramHandler } from "./telegram.ts";
 import type { ChannelHandler, ChannelId } from "./types.ts";
 import { WhatsAppHandler } from "./whatsapp.ts";
@@ -48,7 +49,7 @@ export interface ChannelPlugin {
   build(opts: ChannelBuildOptions): ChannelHandler;
 }
 
-/** Built-in channel plugins. Telegram (long-poll) and Discord (Gateway) ship today. */
+/** Built-in channel plugins: Telegram, Discord, WhatsApp (Cloud API), Signal (signal-cli). */
 export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
   {
     id: "telegram",
@@ -84,6 +85,14 @@ export const CHANNEL_PLUGINS: readonly ChannelPlugin[] = [
           : {}),
         ...(opts.fetchFn !== undefined ? { fetchFn: opts.fetchFn } : {}),
       }),
+  },
+  {
+    // Signal runs through the local signal-cli binary (no HTTP, no SDK). Self-driving
+    // device-link pairing, so the coordinator skips the inbound precondition.
+    id: "signal",
+    pairable: true,
+    pairingNeedsInbound: false,
+    build: (opts) => new SignalHandler({ granted: opts.granted, vaultKey: opts.vaultKey }),
   },
 ];
 

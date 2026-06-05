@@ -1012,3 +1012,44 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
 - FOLLOW-UPS: rate-limiting/anti-spam on notifications (declared out-of-scope; every send is audited so abuse is
   visible); rich/structured messages (plain text only in v1); a shared `fakeContext` test factory; downstream
   consumers can now wire delivery (`pipeline-career.md`, `pipeline-secretary.md`) onto `ctx.notify`.
+
+## Signal channel via signal-cli (device-link pairing + send-only v1) — SHIPPED
+- The last DEFERRED connections channel. Spec: `specs/signal-channel.md`. Issue-capped: this entry + the commit
+  are the record (Rule 11). Omar approved SPEC + PLAN at the gates; chose send-only+pairing / per-call spawn /
+  vault account — the smallest correct increment, and (with the just-shipped `ctx.notify`) Signal is immediately
+  a notification target (a pipeline result -> the user's Signal "Note to Self").
+- ARCHITECTURE (the key call): signal-cli is an EXTERNAL BINARY (no hosted API, no npm SDK) — reached via the
+  existing `ProcessRunner` seam exactly as the LLM CLI adapters shell out to `claude`/`codex`. So Signal is a
+  CORE handler (`connections/signal.ts`), NOT an opt-in package (contrast whatsapp-web/Baileys, which bundled a
+  library). ZERO new npm dependency; the lockfile is unchanged. Egress is a subprocess, not HTTP — so
+  `allowlistedFetch`/the host-allowlist is N/A for the `local-cli` transport; `send` asserts `NETWORK_FETCH`
+  directly against the handler grant. No migration, no Capability-union change.
+- THE SEAM (`connections/signal-cli.ts`): a small injected `SignalCli` — `probe`/`send` ride the BATCH
+  `ProcessRunner` (`signal-cli --output=json listAccounts` to verify linked; `-a <acct> -o json send -m <text>
+  <recipient>`), and `link` rides a STREAMING `Bun.spawn` seam because `signal-cli link` prints the
+  `sgnl://linkdevice?...` URI WHILE it blocks awaiting a scan (the batch runner only returns at exit). The
+  fiddly streaming/merge glue (read+merge stdout+stderr into lines) is isolated in the default impl; the pure,
+  testable surface (`parseSignalLinkLine`, `linkEventsFromLines`, `streamLines`, `mergeStreamLines`) is unit-
+  tested with constructed ReadableStreams + a fake runner, so the suite spawns nothing.
+- PAIRING is self-driving QR device-linking (`pairingNeedsInbound:false`) — slots into the EXISTING
+  whatsapp-web coordinator branch with NO `PairingCoordinator` change. `startPairing` streams the URI as a
+  `PairingPrompt{kind:"code"}`, and on "Associated with: <number>" persists the account to the vault
+  (`signal_account`) and emits `linked{chatId:<number>}` (which the coordinator records as `params.defaultChatId`
+  -> the Note-to-Self notify destination). signal-cli owns the real session keys in its own encrypted data dir;
+  Vesper's vault holds ONLY the account number (documented deviation from "all creds in the vault").
+- REVIEW caught a real bug: in `startPairing` the `linked` flag was set BEFORE `await vault.set(...)`, so a
+  vault-write failure would end the stream with NO terminal update (the catch's `if (!linked)` skipped). Fixed by
+  persisting FIRST, then flipping `linked`; added a test (vault.set throws -> `error`, not a silent end).
+- SPEC DELTA: extended `ConnectionErrorReason` with `"not_installed"` (the spec referenced it but the union
+  lacked it) so a missing signal-cli surfaces an honest "brew install signal-cli" reason. No exhaustive switch on
+  the reason existed, so the variant is additive. Stale plugin/catalog doc-comments ("Signal is a catalog entry
+  with no plugin yet") were corrected; the `channelStates`/CLI tests that used `signal` as the "no handler"
+  example now use `whatsapp-web` (the only catalog id with no BUILT-IN plugin — it registers at runtime).
+- Verified: 916 tests / 0 fail (+26); coverage signal.ts 100%, signal-cli.ts 86% (uncovered = the `Bun.spawn`
+  glue, like `runProcess` itself); biome clean; tsc adds 0 new errors; NO new npm dependency; NO migration. NOT
+  exercised against a live signal-cli (none in CI) — the exact probe subcommand + the "Associated with" line
+  format are signal-cli-version-dependent and the main unverified risk (the seam is mocked end to end).
+- FOLLOW-UPS: inbound receive -> chatbot (needs the long-lived `signal-cli daemon --http` JSON-RPC transport —
+  the documented evolution; egress would then ride `allowlistedFetch` to 127.0.0.1); group messaging /
+  attachments; verifying the probe + link line formats against a real signal-cli build. With Signal shipped, the
+  connections channel set (Telegram, Discord, WhatsApp Cloud, WhatsApp-Web, Signal) is complete.
