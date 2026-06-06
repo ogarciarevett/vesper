@@ -68,14 +68,43 @@ function tail(text: string, max = 1200): string {
   return text.length <= max ? text : text.slice(-max);
 }
 
-/** Run `bun test` then `biome ci` inside the worktree; first failure short-circuits. */
+/** A finished command's exit info — the {@link spawnInDir} shape minus timing. */
+export interface TestStep {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Did `bun test` pass? Bun exits NONZERO when ZERO test files match its glob — that
+ * is "nothing to run", not a failure. A change that adds no bun tests must NOT be
+ * reported as `test_failed` (biome still gates lint). Any other nonzero exit IS a
+ * real failure.
+ */
+export function bunTestPassed(step: TestStep): boolean {
+  if (step.exitCode === 0) return true;
+  return /0 test files matching/.test(`${step.stdout}\n${step.stderr}`);
+}
+
+/**
+ * Did `biome ci` pass? Biome exits NONZERO with "No files were processed" when the
+ * worktree has no Biome-supported files (e.g. a change touching only docs/config or
+ * a non-code subset). That is "nothing to lint", not a failure. Any other nonzero
+ * exit IS a real lint failure.
+ */
+export function biomeCiPassed(step: TestStep): boolean {
+  if (step.exitCode === 0) return true;
+  return /No files were processed/.test(`${step.stdout}\n${step.stderr}`);
+}
+
+/** Run `bun test` then `biome ci` inside the worktree; first real failure short-circuits. */
 async function defaultRunTest(wt: Worktree): Promise<RunTestResult> {
   const test = await spawnInDir(wt.path, "bun", ["test"]);
-  if (test.exitCode !== 0) {
+  if (!bunTestPassed(test)) {
     return { passed: false, summary: `bun test failed:\n${tail(test.stdout + test.stderr)}` };
   }
   const lint = await spawnInDir(wt.path, "bunx", ["biome", "ci", "."]);
-  if (lint.exitCode !== 0) {
+  if (!biomeCiPassed(lint)) {
     return { passed: false, summary: `biome ci failed:\n${tail(lint.stdout + lint.stderr)}` };
   }
   return { passed: true, summary: "bun test + biome ci passed" };
