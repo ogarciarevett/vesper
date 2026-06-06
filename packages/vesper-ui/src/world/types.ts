@@ -52,6 +52,56 @@ export interface RunTreeInfo {
 }
 
 /**
+ * One line of a diff, GitHub-PR style. `kind` is `context` (unchanged, shown in
+ * both columns), `insert` (added line, green), or `delete` (removed line, red).
+ * `oldLine`/`newLine` are 1-based file line numbers (null on the side a line does
+ * not exist). The UI-facing mirror of the software-engineer pipeline's `DiffLine`.
+ */
+export interface SweDiffLine {
+  readonly kind: "context" | "insert" | "delete";
+  readonly content: string;
+  readonly oldLine: number | null;
+  readonly newLine: number | null;
+}
+
+/** A contiguous diff hunk (`@@ ... @@`) with its lines. */
+export interface SweDiffHunk {
+  readonly header: string;
+  readonly oldStart: number;
+  readonly oldLines: number;
+  readonly newStart: number;
+  readonly newLines: number;
+  readonly lines: readonly SweDiffLine[];
+}
+
+/** One file's diff within a proposed change. */
+export interface SweFileDiff {
+  readonly oldPath: string | null;
+  readonly newPath: string | null;
+  readonly path: string;
+  readonly status: "added" | "deleted" | "modified" | "renamed";
+  readonly additions: number;
+  readonly deletions: number;
+  readonly binary: boolean;
+  readonly hunks: readonly SweDiffHunk[];
+}
+
+/**
+ * The structured diff of a software-engineer pipeline's proposed change, served by
+ * `GET /api/runs/:runId/diff` and rendered as a GitHub-PR-style review. The
+ * server-serialized mirror of the pipeline's `ParsedDiff`.
+ */
+export interface SweDiffView {
+  readonly runId: string;
+  readonly changeId: string;
+  readonly staged: boolean;
+  readonly files: readonly SweFileDiff[];
+  readonly additions: number;
+  readonly deletions: number;
+  readonly fileCount: number;
+}
+
+/**
  * A live agent process detected on this machine (the "echo" of agents running) —
  * the UI-facing shape of a `@vesper/core` `AgentPresence`. These are NOT Vesper
  * pipelines; they are external agents (a `claude`/`codex` CLI, a desktop app) seen

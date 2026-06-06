@@ -1147,3 +1147,41 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   954 tests / 0 fail (unchanged); biome clean. `dist/` + `src/generated/` stay gitignored (build artifacts).
 - FOLLOW-UPS: a real `npm publish` against a pushed tag (needs the `NPM_TOKEN` secret — not runnable here);
   Homebrew tap / Linux / Windows install paths (out of scope, later). Issue-capped: record = this entry + spec + commit.
+
+## Software Engineer pipeline (flagship, `specs/software-engineer-pipeline.md`) — SHIPPED
+- Omar's "last slice" (authorized 2026-06-06): the flagship `@vesper/pipelines/software-engineer` — a
+  VISUALIZED, HUMAN-GATED coding cycle that runs Vesper's own SPEC->...->SHIP loop as a product feature,
+  every change confined to a throwaway git worktree and STAGED-then-STOPPED (never commits/merges/pushes).
+- PLAN gate: at SPEC-already-done I produced a 10-task plan and stopped for Omar's ack. He approved + asked
+  for the diff to read "like GitHub PRs". Confirmed the spec's hard precondition was ALREADY met: the
+  out-of-band approval token shipped in `vesper-core/approval` + `requireApproval` (no security-hardening
+  blocker). Re-verified the backbone via an Explore agent (signatures had drifted from the 5-day-old spec).
+- BUILT via the Foundation parallel pattern: 4 file-disjoint foundation modules (`git`+`worktree`, `parse`,
+  `diff`, `changes`) by parallel sub-agents (117 tests); the lead then integrated the `cycle`/`handler`/
+  `prompts`/`ids`/`defaults` core, the registry wiring, the two UI routes, the daemon host wiring, and the
+  GitHub-PR diff-review client. test-engineer wrote the cycle/handler/prompts suites (no impl bugs found).
+- KEY DESIGN: the LEAD drives the thinking steps directly (`ctx.complete` + the fail-closed parsers + a
+  `GitRunner` over the `git -C <dir>` form, since `RunOptions` has NO cwd) and spawns sub-agents ONLY for the
+  BUILD fan-out (`Promise.allSettled` over `ctx.spawn("swe:build")`) — the one step with real parallelism,
+  per-task FS_WRITE scoping, and a run-tree to show. The human gate is an in-process `ChangeDecisionCoordinator`
+  (modeled on `pairing-coordinator`) shared between the blocked cycle and the token-gated decision route. The
+  GH-PR diff: a per-file/per-hunk/per-line `parseUnifiedDiff` model -> a dark-glass modal with line-number
+  gutters, +/- coloring, collapsible files, and Approve/Reject + the single-use approval code.
+- DELTAS from the 8-cap spec (flagged): capabilities are now 10 — the lead declares the full superset incl.
+  `PROCESS_RUN` (git shells out) + `SPAWN_SUBAGENT`, so `grantedCapabilities()` covers the spawn-only child.
+  No migration (the `events` table absorbs `swe_*` kinds; live trace rides `run_events`).
+- v1 SCOPE (spec "MAY" clauses, deferred): diff-only (the OSS browser-VSCode child is a follow-on); one
+  aggregate BUILD change gated (per-file selective staging later); reject/test-fail/SIMPLIFY don't auto-retry;
+  worktree PRESERVED on every post-build terminal state (the developer commits/merges out of band) and removed
+  only on a SPEC/PLAN parse failure.
+- GOTCHA (the close-out catch): `make-software-engineer.ts` + `daemon-run.ts` import `makeGitRunner`/
+  `parseUnifiedDiff`/`SWE_SOURCE`/`ChangeDecisionCoordinator`/`ChangeDecision` from `@vesper/pipelines`, but
+  `pipelines/index.ts` only re-exported a subset of the software-engineer barrel. `tsc` passed (type-only
+  resolution chained through the barrel) but the runtime ESM loader threw `Export named 'makeGitRunner' not
+  found`, failing EVERY test that transitively imports the CLI graph. Lesson: a missing VALUE re-export through
+  a workspace barrel is invisible to `tsc --noEmit` but fatal at load — `bun test` (whole repo) is the real gate.
+  Fixed by re-exporting the host surface from `pipelines/index.ts`.
+- VERIFIED: 1165 tests / 0 fail (+~210 for this slice); `tsc --noEmit` 0 errors; biome clean on all touched
+  files (the only `biome ci` errors are pre-existing `client/index.html` `!important` styles, unchanged here);
+  no new dependency, no migration, no LLM SDK (Hard rule 12 intact — the brain is the CLI via `ctx.complete`).
+  Issue-capped: record = this entry + spec + commit.

@@ -42,7 +42,28 @@ import {
   skillTrainHandler,
   skillTrainTaskInput,
 } from "./skill-train/handler.ts";
+import {
+  type ChangeDecisionCoordinator,
+  createSoftwareEngineerHandler,
+  createSweBuildHandler,
+  defaultBuildDeps,
+  defaultLeadDeps,
+  SOFTWARE_ENGINEER_HANDLER_ID,
+  SWE_BUILD_HANDLER_ID,
+  softwareEngineerTaskInput,
+} from "./software-engineer/index.ts";
 
+export type { ChangeDecision, ParsedDiff, SweBuildDeps } from "./software-engineer/index.ts";
+
+// Re-export the software-engineer host surface so the daemon (cli) can wire the
+// shared coordinator and the UI diff/decision provider through `@vesper/pipelines`.
+export {
+  ChangeDecisionCoordinator,
+  ChangeDecisionError,
+  makeGitRunner,
+  parseUnifiedDiff,
+  SWE_SOURCE,
+} from "./software-engineer/index.ts";
 export {
   AUTO_EVOLVE_HANDLER_ID,
   autoEvolveHandler,
@@ -58,10 +79,13 @@ export {
   routerTaskInput,
   SELFTEST_HANDLER_ID,
   SKILL_TRAIN_HANDLER_ID,
+  SOFTWARE_ENGINEER_HANDLER_ID,
+  SWE_BUILD_HANDLER_ID,
   selftestHandler,
   selftestTaskInput,
   skillTrainHandler,
   skillTrainTaskInput,
+  softwareEngineerTaskInput,
 };
 
 /**
@@ -75,6 +99,21 @@ export interface PipelineDescriptor {
   readonly handler: TaskHandler;
   readonly taskInput?: RegisterTaskInput;
 }
+
+/**
+ * Default lead handler used until the daemon wires the shared decision coordinator.
+ * The lead's human-approval gate needs the coordinator the UI decision route also
+ * holds; without it a run could never be approved, so the un-wired default fails
+ * fast instead of hanging. `registerPipelines` overrides this when a coordinator is
+ * supplied (see {@link RegisterPipelinesOptions.softwareEngineerCoordinator}).
+ */
+const softwareEngineerUnwired: TaskHandler = (ctx) => {
+  ctx.recordRun({
+    status: "error",
+    summary:
+      "software-engineer pipeline is not wired (no decision coordinator) — run via the daemon",
+  });
+};
 
 /** Every built-in Vesper pipeline. */
 export const PIPELINES: readonly PipelineDescriptor[] = [
@@ -109,11 +148,27 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handler: autoEvolveHandler,
     taskInput: autoEvolveTaskInput,
   },
+  // The flagship: a visualized, human-gated coding cycle in a throwaway git
+  // worktree. The lead spawns one `swe:build` sub-agent per file-disjoint task,
+  // shows the diff, BLOCKS on a token-gated human decision, then stages a single
+  // Conventional Commit and STOPS (never commits/merges/pushes). Declares the full
+  // lead capability superset so the host ceiling covers the spawn-only build child.
+  {
+    handlerId: SOFTWARE_ENGINEER_HANDLER_ID,
+    handler: softwareEngineerUnwired,
+    taskInput: softwareEngineerTaskInput,
+  },
   // Spawn-only worker: registered as a handler so orchestrator-demo can `ctx.spawn`
   // it, but it has no task of its own (not shown in `schedule list`).
   {
     handlerId: DEMO_WORKER_HANDLER_ID,
     handler: demoWorkerHandler,
+  },
+  // Spawn-only BUILD sub-agent for the software-engineer pipeline: writes files into
+  // the worktree. Registered so the lead can `ctx.spawn` it by id; no task of its own.
+  {
+    handlerId: SWE_BUILD_HANDLER_ID,
+    handler: createSweBuildHandler(defaultBuildDeps()),
   },
 ];
 
@@ -154,6 +209,30 @@ export interface RegisterPipelinesOptions {
    * (the built-in handler), so non-daemon callers and tests behave unchanged.
    */
   readonly getDefaultParams?: (handlerId: string) => RunParams;
+  /**
+   * The shared decision coordinator that bridges a running software-engineer cycle
+   * and the UI decision route. When provided, the lead handler is wired with the
+   * production cycle seams (git, store, worktree TEST) bound to this coordinator;
+   * when omitted, the lead registers as an un-wired fail-fast handler.
+   */
+  readonly softwareEngineerCoordinator?: ChangeDecisionCoordinator;
+}
+
+/** Resolve the handler to register for a descriptor, applying any host-injected wiring. */
+function resolveHandler(
+  descriptor: PipelineDescriptor,
+  options: RegisterPipelinesOptions,
+): TaskHandler {
+  if (descriptor.handlerId === ROUTER_HANDLER_ID && options.getDefaultParams !== undefined) {
+    return makeRouterHandler({ getDefaultParams: options.getDefaultParams });
+  }
+  if (
+    descriptor.handlerId === SOFTWARE_ENGINEER_HANDLER_ID &&
+    options.softwareEngineerCoordinator !== undefined
+  ) {
+    return createSoftwareEngineerHandler(defaultLeadDeps(options.softwareEngineerCoordinator));
+  }
+  return descriptor.handler;
 }
 
 export function registerPipelines(
@@ -162,13 +241,10 @@ export function registerPipelines(
   options: RegisterPipelinesOptions = {},
 ): void {
   for (const descriptor of PIPELINES) {
-    // The daemon injects the template reader into the router so edited templates take
-    // effect; every other handler registers as declared.
-    const handler =
-      descriptor.handlerId === ROUTER_HANDLER_ID && options.getDefaultParams !== undefined
-        ? makeRouterHandler({ getDefaultParams: options.getDefaultParams })
-        : descriptor.handler;
-    registry.register(descriptor.handlerId, handler);
+    // The daemon injects the template reader into the router and the shared decision
+    // coordinator into the software-engineer lead; every other handler registers as
+    // declared.
+    registry.register(descriptor.handlerId, resolveHandler(descriptor, options));
 
     // Spawn-only descriptors (no taskInput) register the handler only.
     if (descriptor.taskInput === undefined) continue;

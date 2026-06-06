@@ -12,7 +12,7 @@ import type {
 import { ApprovalError, encodeQr, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
-import type { PresenceInfo, RunEventInfo, RunTreeInfo } from "../world/types.ts";
+import type { PresenceInfo, RunEventInfo, RunTreeInfo, SweDiffView } from "../world/types.ts";
 import { defaultPresenceDetector, type PresenceDetector } from "./presence.ts";
 
 /** A helper-CLI's detected status for the `/api/status` route + titlebar pill. */
@@ -96,6 +96,24 @@ export interface UiServerDeps {
    */
   readonly pairing?: {
     startPairing(channelId: string): Promise<PairingSession>;
+  };
+  /**
+   * Software-engineer pipeline surface. `loadDiff` returns the structured per-file
+   * diff for a run's proposed change (read-only, rendered GitHub-PR style); `decide`
+   * delivers a human approve/reject to the blocked cycle via the shared decision
+   * coordinator and returns whether a waiter was actually unblocked. Absent -> the
+   * `/diff` + `/decision` routes return 503 (the daemon wired no provider).
+   */
+  readonly softwareEngineer?: {
+    loadDiff(
+      runId: string,
+      opts: { readonly changeId?: string; readonly staged?: boolean },
+    ): Promise<SweDiffView | null>;
+    decide(
+      runId: string,
+      changeId: string,
+      decision: { readonly decision: "approve" | "reject"; readonly reason?: string },
+    ): boolean;
   };
   /**
    * Prebuilt client assets. When set, the server serves these instead of reading
@@ -520,6 +538,54 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         if (!UUID_RE.test(runId)) return json({ error: "invalid runId" }, 400);
         const tree = store.runTree(runId);
         return tree === null ? json({ error: "unknown run" }, 404) : json(mapTreeToInfo(tree));
+      }
+
+      // GET /api/runs/:runId/diff?changeId=&staged= — the structured per-file diff of a
+      // software-engineer proposed change, rendered GitHub-PR style. Read-only; behind
+      // isLocalRequest (above) + the UUID guard. 503 when no provider is wired.
+      const diffMatch = pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
+      if (req.method === "GET" && diffMatch) {
+        const runId = decodeURIComponent(diffMatch[1] ?? "");
+        if (!UUID_RE.test(runId)) return json({ error: "invalid runId" }, 400);
+        if (deps.softwareEngineer === undefined) {
+          return json({ error: "software-engineer surface not configured" }, 503);
+        }
+        const changeId = url.searchParams.get("changeId");
+        const stagedRaw = url.searchParams.get("staged");
+        const view = await deps.softwareEngineer.loadDiff(runId, {
+          ...(changeId !== null && changeId.length > 0 ? { changeId } : {}),
+          staged: stagedRaw === "1" || stagedRaw === "true",
+        });
+        return view === null ? json({ error: "no diff for run" }, 404) : json(view);
+      }
+
+      // POST /api/runs/:runId/changes/:changeId/decision — deliver a human approve/reject
+      // to a BLOCKED software-engineer cycle. Requires isLocalRequest (above) AND a valid
+      // single-use out-of-band approval code: isLocalRequest stops CSRF/DNS-rebinding but
+      // does not prove human intent. Body: { decision: "approve"|"reject", reason? }.
+      const decisionMatch = pathname.match(/^\/api\/runs\/([^/]+)\/changes\/([^/]+)\/decision$/);
+      if (req.method === "POST" && decisionMatch) {
+        const runId = decodeURIComponent(decisionMatch[1] ?? "");
+        if (!UUID_RE.test(runId)) return json({ error: "invalid runId" }, 400);
+        const tokenError = requireApproval(req, deps.approvalTokens);
+        if (tokenError !== null) return tokenError;
+        if (deps.softwareEngineer === undefined) {
+          return json({ error: "software-engineer surface not configured" }, 503);
+        }
+        const changeId = decodeURIComponent(decisionMatch[2] ?? "");
+        const body: unknown = await req.json().catch(() => null);
+        const decision = isRecord(body) ? body.decision : undefined;
+        if (decision !== "approve" && decision !== "reject") {
+          return json({ error: "decision must be 'approve' or 'reject'" }, 400);
+        }
+        const reason = isRecord(body) && typeof body.reason === "string" ? body.reason : undefined;
+        const delivered = deps.softwareEngineer.decide(runId, changeId, {
+          decision,
+          ...(reason !== undefined ? { reason } : {}),
+        });
+        return delivered
+          ? json({ ok: true, decision })
+          : json({ error: "no change awaiting this decision" }, 409);
       }
 
       // POST /api/pipelines/:id/run

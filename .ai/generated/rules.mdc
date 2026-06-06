@@ -409,15 +409,37 @@ WhatsApp-Web dep is lazy-loaded by variable-specifier dynamic import, so it neve
 clone. Root `package.json` stays `private`; only the generated `dist/` manifest is published. Added a root
 `LICENSE` (MIT). Issue-capped: record = spec + `cycle-log.md` + commit (Rule 11).
 
+**Software Engineer flagship pipeline (v1) SHIPPED.** `specs/software-engineer-pipeline.md`: the deepest
+pipeline — a VISUALIZED, HUMAN-GATED coding cycle that runs Vesper's own SPEC->...->SHIP loop as a product
+feature, with every file write confined to a throwaway git **worktree** and the result STAGED-then-STOPPED
+(it NEVER commits/merges/pushes — the developer does that out of band). New
+`packages/pipelines/software-engineer/` (`git`/`worktree` seam, fail-closed `parse`, a GitHub-PR-grade
+`diff` model, the in-process `changes` decision coordinator, `prompts`, the `cycle` loop, `handler`,
+`defaults`, `ids` + full tests). The LEAD drives the thinking steps via `ctx.complete` and spawns sub-agents
+ONLY for the BUILD fan-out (`Promise.allSettled` over `ctx.spawn("swe:build")`) — the one step with real
+parallelism + per-task FS_WRITE scoping + a run-tree to show. The human gate is a shared
+`ChangeDecisionCoordinator` bridging the blocked cycle and the token-gated decision route. Two UI routes
+(`GET /api/runs/:runId/diff`, token-gated `POST /api/runs/:runId/changes/:changeId/decision` reusing the
+shipped `requireApproval` + `x-vesper-approval` code) feed a GitHub-PR-style diff-review modal
+(`vesper-ui/.../diff-review.ts`: per-file/per-hunk, line-number gutters, +/- coloring, collapse, Approve/Reject).
+Daemon-wired (`make-software-engineer.ts` + the shared coordinator). The lead declares the full capability
+superset incl. `PROCESS_RUN` + `SPAWN_SUBAGENT` so the host ceiling covers the spawn-only child; NO migration
+(the `events` table absorbs `swe_*` kinds); brain stays the CLI (Hard rule 12 intact). v1 is diff-only
+(OSS browser-VSCode child deferred), gates one aggregate BUILD change (per-file staging deferred), and
+preserves the worktree on every post-build terminal state (Hard rule 4). Issue-capped: record = spec +
+`cycle-log.md` + commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **954 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1165 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
 the Voice **native shell** follow-up (Tauri/Rust audio + Whisper STT + hotkey + Mode-B dictation, gated on
-Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice; the Software Engineer flagship pipeline
-(`specs/software-engineer-pipeline.md`). Distribution's remaining follow-ups: a real `npm publish` against a
-tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths. Update this section after each ship.
+Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice. Software-Engineer follow-ons: the opt-in OSS
+browser-VSCode child, per-file selective staging, the reject->rebuild + simplify->re-gate loops, and a
+cwd-hardened TEST sandbox (owned by `security-hardening.md`). Distribution's remaining follow-ups: a real
+`npm publish` against a tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths. Update
+this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the

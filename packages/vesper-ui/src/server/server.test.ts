@@ -12,6 +12,7 @@ import {
   Scheduler,
   type Store,
 } from "@vesper/core";
+import type { SweDiffView } from "../world/types.ts";
 import { startUiServer, type UiServerHandle } from "./server.ts";
 
 const fakeComplete: CompleteFn = async () => ({
@@ -708,5 +709,196 @@ describe("UI server — chat + templates", () => {
     // Returns ok; the code is surfaced OUT-OF-BAND on the daemon TTY, never in the body.
     expect(body).toEqual({ ok: true });
     expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{6,}/);
+  });
+});
+
+describe("UI server — software-engineer diff + decision routes", () => {
+  const RUN_UUID = "11111111-1111-4111-8111-111111111111";
+  const CHANGE_ID = `${RUN_UUID}:build`;
+  const OTHER_UUID = "22222222-2222-4222-8222-222222222222";
+  const SAMPLE_DIFF: SweDiffView = {
+    runId: RUN_UUID,
+    changeId: CHANGE_ID,
+    staged: false,
+    additions: 1,
+    deletions: 0,
+    fileCount: 1,
+    files: [
+      {
+        oldPath: null,
+        newPath: "src/a.ts",
+        path: "src/a.ts",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        binary: false,
+        hunks: [
+          {
+            header: "@@ -0,0 +1 @@",
+            oldStart: 0,
+            oldLines: 0,
+            newStart: 1,
+            newLines: 1,
+            lines: [{ kind: "insert", content: "export const a = 1;", oldLine: null, newLine: 1 }],
+          },
+        ],
+      },
+    ],
+  };
+
+  let sDir: string;
+  let sDb: Database;
+  let sStore: Store;
+  let sTokens: ApprovalTokenStore;
+  let sHandle: UiServerHandle;
+  let loadDiffCalls: { runId: string; opts: { changeId?: string; staged?: boolean } }[];
+  let decideCalls: { runId: string; changeId: string; decision: string; reason?: string }[];
+  let decideReturns: boolean;
+
+  beforeEach(async () => {
+    sDir = mkdtempSync(join(tmpdir(), "vesper-ui-swe-"));
+    const path = join(sDir, "vesper.db");
+    openStore(path).close();
+    sDb = new Database(path);
+    sStore = openStore(path);
+    sTokens = new ApprovalTokenStore();
+    loadDiffCalls = [];
+    decideCalls = [];
+    decideReturns = true;
+
+    const registry = new HandlerRegistry();
+    const scheduler = new Scheduler({ db: sDb, registry, grants: CAPABILITIES });
+    sHandle = await startUiServer({
+      scheduler,
+      store: sStore,
+      port: 0,
+      approvalTokens: sTokens,
+      softwareEngineer: {
+        loadDiff: async (runId, opts) => {
+          loadDiffCalls.push({ runId, opts });
+          // Only the known run has a diff; any other valid UUID resolves to null (404).
+          return runId === RUN_UUID ? { ...SAMPLE_DIFF, staged: opts.staged === true } : null;
+        },
+        decide: (runId, changeId, decision) => {
+          decideCalls.push({ runId, changeId, decision: decision.decision, reason: decision.reason });
+          return decideReturns;
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    sHandle.stop();
+    sStore.close();
+    sDb.close();
+    rmSync(sDir, { recursive: true, force: true });
+  });
+
+  test("GET /diff returns the structured per-file diff", async () => {
+    const res = await fetch(`${sHandle.url}/api/runs/${RUN_UUID}/diff`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SweDiffView;
+    expect(body.fileCount).toBe(1);
+    expect(body.files[0]?.path).toBe("src/a.ts");
+    expect(body.files[0]?.hunks[0]?.lines[0]?.kind).toBe("insert");
+  });
+
+  test("GET /diff threads the staged flag through", async () => {
+    await fetch(`${sHandle.url}/api/runs/${RUN_UUID}/diff?staged=1`);
+    expect(loadDiffCalls.at(-1)?.opts.staged).toBe(true);
+  });
+
+  test("GET /diff rejects a non-UUID runId (400)", async () => {
+    const res = await fetch(`${sHandle.url}/api/runs/not-a-uuid/diff`);
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /diff returns 404 when no diff exists for the run", async () => {
+    const res = await fetch(`${sHandle.url}/api/runs/${OTHER_UUID}/diff`);
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /diff returns 503 when no software-engineer provider is wired", async () => {
+    const registry = new HandlerRegistry();
+    const scheduler = new Scheduler({ db: sDb, registry, grants: CAPABILITIES });
+    const bare = await startUiServer({ scheduler, store: sStore, port: 0 });
+    try {
+      const res = await fetch(`${bare.url}/api/runs/${RUN_UUID}/diff`);
+      expect(res.status).toBe(503);
+    } finally {
+      bare.stop();
+    }
+  });
+
+  test("POST /decision WITHOUT an approval token is refused and never reaches decide()", async () => {
+    const res = await fetch(
+      `${sHandle.url}/api/runs/${RUN_UUID}/changes/${encodeURIComponent(CHANGE_ID)}/decision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision: "approve" }),
+      },
+    );
+    expect(res.status).not.toBe(200);
+    expect([401, 403]).toContain(res.status);
+    expect(decideCalls).toHaveLength(0);
+  });
+
+  test("POST /decision with a valid token approves and delivers to the coordinator", async () => {
+    const code = sTokens.mint();
+    const res = await fetch(
+      `${sHandle.url}/api/runs/${RUN_UUID}/changes/${encodeURIComponent(CHANGE_ID)}/decision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-vesper-approval": code },
+        body: JSON.stringify({ decision: "approve" }),
+      },
+    );
+    expect(res.status).toBe(200);
+    expect(decideCalls).toHaveLength(1);
+    expect(decideCalls[0]?.decision).toBe("approve");
+    expect(decideCalls[0]?.changeId).toBe(CHANGE_ID);
+  });
+
+  test("POST /decision forwards a reject reason", async () => {
+    const code = sTokens.mint();
+    await fetch(
+      `${sHandle.url}/api/runs/${RUN_UUID}/changes/${encodeURIComponent(CHANGE_ID)}/decision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-vesper-approval": code },
+        body: JSON.stringify({ decision: "reject", reason: "nope" }),
+      },
+    );
+    expect(decideCalls[0]?.decision).toBe("reject");
+    expect(decideCalls[0]?.reason).toBe("nope");
+  });
+
+  test("POST /decision rejects an invalid decision body (400)", async () => {
+    const code = sTokens.mint();
+    const res = await fetch(
+      `${sHandle.url}/api/runs/${RUN_UUID}/changes/${encodeURIComponent(CHANGE_ID)}/decision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-vesper-approval": code },
+        body: JSON.stringify({ decision: "maybe" }),
+      },
+    );
+    expect(res.status).toBe(400);
+    expect(decideCalls).toHaveLength(0);
+  });
+
+  test("POST /decision returns 409 when no waiter is pending", async () => {
+    decideReturns = false;
+    const code = sTokens.mint();
+    const res = await fetch(
+      `${sHandle.url}/api/runs/${RUN_UUID}/changes/${encodeURIComponent(CHANGE_ID)}/decision`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-vesper-approval": code },
+        body: JSON.stringify({ decision: "approve" }),
+      },
+    );
+    expect(res.status).toBe(409);
   });
 });

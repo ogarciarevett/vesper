@@ -12,7 +12,12 @@ import {
   Scheduler,
   startIpcServer,
 } from "@vesper/core";
-import { grantedCapabilities, PIPELINES, registerPipelines } from "@vesper/pipelines";
+import {
+  ChangeDecisionCoordinator,
+  grantedCapabilities,
+  PIPELINES,
+  registerPipelines,
+} from "@vesper/pipelines";
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
 import { makeCompleteFn } from "../cli-resolver.ts";
@@ -21,6 +26,7 @@ import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts"
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
 import { makeNotifyFn } from "../make-notify.ts";
+import { makeSoftwareEngineerSurface } from "../make-software-engineer.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
 import { PairingCoordinator } from "../pairing-coordinator.ts";
 import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
@@ -87,8 +93,12 @@ export const daemonRunCommand: Command = {
       notify,
       redactSummaries: config.storage?.redactRunSummaries === true,
     });
+    // The software-engineer pipeline's human-approval gate and the UI decision route
+    // share ONE coordinator: the running cycle blocks on it; the route resolves it.
+    const sweCoordinator = new ChangeDecisionCoordinator();
     registerPipelines(scheduler, registry, {
       getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
+      softwareEngineerCoordinator: sweCoordinator,
     });
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
@@ -139,6 +149,7 @@ export const daemonRunCommand: Command = {
       detectClis: async () => installed.map((name) => ({ name, status: "installed", ok: true })),
       detectPresences: presenceDetectorFor(presenceMatchers),
       approvalTokens,
+      softwareEngineer: makeSoftwareEngineerSurface({ coordinator: sweCoordinator, store: uiStore }),
       connections: {
         list: async () =>
           channelStates({
@@ -202,6 +213,7 @@ export const daemonRunCommand: Command = {
         // best-effort audit; never block shutdown.
       }
       removePidFile(pidPath());
+      sweCoordinator.stop();
       channelStop.stop();
       ui.stop();
       uiStore.close();

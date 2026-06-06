@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 import type { RunContextInfo, RunEventInfo, RunTreeInfo } from "../../world/types.ts";
 import { injectStyle, type LiveMessage, type SectionContext } from "../shell/section.ts";
+import { openDiffReview } from "./diff-review.ts";
 
 const RAIL_CSS = `
   .rail { display: flex; flex-direction: column; height: 100%; min-height: 0; }
@@ -27,7 +28,82 @@ const RAIL_CSS = `
   .akind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-2); min-width: 58px; }
   .amsg { color: var(--ink); word-break: break-word; }
   .alog .empty { font-size: 13px; color: var(--ink-faint); font-style: italic; }
+  .swe-review { margin-top: 8px; }
+  .swe-review-btn { padding: 5px 14px; border-radius: 8px; border: 1px solid var(--ok); background: rgba(58,208,127,0.1); color: var(--ok); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .swe-review-btn:hover:not(:disabled) { background: rgba(58,208,127,0.2); }
+  .swe-review-btn:disabled { opacity: 0.5; cursor: default; }
+  .swe-review-settled { font-size: 12px; color: var(--ink-faint); font-style: italic; }
 `;
+
+/** Parsed swe change state extracted from a run's event list. */
+interface SweState {
+  readonly changeId: string;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly settled: boolean;
+}
+
+/**
+ * Scan a run's events for a `change_proposed` complete event and, if present,
+ * note whether a subsequent `change_approved`/`change_rejected` event settled it.
+ */
+function sweStateFromEvents(events: RunEventInfo[], runId: string): SweState | null {
+  let changeId: string | null = null;
+  let additions = 0;
+  let deletions = 0;
+  let settled = false;
+  for (const ev of events) {
+    if (ev.runId !== runId || ev.kind !== "complete" || ev.data === undefined) continue;
+    const swe = ev.data.swe;
+    if (swe === "change_proposed") {
+      const cid = ev.data.changeId;
+      if (typeof cid === "string") {
+        changeId = cid;
+        additions = typeof ev.data.additions === "number" ? ev.data.additions : 0;
+        deletions = typeof ev.data.deletions === "number" ? ev.data.deletions : 0;
+      }
+    } else if (swe === "change_approved" || swe === "change_rejected") {
+      settled = true;
+    }
+  }
+  if (changeId === null) return null;
+  return { changeId, additions, deletions, settled };
+}
+
+/** Build the "Review change" button row for a proposed swe change. */
+function buildReviewWrap(state: SweState, runId: string, ctx: SectionContext): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "swe-review";
+  if (state.settled) {
+    const settled = document.createElement("span");
+    settled.className = "swe-review-settled";
+    settled.textContent = "Change reviewed";
+    wrap.append(settled);
+  } else {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "swe-review-btn";
+    btn.textContent = `Review change (+${state.additions} / -${state.deletions})`;
+    const changeId = state.changeId;
+    btn.addEventListener("click", () => openDiffReview(ctx, { runId, changeId }));
+    wrap.append(btn);
+  }
+  return wrap;
+}
+
+/** Mark an existing review button row as settled (idempotent). */
+function settleReviewWrap(row: HTMLElement): void {
+  const existing = row.querySelector<HTMLElement>(".swe-review");
+  if (existing === null) return;
+  const btn = existing.querySelector<HTMLButtonElement>(".swe-review-btn");
+  if (btn !== null) {
+    // Replace button with settled label in-place
+    const settled = document.createElement("span");
+    settled.className = "swe-review-settled";
+    settled.textContent = "Change reviewed";
+    existing.replaceChildren(settled);
+  }
+}
 
 /**
  * The Chat "Vesper activity" rail — a live tree of the run Vesper started for the
@@ -132,6 +208,30 @@ export class ActivityRail {
     if (log === null) return;
     if (log.querySelector(`[data-event-id="${ev.id}"]`) !== null) return;
     appendEventRow(log, ev);
+    // Handle swe change events: add/update the review button on the run row.
+    if (ev.kind === "complete" && ev.data !== undefined) {
+      const swe = ev.data.swe;
+      if (typeof swe === "string") this.#updateReviewButton(ev.runId, swe, ev.data);
+    }
+  }
+
+  #updateReviewButton(runId: string, swe: string, data: Record<string, unknown>): void {
+    const log = this.#logFor(runId);
+    if (log === null) return;
+    const row = log.parentElement;
+    if (row === null) return;
+
+    if (swe === "change_proposed") {
+      if (row.querySelector(".swe-review") !== null) return; // already present
+      const cid = data.changeId;
+      if (typeof cid !== "string") return;
+      const additions = typeof data.additions === "number" ? data.additions : 0;
+      const deletions = typeof data.deletions === "number" ? data.deletions : 0;
+      const state: SweState = { changeId: cid, additions, deletions, settled: false };
+      row.insertBefore(buildReviewWrap(state, runId, this.#ctx), log);
+    } else if (swe === "change_approved" || swe === "change_rejected") {
+      settleReviewWrap(row);
+    }
   }
 
   #updatePill(runId: string, context: RunContextInfo | null): void {
@@ -142,8 +242,9 @@ export class ActivityRail {
 
   #render(tree: RunTreeInfo, events: RunEventInfo[]): void {
     this.#body.replaceChildren();
-    this.#body.append(buildRunRow(tree, false, events));
-    for (const child of tree.children) this.#body.append(buildRunRow(child, true, events));
+    this.#body.append(buildRunRow(tree, false, events, this.#ctx));
+    for (const child of tree.children)
+      this.#body.append(buildRunRow(child, true, events, this.#ctx));
   }
 }
 
@@ -169,7 +270,12 @@ function appendEventRow(log: HTMLElement, ev: RunEventInfo): void {
   log.scrollTop = log.scrollHeight;
 }
 
-function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]): HTMLElement {
+function buildRunRow(
+  node: RunTreeInfo,
+  isChild: boolean,
+  events: RunEventInfo[],
+  ctx: SectionContext,
+): HTMLElement {
   const row = document.createElement("div");
   row.className = isChild ? "arow child" : "arow";
 
@@ -203,7 +309,15 @@ function buildRunRow(node: RunTreeInfo, isChild: boolean, events: RunEventInfo[]
     for (const ev of own) appendEventRow(log, ev);
   }
 
-  row.append(top, log);
+  row.append(top);
+
+  // Attach review button if a swe change_proposed event is present for this run.
+  const sweState = sweStateFromEvents(events, node.run.id);
+  if (sweState !== null) {
+    row.append(buildReviewWrap(sweState, node.run.id, ctx));
+  }
+
+  row.append(log);
   return row;
 }
 

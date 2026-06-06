@@ -15,4 +15,12 @@ export {
   type UiServerDeps,
   type UiServerHandle,
 } from "./server/server.ts";
-export type { PresenceInfo, RunEventInfo, RunTreeInfo } from "./world/types.ts";
+export type {
+  PresenceInfo,
+  RunEventInfo,
+  RunTreeInfo,
+  SweDiffHunk,
+  SweDiffLine,
+  SweDiffView,
+  SweFileDiff,
+} from "./world/types.ts";
