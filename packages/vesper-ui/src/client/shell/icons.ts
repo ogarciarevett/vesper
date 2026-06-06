@@ -39,7 +39,6 @@ export const ICONS: Record<string, string> = {
   ),
   diagnostics: svg('<path d="M3 12h4l2 6 4-13 2.5 7H21"/>'),
   about: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5v.5"/>'),
-  search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
 };
 
 /** A small status dot SVG (filled) — used by the titlebar pills. */

@@ -99,11 +99,7 @@ function bootShell(): void {
   for (const section of ALL_SECTIONS) router.register(section);
 
   sidebar = renderSidebar(nav, router.list(), (id) => void router.navigate(id));
-  mountTitlebar(titlebar, {
-    api,
-    sections: router.list(),
-    onNavigate: (id) => void router.navigate(id),
-  });
+  mountTitlebar(titlebar, { api });
 
   router.start();
   connectLive();
