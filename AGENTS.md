@@ -259,7 +259,8 @@ vesper/
 ### Out of scope (deferred by phase)
 sqlite-vec index (Scheduler); paperclip-style capture (Scheduler); ElevenLabs voice (Voice);
 elder-first consumer UI shell on the Bun/TS/web stack (Desktop; Tauri only if strictly required —
-see Hard rule 14); Linux/Windows vault backends (later); packaging + distribution (Launch).
+see Hard rule 14); Linux/Windows vault backends (later); packaging + distribution (Launch — now SHIPPED,
+see "Where we are").
 
 ---
 
@@ -386,14 +387,31 @@ Tauri/Rust audio shell — mic capture, Silero VAD, Whisper STT, global hotkey, 
 and the opt-in ElevenLabs cloud provider/CAI brain. No new dependency, no migration. Issue-capped: the
 record is the spec + `cycle-log.md` + the commit (Rule 11).
 
+**Installer + npm distribution (Launch) SHIPPED.** `specs/installer-distribution.md`: two friction-free
+install paths. (1) `install.sh` (repo root, POSIX `sh`, shellcheck-clean) — `curl ... | sh` fetches a
+release tarball (latest release, else `main`; `--version` pins), installs deps with Bun (refuses root,
+surfaces the Bun installer, `--omit=optional` by default with `--with-whatsapp` to include Baileys), and
+symlinks `vesper` onto PATH; never auto-`init`; idempotent (re-install ARCHIVES the old tree — Hard rule 4,
+no silent `rm`); a `--tarball` seam made a real end-to-end install verifiable locally. (2) npm — `bun run
+build:dist` (`scripts/build-dist.ts` + `dist-entry.ts`) bundles the workspace (`@vesper/{core,ui,pipelines}`)
+into ONE Bun-target ESM file with the UI client assets EMBEDDED (same `setEmbeddedClientAssets` trick as the
+desktop sidecar, so `vesper ui` works from the bundle), and emits a generated `dist/package.json` published
+as **`@ogarciarevett/vesper`** (the bare `vesper` name is taken; `os:["darwin"]`, `bin: vesper`). The opt-in
+WhatsApp-Web dep is lazy-loaded by variable-specifier dynamic import, so it never enters the static bundle.
+`.github/workflows/release.yml` (actionlint-clean) publishes on a `v*` tag (gate -> tag/version check -> build
+-> `npm publish --provenance`). Verified: `npm pack` + install the tarball -> `vesper status` works with NO
+clone. Root `package.json` stays `private`; only the generated `dist/` manifest is published. Added a root
+`LICENSE` (MIT). Issue-capped: record = spec + `cycle-log.md` + commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
 `bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **954 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
 the Voice **native shell** follow-up (Tauri/Rust audio + Whisper STT + hotkey + Mode-B dictation, gated on
-Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice; the one-line installer + npm publish
-(`specs/installer-distribution.md`, Launch). Update this section after each ship.
+Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice; the Software Engineer flagship pipeline
+(`specs/software-engineer-pipeline.md`). Distribution's remaining follow-ups: a real `npm publish` against a
+tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths. Update this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
 > A separate machine-level memory (claude-mem) handles cross-session user/project memory; the

@@ -79,6 +79,31 @@ Vesper keeps are *pipeline-side* (e.g. a GitHub token) in your OS keychain — n
 
 ## Install
 
+**One-liner** (fetches a release, installs deps with Bun, links `vesper` onto your PATH):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ogarciarevett/vesper/main/install.sh | sh
+```
+
+It never runs as root, never auto-creates `~/.vesper` (you run `vesper init`), and is re-runnable to
+upgrade. Pin a version with `--version <tag>`; include the opt-in WhatsApp-Web channel with
+`--with-whatsapp`. **Piping a script to a shell runs code you have not read** — if you prefer, download
+it, read it, then run it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ogarciarevett/vesper/main/install.sh -o install.sh
+less install.sh && sh install.sh
+```
+
+**From npm** (no clone; needs Bun on your PATH — the CLI runs under Bun):
+
+```sh
+bunx @ogarciarevett/vesper status     # run once, no install
+bun install -g @ogarciarevett/vesper  # or install the `vesper` command globally
+```
+
+**From source** (for development):
+
 ```sh
 git clone https://github.com/ogarciarevett/vesper.git
 cd vesper && bun install

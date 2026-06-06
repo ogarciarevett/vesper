@@ -1117,3 +1117,33 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   Hard-rule-14 nod + a Mac/Rust build + manual hardware verification); (2) the opt-in ElevenLabs cloud provider +
   CAI brain (NETWORK_FETCH + READ_VAULT + `allowlistedFetch("api.elevenlabs.io")`); (3) wiring `runVoiceTurn` to a
   real token stream if/when the daemon `complete` endpoint streams. Issue-capped: record = this entry + spec + commit.
+
+## Installer + npm distribution (Launch) — SHIPPED
+- Omar picked the installer slice next (authorized 2026-05-29). Two friction-free install surfaces.
+- SURFACE 1 — `install.sh` (repo root, POSIX `sh`, `set -eu`, shellcheck-clean): `curl ... | sh` -> refuse
+  root -> detect Bun (offer the official installer, surfaced, unless `--yes`) -> resolve a source tarball
+  (GitHub release `latest`, else `main`; `--version <tag>` pins) -> `bun install --production` (`--omit=optional`
+  by DEFAULT so the heavy Baileys WhatsApp-Web dep is opt-in via `--with-whatsapp`) -> symlink `vesper` onto
+  PATH (chmod +x the entry — the symlink target carries the `#!/usr/bin/env bun` shebang). Never auto-`init`.
+  Idempotent: a re-install ARCHIVES the old tree to `$PREFIX.bak.<ts>` (Hard rule 4 — no silent `rm`).
+- SURFACE 2 — npm (`scripts/build-dist.ts` + `packages/vesper-cli/src/dist-entry.ts`): `bun build --target=bun`
+  bundles the workspace (`@vesper/{core,ui,pipelines}`, 125 modules) into ONE 363 KB ESM file. `dist-entry`
+  EMBEDS the UI client assets via `setEmbeddedClientAssets` (+ the `with { type: "text" }` generated `.txt`
+  files, same trick as the desktop sidecar's `compiled-entry`) so `vesper ui` works from a single bundled
+  file with no `client/` dir. Emits a GENERATED `dist/package.json` (root stays `private`) published as
+  `@ogarciarevett/vesper` (the bare `vesper` name is TAKEN on npm — checked `npm view`; `os:["darwin"]`).
+- SURFACE 3 — `.github/workflows/release.yml` (actionlint-clean): `v*` tag -> `biome ci` + `bun test` gate ->
+  tag-equals-package-version check -> `bun run build:dist` -> `npm publish --provenance` from `dist/` (needs an
+  `NPM_TOKEN` secret). Build runs on `ubuntu-latest` (bundling is platform-agnostic even though the PUBLISHED
+  package is macOS-only).
+- DECISIONS: bundle into one artifact (not 4 interdependent packages); release source-tarball over `git clone`
+  (no git needed on the user's box); add a root `LICENSE` (MIT) — npm needs one and the README already badged MIT;
+  a `--tarball <path>` seam in install.sh exists PRECISELY so the full install flow is testable without network.
+- VERIFIED LIVE (not mocked): shellcheck clean; a real install from a `git archive` tarball into a temp
+  `VESPER_PREFIX`/`VESPER_BIN_DIR` -> the linked `vesper cli list` probes the real CLIs; re-install archives the
+  old tree; `bun run build:dist` -> `npm pack` -> install the tarball into a clean temp project -> `vesper status`
+  prints all 5 subsystems with NO clone (the spec acceptance); actionlint clean on both workflows. No new bun:test
+  units (installer/packaging is shell + build glue — TDD-exempt per the contract; verification is real execution).
+  954 tests / 0 fail (unchanged); biome clean. `dist/` + `src/generated/` stay gitignored (build artifacts).
+- FOLLOW-UPS: a real `npm publish` against a pushed tag (needs the `NPM_TOKEN` secret — not runnable here);
+  Homebrew tap / Linux / Windows install paths (out of scope, later). Issue-capped: record = this entry + spec + commit.
