@@ -172,9 +172,21 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
     });
     const childOutcome = await handle.done.catch(() => null);
 
+    // Surface the child pipeline's ACTUAL answer as the assistant reply, not a routing
+    // receipt: `POST /api/chat` uses THIS run's summary as the assistant turn's text, so
+    // discarding the child's summary is exactly why the chat showed "routed to selftest
+    // (run ...)" with no answer. The run linkage ("Watch it work" + the live activity
+    // tree) rides on this run's own id, so the activity stays available even though the
+    // summary now carries the answer itself. A null outcome means the child threw
+    // (timeout / CLI failure); an empty summary means it recorded nothing — both get a
+    // plain-language fallback that still points at the run for inspection.
+    const answer = childOutcome?.summary?.trim() ?? "";
     ctx.recordRun({
       status: childOutcome?.status === "ok" ? "ok" : "partial",
-      summary: `routed to ${handlerId} (run ${handle.runId})`,
+      summary:
+        answer.length > 0
+          ? answer
+          : `The ${handlerId} pipeline ran but returned no response (run ${handle.runId}).`,
     });
   };
 }

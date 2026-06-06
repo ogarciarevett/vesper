@@ -37,6 +37,8 @@ function makeFakeContext(options: {
   readonly classifyReply?: string;
   /** Status the spawned child resolves with. */
   readonly childStatus?: string;
+  /** Summary the spawned child resolves with (the child pipeline's actual answer). */
+  readonly childSummary?: string;
   /** When true, the spawned child's `done` rejects (handler must tolerate it). */
   readonly childRejects?: boolean;
 }): FakeContext {
@@ -85,7 +87,7 @@ function makeFakeContext(options: {
         taskId: descriptor.handlerId,
         runId: "child-run",
         status: options.childStatus ?? "ok",
-        summary: "child done",
+        summary: options.childSummary ?? "child done",
         cli: null,
         durationMs: 1,
       };
@@ -128,6 +130,7 @@ describe("routerHandler", () => {
     const fake = makeFakeContext({
       params: { message: "run the self test" },
       classifyReply: "selftest",
+      childSummary: "Hello from the self-test — I am Claude Code.",
     });
     await makeRouterHandler()(fake.ctx);
 
@@ -140,6 +143,9 @@ describe("routerHandler", () => {
     // deny the run at the context boundary (the original chatbot-home bug).
     expect(fake.spawned[0]?.capabilities).toEqual(["CLI_INVOKE", "WRITE_STORAGE"]);
     expect(fake.recordedRuns[0]?.status).toBe("ok");
+    // The assistant reply surfaces the child pipeline's ACTUAL answer, not a routing
+    // receipt — `POST /api/chat` renders this summary as the assistant turn's text.
+    expect(fake.recordedRuns[0]?.summary).toBe("Hello from the self-test — I am Claude Code.");
   });
 
   test("the orchestrate route grants the child SPAWN_SUBAGENT so it can fan out", async () => {
@@ -205,7 +211,7 @@ describe("routerHandler", () => {
     expect(fake.recordedRuns[0]?.status).toBe("clarify");
   });
 
-  test("a child failure is tolerated — the router records 'partial', not a throw", async () => {
+  test("a child failure is tolerated — the router records 'partial' with a fallback reply", async () => {
     const fake = makeFakeContext({
       params: { message: "x" },
       classifyReply: "selftest",
@@ -214,6 +220,19 @@ describe("routerHandler", () => {
     await makeRouterHandler()(fake.ctx);
     expect(fake.spawned).toHaveLength(1);
     expect(fake.recordedRuns[0]?.status).toBe("partial");
+    // The child threw (no outcome) — the reply is a plain-language fallback that still
+    // names the pipeline so the user is not left with a silent/empty assistant turn.
+    expect(fake.recordedRuns[0]?.summary).toContain("returned no response");
+  });
+
+  test("an empty child summary falls back rather than surfacing a blank reply", async () => {
+    const fake = makeFakeContext({
+      params: { message: "x" },
+      classifyReply: "selftest",
+      childSummary: "   ",
+    });
+    await makeRouterHandler()(fake.ctx);
+    expect(fake.recordedRuns[0]?.summary).toContain("returned no response");
   });
 
   test("a custom allowlist drives dispatch (handler is configurable)", async () => {
