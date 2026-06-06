@@ -1244,3 +1244,22 @@ describe("UI server — skills library", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Memory (RAG) status — GET /api/memory (scaffold; model deferred)
+// ---------------------------------------------------------------------------
+
+describe("UI server — memory status", () => {
+  test("GET /api/memory reports unavailable with an indexed-document count (never throws)", async () => {
+    const res = await fetch(`${handle.url}/api/memory`);
+    expect(res.status).toBe(200);
+    const status = (await res.json()) as {
+      available: boolean;
+      reason?: string;
+      indexedDocuments: number;
+    };
+    expect(status.available).toBe(false);
+    expect(status.reason).toBe("rag_unavailable");
+    expect(status.indexedDocuments).toBe(0);
+  });
+});

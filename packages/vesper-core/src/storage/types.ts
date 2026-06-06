@@ -359,6 +359,13 @@ export interface Store {
   upsertTemplate(input: UpsertTemplateInput): void;
 
   /**
+   * Number of indexed RAG documents (`rag_documents` rows). 0 until the embedding model
+   * + indexer land (semantic memory is scaffolded but disabled — see specs/rag-memory.md).
+   * Backs the Memory surface's status.
+   */
+  ragDocumentCount(): number;
+
+  /**
    * Close the underlying database connection. After this call the store must not be used.
    */
   close(): void;

@@ -441,8 +441,21 @@ reading `.ai/skills` + the skill-train state) shared across pipelines + Vesper; 
 cost-gated `vesper skill` CLI. No new dependency, no migration. Issue-capped: record = spec + `cycle-log.md`
 + commit (Rule 11).
 
+**RAG memory (semantic recall) SCAFFOLDED — embedding model deferred (Omar's call).** `specs/rag-memory.md`
+slice: the no-dependency structure landed so the seam + surface exist and degrade cleanly, while the heavy
+dependency (an on-device embedding model + sqlite-vec — the FIRST new runtime dep since opt-in Baileys, which
+needs explicit Omar authorization + isolation in an opt-in package) is deferred. Shipped: migration
+**009_rag_index** (the plain `rag_documents` metadata sidecar ONLY — the vec0 virtual table is created lazily
+at index-open once the extension loads, so the migration runner never crashes a vanilla `bun:sqlite`; spec
+said "007" but 007/008 were taken — reconciled to 009); the `vesper-core/rag/` seam (`Embedder` interface,
+`RagDocument`/`RagHit` types, `ragSearch` throwing the new typed `StorageError("rag_unavailable")`, and a
+non-throwing `ragStatus`); `store.ragDocumentCount()`; `GET /api/memory` (status, never throws); and a live
+Memory section wired to it (replacing the stub — the old `sections/stubs.ts`/`stub.ts` are now gone). The
+embedder + vec0 KNN + indexer/backfill + `vesper rag` CLI land WITH the authorized model. No new dependency,
+no LLM SDK. Issue-capped: record = spec + `cycle-log.md` + commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1214 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1218 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);

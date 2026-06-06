@@ -151,4 +151,28 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE runs ADD COLUMN ctx_model TEXT;
     `,
   },
+  {
+    // RAG memory (semantic search over Vesper's own history) — the plain metadata
+    // sidecar ONLY. Per specs/rag-memory.md, the vec0 virtual table is NOT created here:
+    // it needs the loaded sqlite-vec extension + the embedder's dimension, so it is built
+    // lazily at index-open time. This DDL runs on a vanilla bun:sqlite with no extension,
+    // so the migration runner never crashes a host that lacks sqlite-vec. (Spec said "007";
+    // 007/008 were taken since it was written — reconciled to 009.) Forward-only.
+    id: "009_rag_index",
+    sql: `
+      CREATE TABLE IF NOT EXISTS rag_documents (
+        id          TEXT    PRIMARY KEY NOT NULL,
+        vec_rowid   INTEGER NOT NULL,
+        source_kind TEXT    NOT NULL,
+        source_id   TEXT    NOT NULL,
+        text        TEXT    NOT NULL,
+        embedder_id TEXT    NOT NULL,
+        dimensions  INTEGER NOT NULL,
+        indexed_at  INTEGER NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_docs_source
+        ON rag_documents(source_kind, source_id, embedder_id);
+      CREATE INDEX IF NOT EXISTS idx_rag_docs_vec ON rag_documents(vec_rowid);
+    `,
+  },
 ];

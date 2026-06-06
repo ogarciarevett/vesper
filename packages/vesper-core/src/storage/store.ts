@@ -655,6 +655,18 @@ export class SqliteStore implements Store {
     return id;
   }
 
+  ragDocumentCount(): number {
+    try {
+      const row = this.#db
+        .query<{ n: number }, []>("SELECT COUNT(*) AS n FROM rag_documents")
+        .get();
+      return row?.n ?? 0;
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to count rag documents", { cause });
+    }
+  }
+
   listSessions(): ChatSessionRow[] {
     try {
       // `rowid DESC` breaks ts ties by insertion order so two sessions created in

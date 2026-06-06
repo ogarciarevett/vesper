@@ -18,6 +18,7 @@ export {
   type RunResult,
   runProcess,
 } from "./process/run.ts";
+export * from "./rag/index.ts";
 export * from "./scheduler/index.ts";
 export * from "./skill-train/index.ts";
 export * from "./storage/index.ts";

@@ -1288,3 +1288,29 @@ Reuses `specs/skill-train.md` (the engine). Issue-capped: record = spec + this e
   new dependency, no migration.
 - FOLLOW-ONS: training-from-the-UI (gated like the CLI's cost confirm); a proper inline diff (committed vs
   best) in the detail view; surfacing which pipelines reference each skill.
+
+---
+
+## rag-memory — SCAFFOLD (embedding model deferred, Omar's dependency call)
+
+Slice of `specs/rag-memory.md`. Omar (2026-06-07) chose "scaffold RAG, defer the model": build the
+no-dependency structure now; the on-device embedding model + sqlite-vec (the FIRST new runtime dep since
+opt-in Baileys -- needs explicit authorization + isolation in an opt-in package) lands later.
+
+- WHY: Memory was the last dead UI stub, but real RAG needs an embedding model -- a dependency decision the
+  contract reserves for Omar. The scaffold delivers the seam + graceful degradation now so the engine drops
+  in behind a stable interface, with no premature dependency.
+- WHAT: migration `009_rag_index` (the plain `rag_documents` metadata sidecar ONLY -- the vec0 virtual table
+  is created lazily at index-open once the extension loads, keeping the migration runner safe on a vanilla
+  bun:sqlite); `vesper-core/rag/` (the `Embedder` interface = THE deferred model choice; `RagDocument`/`RagHit`
+  types; `ragSearch` throwing the new typed `StorageError("rag_unavailable")`; non-throwing `ragStatus`);
+  `store.ragDocumentCount()`; `GET /api/memory` (status, never throws); a live Memory section wired to it.
+  Removed the now-dead `sections/stubs.ts` + `sections/stub.ts` (Memory was their last consumer).
+- SPEC RECONCILIATION: the spec said migration "007", but 007_chat_home + 008_run_context were added after it
+  was written -> used 009. (The kind of spec-vs-reality drift the contract warns about; surfaced + fixed.)
+- VERIFIED: full suite 1218 / 0 (+4); biome ci exit 0; client bundle compiles with /api/memory; migration 009
+  applies on a fresh store (ragDocumentCount -> 0); ragSearch degrades to the typed rag_unavailable. No new
+  dependency, no LLM SDK.
+- NEXT (gated on Omar authorizing the dep): the on-device embedder (all-MiniLM-L6-v2-class, isolated opt-in
+  pkg) + the vec0 KNN in `openRagIndex`/`ragSearch` + `indexer`/`backfill` + the `RAG_INDEX` bus topic +
+  `vesper rag index|search|status`; then auto-evolve + the chatbot consume the same `ragSearch` seam.

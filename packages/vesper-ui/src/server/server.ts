@@ -10,7 +10,14 @@ import type {
   SetupSession,
   Store,
 } from "@vesper/core";
-import { ApprovalError, encodeQr, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
+import {
+  ApprovalError,
+  encodeQr,
+  RUN_COMPLETED,
+  RUN_EVENT,
+  ragStatus,
+  SchedulerError,
+} from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
 import type {
@@ -475,6 +482,13 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // Empty list when no provider is wired (e.g. a daemon launched outside the repo).
       if (req.method === "GET" && pathname === "/api/skills") {
         return json(deps.skills === undefined ? [] : await deps.skills.list());
+      }
+
+      // GET /api/memory — semantic-memory (RAG) status. Never throws: today RAG is
+      // scaffolded but disabled (no embedding model), so this reports available:false +
+      // the indexed-document count. Lights up once the on-device embedder is enabled.
+      if (req.method === "GET" && pathname === "/api/memory") {
+        return json(ragStatus(store.ragDocumentCount()));
       }
 
       // GET /api/skills/:name — one skill's full detail. The name is kebab-shaped
