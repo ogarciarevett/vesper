@@ -37,6 +37,15 @@ export {
   unregisterChannelPlugin,
 } from "./plugins.ts";
 export { ChannelRegistry } from "./registry.ts";
+export {
+  CHANNEL_SETUPS,
+  type ChannelSetupSpec,
+  channelSetupById,
+  NEED_USER_LOGIN,
+  SETUP_TIMEOUT_MS,
+  type SetupSession,
+  type SetupUpdate,
+} from "./setup.ts";
 export { SignalHandler, type SignalHandlerOptions } from "./signal.ts";
 export {
   type LinkProcess,

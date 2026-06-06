@@ -10,14 +10,17 @@ import { runtimeSection } from "./runtime.ts";
 import { sandboxSection } from "./sandbox.ts";
 import { scheduleSection } from "./schedule.ts";
 import { settingsSection } from "./settings.ts";
-import { memorySection, skillsSection, voiceSection } from "./stubs.ts";
+import { skillsSection } from "./skills.ts";
+import { memorySection } from "./stubs.ts";
+import { voiceSection } from "./voice.ts";
 
 /**
  * Every section the shell registers, in display order. The sidebar groups them by
  * `section.group` (primary | vesper | computer) preserving this array order within
  * each group. "Real" sections (Chat, Runtime, CLIs, Permissions, Sandbox, Settings,
  * Diagnostics, About) read live state; Channels/Schedule/Pipelines are thin views;
- * Skills/Memory/Voice are honest stubs pointing at their owning specs.
+ * Memory is an honest stub pointing at its owning spec; Skills is a live read-only
+ * library view; Voice is a live in-window "Talk to Vesper" (Mode A) surface.
  */
 export const ALL_SECTIONS: readonly SectionModule[] = [
   chatSection,

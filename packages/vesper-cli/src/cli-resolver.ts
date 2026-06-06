@@ -2,6 +2,7 @@ import {
   buildAdapter,
   CLIError,
   type CompleteFn,
+  type CompleteResult,
   type ProcessRunner,
   selectDefault,
 } from "@vesper/core";
@@ -46,5 +47,32 @@ export function makeCompleteFn(
     if (adapter === undefined) throw new CLIError("not_installed", `unknown CLI adapter "${name}"`);
 
     return adapter.complete(prompt);
+  };
+}
+
+/**
+ * Build the AGENTIC completion the channel-setup coordinator drives — the user's CLI
+ * runs its own agent-browser skill to mint a channel token. Same resolution as
+ * {@link makeCompleteFn} (configured default -> priority order), but invokes the adapter
+ * in agentic mode with a generous per-call timeout (browser work runs for minutes). The
+ * adapter's `agenticArgs` (config) carry the tool permissions an unattended browser needs.
+ */
+export function makeAgenticCompleteFn(
+  config: VesperConfig,
+  installed: readonly string[],
+  run?: ProcessRunner,
+): (prompt: string, opts: { agentic: true; timeoutMs: number }) => Promise<CompleteResult> {
+  return async (prompt, opts) => {
+    const name = selectDefault(installed, config.cli.default);
+    if (name === undefined) {
+      throw new CLIError("not_installed", "no CLI configured — run `vesper init`");
+    }
+    const adapterConfig = config.cli.adapters[name];
+    const adapter = buildAdapter(name, {
+      ...adapterConfig,
+      ...(run !== undefined ? { run } : {}),
+    });
+    if (adapter === undefined) throw new CLIError("not_installed", `unknown CLI adapter "${name}"`);
+    return adapter.complete(prompt, opts);
   };
 }

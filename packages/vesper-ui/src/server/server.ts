@@ -7,12 +7,20 @@ import type {
   RunOutcome,
   RunTreeNode,
   Scheduler,
+  SetupSession,
   Store,
 } from "@vesper/core";
 import { ApprovalError, encodeQr, RUN_COMPLETED, RUN_EVENT, SchedulerError } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
-import type { PresenceInfo, RunEventInfo, RunTreeInfo, SweDiffView } from "../world/types.ts";
+import type {
+  PresenceInfo,
+  RunEventInfo,
+  RunTreeInfo,
+  SkillDetail,
+  SkillSummary,
+  SweDiffView,
+} from "../world/types.ts";
 import { defaultPresenceDetector, type PresenceDetector } from "./presence.ts";
 
 /** A helper-CLI's detected status for the `/api/status` route + titlebar pill. */
@@ -87,6 +95,26 @@ export interface UiServerDeps {
    */
   readonly connections?: {
     list(): Promise<readonly ChannelState[]>;
+    /**
+     * Store a channel credential entered in the UI (vault `set` + enable in config),
+     * reusing the exact CLI `connections set` path so both surfaces write identically.
+     * Backs `POST /api/connections/:id/token`. Absent -> that route is fail-closed (503).
+     * The token NEVER appears in a response, an audit row, or a log. Local-origin only
+     * (no approval code) by design — setting a token is accepted for the single-user
+     * local runtime (see specs/channel-auto-onboarding.md, Slice 0).
+     */
+    setToken?(
+      id: string,
+      token: string,
+      params?: Readonly<Record<string, string>>,
+    ): Promise<{ vaultKey: string }>;
+    /**
+     * Begin AUTO-ONBOARDING a token channel: drive the user's CLI (agent-browser) to
+     * mint the token, persist it, and stream {@link SetupSession} progress. Backs
+     * `POST /api/connections/:id/setup`. Absent -> that route is 503. The minted token
+     * never appears in the stream — only progress + a terminal status.
+     */
+    setup?(id: string): SetupSession;
   };
   /**
    * Pairing (scan-to-connect) provider. `startPairing` begins a QR/link pairing
@@ -96,6 +124,17 @@ export interface UiServerDeps {
    */
   readonly pairing?: {
     startPairing(channelId: string): Promise<PairingSession>;
+  };
+  /**
+   * Skills library (read-only). `list` returns every skill's at-a-glance summary for
+   * `GET /api/skills`; `get` returns one skill's full detail (committed body, trained
+   * candidate, tasks, history) for `GET /api/skills/:name`. Skills are shared across
+   * pipelines + Vesper, so this is a plain read surface — training/accept/revert stay on
+   * the cost-gated `vesper skill` CLI. Absent -> the routes return [] / 404.
+   */
+  readonly skills?: {
+    list(): Promise<readonly SkillSummary[]>;
+    get(name: string): Promise<SkillDetail | null>;
   };
   /**
    * Software-engineer pipeline surface. `loadDiff` returns the structured per-file
@@ -432,6 +471,101 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         return json(deps.connections === undefined ? [] : await deps.connections.list());
       }
 
+      // GET /api/skills — the skill library (read-only; shared across pipelines + Vesper).
+      // Empty list when no provider is wired (e.g. a daemon launched outside the repo).
+      if (req.method === "GET" && pathname === "/api/skills") {
+        return json(deps.skills === undefined ? [] : await deps.skills.list());
+      }
+
+      // GET /api/skills/:name — one skill's full detail. The name is kebab-shaped
+      // (defense-in-depth above the provider's own path-traversal guard); 404 when unknown.
+      const skillMatch = pathname.match(/^\/api\/skills\/([^/]+)$/);
+      if (req.method === "GET" && skillMatch) {
+        if (deps.skills === undefined) return json({ error: "skills not available" }, 503);
+        const name = decodeURIComponent(skillMatch[1] ?? "");
+        if (!/^[a-z0-9][a-z0-9-]*$/i.test(name)) return json({ error: "invalid skill name" }, 400);
+        try {
+          const detail = await deps.skills.get(name);
+          return detail === null ? json({ error: "unknown skill" }, 404) : json(detail);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : "could not read skill" }, 400);
+        }
+      }
+
+      // POST /api/connections/:id/token — store a channel credential entered in the UI
+      // (vault set + enable in config). Body: { token, params? }. Local-origin only
+      // (guarded above) by design — NO approval code (specs/channel-auto-onboarding.md
+      // Slice 0). Fail-closed (503) when no setToken is wired. The token is read from the
+      // body, handed straight to the vault, and never echoed back, logged, or audited.
+      const tokenMatch = pathname.match(/^\/api\/connections\/([^/]+)\/token$/);
+      if (req.method === "POST" && tokenMatch) {
+        if (deps.connections?.setToken === undefined) {
+          return json({ error: "token entry is not available" }, 503);
+        }
+        const id = decodeURIComponent(tokenMatch[1] ?? "");
+        const body = await readJsonBody(req);
+        const token = typeof body?.token === "string" ? body.token.trim() : "";
+        if (token.length === 0) return json({ error: "token is required" }, 400);
+        const params: Record<string, string> = {};
+        if (isRecord(body?.params)) {
+          for (const [k, v] of Object.entries(body.params)) {
+            if (typeof v === "string") params[k] = v;
+          }
+        }
+        try {
+          await deps.connections.setToken(id, token, params);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : "could not save token" }, 400);
+        }
+        // Audit the mutation WITHOUT the secret (channel + method only).
+        store.appendEvent({
+          source: "connections",
+          kind: "token_set",
+          payload: { channel: id, method: "manual" },
+        });
+        return json({ ok: true });
+      }
+
+      // POST /api/connections/:id/setup — AUTO-ONBOARD a token channel: drive the user's
+      // CLI (agent-browser) to mint the token, persist it, and stream progress as ndjson
+      // (same shape family as /pair). Local-only (guarded above); the stream carries
+      // progress + a terminal status, never the token. Closing the connection cancels it.
+      // Best-effort: a blocked automation ends `awaiting_user` so the UI shows the manual
+      // token field — not an error.
+      const setupMatch = pathname.match(/^\/api\/connections\/([^/]+)\/setup$/);
+      if (req.method === "POST" && setupMatch) {
+        if (deps.connections?.setup === undefined) {
+          return json({ error: "channel setup is not available" }, 503);
+        }
+        const channelId = decodeURIComponent(setupMatch[1] ?? "");
+        const session = deps.connections.setup(channelId);
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const onAbort = (): void => session.stop();
+            req.signal.addEventListener("abort", onAbort);
+            try {
+              for await (const update of session.updates()) {
+                controller.enqueue(encoder.encode(`${JSON.stringify(update)}\n`));
+                if (update.status !== "working") break; // working may repeat; else terminal
+              }
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err);
+              controller.enqueue(
+                encoder.encode(`${JSON.stringify({ status: "error", reason })}\n`),
+              );
+            } finally {
+              req.signal.removeEventListener("abort", onAbort);
+              session.stop();
+              controller.close();
+            }
+          },
+        });
+        return new Response(stream, {
+          headers: { "content-type": "application/x-ndjson; charset=utf-8" },
+        });
+      }
+
       // GET /api/qr?data=... — encode a string as a QR matrix ({size, modules}) so the
       // browser can draw a scannable code on a canvas WITHOUT bundling the core encoder
       // (the @vesper/core barrel pulls bun:sqlite, which cannot run in the browser).
@@ -588,12 +722,21 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           : json({ error: "no change awaiting this decision" }, 409);
       }
 
-      // POST /api/pipelines/:id/run
+      // POST /api/pipelines/:id/run — optional JSON body `{ params?, cli? }` supplies the
+      // transient run inputs a manual pipeline needs (e.g. the software-engineer lead's
+      // `repo` + `wish`). No body keeps the prior no-params behavior.
       const runMatch = pathname.match(/^\/api\/pipelines\/([^/]+)\/run$/);
       if (req.method === "POST" && runMatch) {
         const id = decodeURIComponent(runMatch[1] ?? "");
+        const runBody = await readJsonBody(req);
+        const params = isRecord(runBody?.params) ? runBody.params : undefined;
+        const cli = typeof runBody?.cli === "string" ? runBody.cli : undefined;
+        const runOpts = {
+          ...(params !== undefined ? { params } : {}),
+          ...(cli !== undefined ? { cli } : {}),
+        };
         try {
-          const outcome = await scheduler.run(id);
+          const outcome = await scheduler.run(id, runOpts);
           return json(outcome);
         } catch (err) {
           if (err instanceof SchedulerError && err.reason === "unknown_task") {

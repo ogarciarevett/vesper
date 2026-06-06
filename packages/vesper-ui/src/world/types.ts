@@ -118,3 +118,54 @@ export interface PresenceInfo {
   /** How many OS processes collapsed into this presence. */
   readonly procCount: number;
 }
+
+// ── Skills library (GET /api/skills) — shared skills across pipelines + Vesper ──────
+
+/** One training epoch's outcome — the UI-facing shape of a core `HistoryEntry`. */
+export interface SkillHistoryView {
+  readonly epoch: number;
+  readonly priorBestScore: number;
+  readonly candidateScore: number;
+  readonly accepted: boolean;
+  readonly targetCli: string;
+  readonly optimizerCli: string;
+  readonly ts: string;
+}
+
+/** A skill's at-a-glance row for the library list. */
+export interface SkillSummary {
+  /** Directory name under the skills dir (the stable id). */
+  readonly name: string;
+  /** Frontmatter `name` (falls back to the dir name when frontmatter is absent/invalid). */
+  readonly displayName: string;
+  /** Frontmatter `description` (empty when absent). */
+  readonly description: string;
+  /** Validation task count, or null when the skill has no `tasks.json` (not trainable). */
+  readonly taskCount: number | null;
+  /** A trained candidate (`best.md`) exists for this skill. */
+  readonly hasCandidate: boolean;
+  /** The trained candidate differs from the committed SKILL.md (an adopt is pending). */
+  readonly differs: boolean;
+  /** The most recent training epoch's scores, when any training has run. */
+  readonly lastScore: {
+    readonly prior: number;
+    readonly candidate: number;
+    readonly accepted: boolean;
+  } | null;
+}
+
+/** One validation task, surfaced read-only. */
+export interface SkillTaskView {
+  readonly id: string;
+  readonly prompt: string;
+  readonly expected: string;
+  readonly scorer: string;
+}
+
+/** Full detail for one skill: the committed body, the trained candidate, tasks, and history. */
+export interface SkillDetail extends SkillSummary {
+  readonly body: string;
+  readonly best: string | null;
+  readonly tasks: readonly SkillTaskView[];
+  readonly history: readonly SkillHistoryView[];
+}

@@ -149,6 +149,15 @@ describe("UI server", () => {
     expect(await res.json()).toEqual([]);
   });
 
+  test("POST /api/connections/:id/token is 503 when no setToken is wired (fail-closed)", async () => {
+    const res = await fetch(`${handle.url}/api/connections/telegram/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "abc" }),
+    });
+    expect(res.status).toBe(503);
+  });
+
   test("GET / serves the client shell", async () => {
     const res = await fetch(`${handle.url}/`);
     expect(res.status).toBe(200);
@@ -448,7 +457,9 @@ describe("UI server — chat + templates", () => {
       const outcome = await handle.done.catch(() => null);
       ctx.recordRun({
         status: outcome?.status === "ok" ? "ok" : "partial",
-        summary: "routed to child",
+        // Surface the child pipeline's actual answer as the assistant reply (mirrors
+        // the real router) — the chat turn shows this summary, not a routing receipt.
+        summary: outcome?.summary ?? "the child pipeline returned no response",
       });
     });
     const scheduler = new Scheduler({
@@ -767,7 +778,19 @@ describe("UI server — software-engineer diff + decision routes", () => {
     decideReturns = true;
 
     const registry = new HandlerRegistry();
+    // Echoes its transient params into the run summary so the run route's body-param
+    // passing (repo/wish for the software-engineer lead) is observable end to end.
+    registry.register("paramecho", (ctx) => {
+      ctx.recordRun({ status: "ok", summary: JSON.stringify(ctx.params) });
+    });
     const scheduler = new Scheduler({ db: sDb, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "paramecho",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "paramecho",
+      required_capabilities: ["WRITE_STORAGE"],
+    });
     sHandle = await startUiServer({
       scheduler,
       store: sStore,
@@ -780,7 +803,12 @@ describe("UI server — software-engineer diff + decision routes", () => {
           return runId === RUN_UUID ? { ...SAMPLE_DIFF, staged: opts.staged === true } : null;
         },
         decide: (runId, changeId, decision) => {
-          decideCalls.push({ runId, changeId, decision: decision.decision, reason: decision.reason });
+          decideCalls.push({
+            runId,
+            changeId,
+            decision: decision.decision,
+            reason: decision.reason,
+          });
           return decideReturns;
         },
       },
@@ -792,6 +820,27 @@ describe("UI server — software-engineer diff + decision routes", () => {
     sStore.close();
     sDb.close();
     rmSync(sDir, { recursive: true, force: true });
+  });
+
+  test("POST /api/pipelines/:id/run passes body params through to the run", async () => {
+    const res = await fetch(`${sHandle.url}/api/pipelines/paramecho/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ params: { repo: "/tmp/demo", wish: "add a hello file" } }),
+    });
+    expect(res.status).toBe(200);
+    const outcome = (await res.json()) as { status: string; summary: string };
+    expect(outcome.status).toBe("ok");
+    const echoed = JSON.parse(outcome.summary) as Record<string, unknown>;
+    expect(echoed.repo).toBe("/tmp/demo");
+    expect(echoed.wish).toBe("add a hello file");
+  });
+
+  test("POST /api/pipelines/:id/run still works with no body (no params)", async () => {
+    const res = await fetch(`${sHandle.url}/api/pipelines/paramecho/run`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const outcome = (await res.json()) as { status: string; summary: string };
+    expect(outcome.summary).toBe("{}");
   });
 
   test("GET /diff returns the structured per-file diff", async () => {
@@ -900,5 +949,298 @@ describe("UI server — software-engineer diff + decision routes", () => {
       },
     );
     expect(res.status).toBe(409);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual token entry — POST /api/connections/:id/token (Slice 0, local-origin only)
+// ---------------------------------------------------------------------------
+
+describe("UI server — manual token entry", () => {
+  let tDir: string;
+  let tDb: Database;
+  let tStore: Store;
+  let tHandle: UiServerHandle;
+  let setCalls: Array<{ id: string; token: string; params?: Record<string, string> }>;
+  let setThrows: string | null;
+
+  beforeEach(async () => {
+    tDir = mkdtempSync(join(tmpdir(), "vesper-ui-token-"));
+    const path = join(tDir, "vesper.db");
+    openStore(path).close();
+    tDb = new Database(path);
+    tStore = openStore(path);
+    setCalls = [];
+    setThrows = null;
+
+    const scheduler = new Scheduler({
+      db: tDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    tHandle = await startUiServer({
+      scheduler,
+      store: tStore,
+      seed: "token-seed",
+      port: 0,
+      connections: {
+        list: async () => [],
+        setToken: async (id, token, params) => {
+          if (setThrows !== null) throw new Error(setThrows);
+          setCalls.push({ id, token, ...(params !== undefined ? { params } : {}) });
+          return { vaultKey: `${id}_token` };
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    tHandle.stop();
+    tStore.close();
+    tDb.close();
+    rmSync(tDir, { recursive: true, force: true });
+  });
+
+  test("a valid token is stored via setToken and never echoed back; the mutation is audited", async () => {
+    const res = await fetch(`${tHandle.url}/api/connections/telegram/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "  123:secret  ", params: { phoneNumberId: "42" } }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ ok: true });
+    // The token is trimmed and forwarded to the host setToken; not in the response.
+    expect(setCalls).toEqual([
+      { id: "telegram", token: "123:secret", params: { phoneNumberId: "42" } },
+    ]);
+    expect(JSON.stringify(body)).not.toContain("secret");
+    // Audited as channel + method only — never the token value.
+    const events = tStore.listEvents({ limit: 10 });
+    const audited = events.find((e) => e.kind === "token_set");
+    expect(audited?.payload).toMatchObject({ channel: "telegram", method: "manual" });
+    expect(JSON.stringify(audited?.payload)).not.toContain("secret");
+  });
+
+  test("an empty token is rejected (400) and never reaches setToken", async () => {
+    const res = await fetch(`${tHandle.url}/api/connections/telegram/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "   " }),
+    });
+    expect(res.status).toBe(400);
+    expect(setCalls).toHaveLength(0);
+  });
+
+  test("a host setToken failure surfaces as 400 with its message (e.g. unknown channel)", async () => {
+    setThrows = 'unknown channel "nope"';
+    const res = await fetch(`${tHandle.url}/api/connections/nope/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "abc" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toContain("unknown channel");
+  });
+
+  test("a cross-origin POST is refused by the local-origin guard", async () => {
+    const res = await fetch(`${tHandle.url}/api/connections/telegram/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://evil.example" },
+      body: JSON.stringify({ token: "abc" }),
+    });
+    expect(res.status).toBe(403);
+    expect(setCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Channel auto-onboarding — POST /api/connections/:id/setup (Slice 3/4)
+// ---------------------------------------------------------------------------
+
+describe("UI server — channel setup (auto-onboarding)", () => {
+  let uDir: string;
+  let uDb: Database;
+  let uStore: Store;
+  let uHandle: UiServerHandle;
+
+  async function readNdjson(res: Response): Promise<Array<Record<string, unknown>>> {
+    const text = await res.text();
+    return text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  }
+
+  beforeEach(async () => {
+    uDir = mkdtempSync(join(tmpdir(), "vesper-ui-setup-"));
+    const path = join(uDir, "vesper.db");
+    openStore(path).close();
+    uDb = new Database(path);
+    uStore = openStore(path);
+    const scheduler = new Scheduler({
+      db: uDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    uHandle = await startUiServer({
+      scheduler,
+      store: uStore,
+      seed: "setup-seed",
+      port: 0,
+      connections: {
+        list: async () => [],
+        setup: (id) => ({
+          // eslint-disable-next-line require-yield
+          async *updates() {
+            yield { status: "working", message: `Setting up ${id}…` };
+            yield { status: "configured" };
+          },
+          stop() {},
+        }),
+      },
+    });
+  });
+
+  afterEach(() => {
+    uHandle.stop();
+    uStore.close();
+    uDb.close();
+    rmSync(uDir, { recursive: true, force: true });
+  });
+
+  test("streams the setup updates as newline-delimited JSON ending in a terminal status", async () => {
+    const res = await fetch(`${uHandle.url}/api/connections/telegram/setup`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("ndjson");
+    const updates = await readNdjson(res);
+    expect(updates.map((u) => u.status)).toEqual(["working", "configured"]);
+  });
+
+  test("POST /setup is 503 when no setup provider is wired (fail-closed)", async () => {
+    const scheduler = new Scheduler({
+      db: uDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    const bare = await startUiServer({ scheduler, store: uStore, seed: "bare", port: 0 });
+    try {
+      const res = await fetch(`${bare.url}/api/connections/telegram/setup`, { method: "POST" });
+      expect(res.status).toBe(503);
+    } finally {
+      bare.stop();
+    }
+  });
+
+  test("a cross-origin setup POST is refused by the local-origin guard", async () => {
+    const res = await fetch(`${uHandle.url}/api/connections/telegram/setup`, {
+      method: "POST",
+      headers: { origin: "https://evil.example" },
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skills library — GET /api/skills + GET /api/skills/:name (read-only)
+// ---------------------------------------------------------------------------
+
+describe("UI server — skills library", () => {
+  let kDir: string;
+  let kDb: Database;
+  let kStore: Store;
+  let kHandle: UiServerHandle;
+
+  const SUMMARY = {
+    name: "demo",
+    displayName: "demo",
+    description: "A demo skill.",
+    taskCount: 2,
+    hasCandidate: true,
+    differs: true,
+    lastScore: { prior: 0.5, candidate: 0.8, accepted: true },
+  };
+
+  beforeEach(async () => {
+    kDir = mkdtempSync(join(tmpdir(), "vesper-ui-skills-"));
+    const path = join(kDir, "vesper.db");
+    openStore(path).close();
+    kDb = new Database(path);
+    kStore = openStore(path);
+    const scheduler = new Scheduler({
+      db: kDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    kHandle = await startUiServer({
+      scheduler,
+      store: kStore,
+      seed: "skills-seed",
+      port: 0,
+      skills: {
+        list: async () => [SUMMARY],
+        get: async (name) =>
+          name === "demo"
+            ? {
+                ...SUMMARY,
+                body: "the skill body",
+                best: "the candidate body",
+                tasks: [],
+                history: [],
+              }
+            : null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    kHandle.stop();
+    kStore.close();
+    kDb.close();
+    rmSync(kDir, { recursive: true, force: true });
+  });
+
+  test("GET /api/skills returns the library list", async () => {
+    const res = await fetch(`${kHandle.url}/api/skills`);
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ name: "demo", taskCount: 2, differs: true });
+  });
+
+  test("GET /api/skills/:name returns full detail", async () => {
+    const res = await fetch(`${kHandle.url}/api/skills/demo`);
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as Record<string, unknown>;
+    expect(d.body).toBe("the skill body");
+    expect(d.best).toBe("the candidate body");
+  });
+
+  test("GET /api/skills/:name is 404 for an unknown skill", async () => {
+    const res = await fetch(`${kHandle.url}/api/skills/missing`);
+    expect(res.status).toBe(404);
+  });
+
+  test("GET /api/skills/:name rejects a non-kebab name (400)", async () => {
+    const res = await fetch(`${kHandle.url}/api/skills/${encodeURIComponent("../etc")}`);
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /api/skills is [] when no provider is wired", async () => {
+    const scheduler = new Scheduler({
+      db: kDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    const bare = await startUiServer({ scheduler, store: kStore, seed: "bare-k", port: 0 });
+    try {
+      expect(await (await fetch(`${bare.url}/api/skills`)).json()).toEqual([]);
+      // The detail route is fail-closed (503) without a provider.
+      expect((await fetch(`${bare.url}/api/skills/demo`)).status).toBe(503);
+    } finally {
+      bare.stop();
+    }
   });
 });

@@ -70,10 +70,18 @@ export interface CLIAdapter {
 }
 
 /**
- * Per-call options for {@link CLIAdapter.complete}. Foundation only exposes the
- * timeout override; additional options (max_tokens, temperature) land later.
+ * Per-call options for {@link CLIAdapter.complete}.
  */
 export interface CompleteOptions {
   /** Override the adapter's default timeout for this specific call (milliseconds). */
   readonly timeoutMs?: number;
+  /**
+   * Run the CLI in AGENTIC mode: let it use its own tools across a multi-step turn
+   * (e.g. the agent-browser skill that sets up a messaging channel), invoking the
+   * adapter's AGENTIC args instead of the one-shot completion args. The brain is still
+   * the user's CLI — Vesper adds no LLM SDK and no browser dependency (Hard rule 12).
+   * Pair with a generous {@link timeoutMs}: agentic tasks run for minutes, and the
+   * 30s process default will abort them.
+   */
+  readonly agentic?: boolean;
 }

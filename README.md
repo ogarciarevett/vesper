@@ -143,6 +143,7 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper connections list` | List messaging channels with availability, credential, and enabled status. |
 | `vesper connections set <id> [key=value ...]   # token via stdin` | Store a channel credential (stdin) + any key=value params, and enable it. |
 | `vesper connections pair <id>` | Scan a QR to connect a channel (auto-captures your chat). Daemon must be running. |
+| `vesper connections setup <id>   # Telegram/Discord; daemon must be running` | Auto-connect a token channel — Vesper drives your CLI's browser to create the bot. |
 | `vesper connections test <id>` | Authenticate a channel's stored credential (e.g. Telegram getMe). |
 | `vesper connections send <id> <chatId>   # message via stdin` | Send a one-off message to a channel recipient (message via stdin). |
 | `vesper connections enable <id>` | Enable a channel (the daemon starts it on next launch). |

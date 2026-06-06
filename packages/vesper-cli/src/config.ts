@@ -13,6 +13,14 @@ import { configPath } from "./paths.ts";
 export interface AdapterConfig {
   readonly command?: string;
   readonly args?: readonly string[];
+  /**
+   * Args used in AGENTIC mode (channel auto-onboarding drives the user's CLI to mint a
+   * token via its agent-browser skill). This is where the user grants the tool
+   * permissions an unattended browser task needs (e.g. `--dangerously-skip-permissions`).
+   * Absent -> agentic mode reuses `args`, so an unconfigured CLI degrades to the manual
+   * token field rather than running a browser without permission.
+   */
+  readonly agenticArgs?: readonly string[];
 }
 
 /**
@@ -85,11 +93,14 @@ function asString(value: unknown): string | undefined {
 
 function normalizeAdapter(raw: unknown): AdapterConfig {
   if (!isObject(raw)) return {};
-  const adapter: { command?: string; args?: string[] } = {};
+  const adapter: { command?: string; args?: string[]; agenticArgs?: string[] } = {};
   const command = asString(raw.command);
   if (command !== undefined) adapter.command = command;
   if (Array.isArray(raw.args)) {
     adapter.args = raw.args.filter((value): value is string => typeof value === "string");
+  }
+  if (Array.isArray(raw.agenticArgs)) {
+    adapter.agenticArgs = raw.agenticArgs.filter((v): v is string => typeof v === "string");
   }
   return adapter;
 }

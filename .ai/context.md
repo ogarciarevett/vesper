@@ -421,15 +421,35 @@ superset incl. `PROCESS_RUN` + `SPAWN_SUBAGENT` so the host ceiling covers the s
 preserves the worktree on every post-build terminal state (Hard rule 4). Issue-capped: record = spec +
 `cycle-log.md` + commit (Rule 11).
 
+**Channel auto-onboarding + Voice & Skills UI surfaces SHIPPED.** Three Vesper World surfaces went from
+guides/stubs to live (`specs/channel-auto-onboarding.md`; the voice + skills slices reuse existing specs).
+(1) **Channel onboarding** — ONE "Connect" button per channel: device-link channels (WhatsApp-personal,
+Signal) un-gated to scan-with-no-token (the UI had hidden them behind `configured`, a chicken-and-egg
+deadlock); a per-channel **manual token field** (`POST /api/connections/:id/token`, local-origin only by
+Omar's call — the browser had deliberately accepted NO credential before); and **agentic auto-setup** for
+token channels (`POST /:id/setup` + `ChannelSetupCoordinator` drive the user's CLI's agent-browser skill to
+mint a Telegram/Discord token, STRICT-parse it, persist it, with a graceful fallback to the manual field —
+best-effort, NOT live-verified, gated on the CLI shipping a browser skill + `agenticArgs` granting tool
+permission). New adapter `CompleteOptions.agentic` + config `agenticArgs` (Hard rule 12 intact — the CLI is
+the brain, Vesper adds no browser dep). `vesper connections setup <id>` mirrors it. (2) **Voice** — the
+stub became a live "Talk to Vesper" Mode-A surface: browser `SpeechRecognition` (feature-detected) -> `POST
+/api/chat` (the CLI brain) -> local `speechSynthesis`; no native shell needed (that's only Mode-B
+dictation). (3) **Skills** — the stub became a read-only library (`GET /api/skills[/:name]` + `SkillLibrary`
+reading `.ai/skills` + the skill-train state) shared across pipelines + Vesper; training/accept stay on the
+cost-gated `vesper skill` CLI. No new dependency, no migration. Issue-capped: record = spec + `cycle-log.md`
++ commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1165 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1214 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
 the Voice **native shell** follow-up (Tauri/Rust audio + Whisper STT + hotkey + Mode-B dictation, gated on
 Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice. Software-Engineer follow-ons: the opt-in OSS
-browser-VSCode child, per-file selective staging, the reject->rebuild + simplify->re-gate loops, and a
-cwd-hardened TEST sandbox (owned by `security-hardening.md`). Distribution's remaining follow-ups: a real
+browser-VSCode child, per-file selective staging, the reject->rebuild + simplify->re-gate loops, a
+cwd-hardened TEST sandbox (owned by `security-hardening.md`), and a longer per-call CLI timeout for the
+SWE cycle (the 30s adapter default intermittently aborts a 4-call coding turn — `CompleteFn` needs a
+timeout knob; cross-cutting, surfaced by the post-ship live dogfood). Distribution's remaining follow-ups: a real
 `npm publish` against a tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths. Update
 this section after each ship.
 

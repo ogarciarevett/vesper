@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
   ApprovalTokenStore,
+  CHANNEL_PLUGINS,
   type ChannelRegistry,
   channelStates,
   DEFAULT_AGENT_MATCHERS,
@@ -20,8 +21,9 @@ import {
 } from "@vesper/pipelines";
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
-import { makeCompleteFn } from "../cli-resolver.ts";
-import { loadConfig, saveConfig } from "../config.ts";
+import { ChannelSetupCoordinator } from "../channel-setup-coordinator.ts";
+import { makeAgenticCompleteFn, makeCompleteFn } from "../cli-resolver.ts";
+import { loadConfig, saveConfig, type VesperConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
@@ -29,8 +31,10 @@ import { makeNotifyFn } from "../make-notify.ts";
 import { makeSoftwareEngineerSurface } from "../make-software-engineer.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
 import { PairingCoordinator } from "../pairing-coordinator.ts";
-import { dbPath, pidPath, runDir, socketPath, uiPort } from "../paths.ts";
+import { dbPath, pidPath, runDir, skillTrainDir, socketPath, uiPort } from "../paths.ts";
+import { SkillLibrary } from "../skill-library.ts";
 import { dim, green, line, yellow } from "../ui.ts";
+import { setToken as setChannelToken } from "./connections.ts";
 
 /** Scheduler tick interval (1 minute). */
 const TICK_INTERVAL_MS = 60_000;
@@ -138,6 +142,26 @@ export const daemonRunCommand: Command = {
       save: (next) => saveConfig(next),
       store: uiStore,
     });
+    // Shared deps for vault-writing channel ops (manual token entry AND auto-onboarding),
+    // so the UI, the CLI, and the setup coordinator all persist tokens identically.
+    const channelDeps = {
+      vault,
+      load: () => loadConfig(),
+      save: (next: VesperConfig) => saveConfig(next),
+      plugins: CHANNEL_PLUGINS,
+    };
+    // Auto-onboarding: drive the user's CLI (agent-browser) to mint a token channel's
+    // token, then persist it via the same `setToken` path. Backs POST /:id/setup +
+    // `vesper connections setup`.
+    const channelSetup = new ChannelSetupCoordinator({
+      complete: makeAgenticCompleteFn(config, installed),
+      persistToken: (id, token) => setChannelToken(channelDeps, id, token, {}),
+      store: uiStore,
+    });
+    // Read-only skill library for the Skills section. Skills live in `.ai/skills` (the
+    // repo's committed artifacts) + the per-developer skill-train state; absent dirs ->
+    // an empty list (e.g. a daemon launched outside the repo).
+    const skillLibrary = new SkillLibrary({ skillsDir: ".ai/skills", trainDir: skillTrainDir() });
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
@@ -149,15 +173,27 @@ export const daemonRunCommand: Command = {
       detectClis: async () => installed.map((name) => ({ name, status: "installed", ok: true })),
       detectPresences: presenceDetectorFor(presenceMatchers),
       approvalTokens,
-      softwareEngineer: makeSoftwareEngineerSurface({ coordinator: sweCoordinator, store: uiStore }),
+      softwareEngineer: makeSoftwareEngineerSurface({
+        coordinator: sweCoordinator,
+        store: uiStore,
+      }),
       connections: {
+        // Reload config each call so a UI/CLI token-set (which writes to disk) is
+        // reflected immediately — configured + enabled flip without a daemon restart.
         list: async () =>
           channelStates({
-            wiring: config.connections,
+            wiring: (await loadConfig()).connections,
             storedKeys: await vault.list(),
             runningIds: channels.runningIds,
           }),
+        // Reuse the exact CLI `connections set` path so UI + CLI write identically
+        // (vault set + enable in config). The handler must restart to pick up a brand-new
+        // channel, but the badge reflects the stored credential at once (storedKeys).
+        setToken: (id, token, params) => setChannelToken(channelDeps, id, token, params ?? {}),
+        // Auto-onboarding: "Connect" on a not-yet-configured token channel drives the CLI.
+        setup: (id) => channelSetup.setup(id),
       },
+      skills: skillLibrary,
       pairing,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),

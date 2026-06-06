@@ -739,3 +739,57 @@ describe("ADAPTER_REGISTRY / buildAdapter", () => {
     expect(capturedCmd).toBe("claude-override");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Agentic mode — CompleteOptions.agentic selects the agentic args
+// ---------------------------------------------------------------------------
+
+describe("BaseAdapter agentic mode", () => {
+  /** A runner that records the argv + options it was called with. */
+  function capturingRunner(): {
+    run: ProcessRunner;
+    calls: Array<{ command: string; args: readonly string[]; timeoutMs?: number }>;
+  } {
+    const calls: Array<{ command: string; args: readonly string[]; timeoutMs?: number }> = [];
+    const run: ProcessRunner = async (command, args, options) => {
+      calls.push({
+        command,
+        args,
+        ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
+      return okResult();
+    };
+    return { run, calls };
+  }
+
+  test("a normal completion uses the one-shot defaultArgs (not agentic)", async () => {
+    const { run, calls } = capturingRunner();
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("hi");
+    expect(calls[0]?.args).toEqual(["-p", "--output-format", "json", "hi"]);
+  });
+
+  test("agentic:true uses the configured agenticArgs and passes the timeout through", async () => {
+    const { run, calls } = capturingRunner();
+    const adapter = new ClaudeCodeAdapter({
+      run,
+      agenticArgs: ["-p", "--output-format", "json", "--dangerously-skip-permissions"],
+    });
+    await adapter.complete("set up telegram", { agentic: true, timeoutMs: 300_000 });
+    expect(calls[0]?.args).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--dangerously-skip-permissions",
+      "set up telegram",
+    ]);
+    expect(calls[0]?.timeoutMs).toBe(300_000);
+  });
+
+  test("agentic:true with no agenticArgs override falls back to the default args", async () => {
+    const { run, calls } = capturingRunner();
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("hi", { agentic: true });
+    expect(calls[0]?.args).toEqual(["-p", "--output-format", "json", "hi"]);
+  });
+});

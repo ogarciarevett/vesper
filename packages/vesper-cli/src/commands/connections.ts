@@ -20,6 +20,7 @@ import {
   KeychainVault,
   type PairingUpdate,
   renderQrTerminal,
+  type SetupUpdate,
   type Vault,
 } from "@vesper/core";
 import { type ConnectionConfig, loadConfig, saveConfig, type VesperConfig } from "../config.ts";
@@ -157,8 +158,8 @@ export async function sendVia(
   return displayName;
 }
 
-/** Convert the daemon's `application/x-ndjson` pairing stream into PairingUpdates. */
-async function* ndjsonUpdates(body: ReadableStream<Uint8Array>): AsyncGenerator<PairingUpdate> {
+/** Convert a daemon `application/x-ndjson` stream into typed updates (pairing or setup). */
+async function* ndjsonStream<T>(body: ReadableStream<Uint8Array>): AsyncGenerator<T> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -170,12 +171,12 @@ async function* ndjsonUpdates(body: ReadableStream<Uint8Array>): AsyncGenerator<
     while (nl >= 0) {
       const chunk = buffer.slice(0, nl).trim();
       buffer = buffer.slice(nl + 1);
-      if (chunk.length > 0) yield JSON.parse(chunk) as PairingUpdate;
+      if (chunk.length > 0) yield JSON.parse(chunk) as T;
       nl = buffer.indexOf("\n");
     }
   }
   const tail = buffer.trim();
-  if (tail.length > 0) yield JSON.parse(tail) as PairingUpdate;
+  if (tail.length > 0) yield JSON.parse(tail) as T;
 }
 
 /**
@@ -296,7 +297,59 @@ const pairCommand: Command = {
       const detail = (await res.text().catch(() => "")).trim();
       throw new Error(`pairing request failed (${res.status})${detail ? `: ${detail}` : ""}`);
     }
-    return runPairing(ndjsonUpdates(res.body), line);
+    return runPairing(ndjsonStream<PairingUpdate>(res.body), line);
+  },
+};
+
+/**
+ * Render an auto-onboarding stream to the terminal: progress lines while working, a
+ * success line on `configured`, and the manual-token fallback hint on `awaiting_user`.
+ * Returns the exit code (0 configured, 1 otherwise). Pure over `print` — unit-testable.
+ */
+export async function runChannelSetup(
+  updates: AsyncIterable<SetupUpdate>,
+  print: (text: string) => void,
+): Promise<number> {
+  for await (const update of updates) {
+    if (update.status === "working") {
+      print(dim(update.message));
+    } else if (update.status === "configured") {
+      print(green("Connected! The channel is set up."));
+      return 0;
+    } else if (update.status === "awaiting_user") {
+      print(yellow(update.reason));
+      print(dim("Or set the token by hand: vesper connections set <id>"));
+      return 1;
+    } else {
+      print(yellow(`Setup failed: ${update.reason}`));
+      return 1;
+    }
+  }
+  return 1;
+}
+
+const setupCommand: Command = {
+  name: "setup",
+  summary: "Auto-connect a token channel — Vesper drives your CLI's browser to create the bot.",
+  usage: "vesper connections setup <id>   # Telegram/Discord; daemon must be running",
+  async run({ positionals }) {
+    const id = positionals[0];
+    if (id === undefined) throw new Error("usage: vesper connections setup <id>");
+    const base = `http://127.0.0.1:${uiPort()}`;
+    let res: Response;
+    try {
+      res = await fetch(`${base}/api/connections/${encodeURIComponent(id)}/setup`, {
+        method: "POST",
+        headers: { origin: base },
+      });
+    } catch {
+      throw new Error("could not reach the daemon — start it with `vesper daemon start`");
+    }
+    if (!res.ok || res.body === null) {
+      const detail = (await res.text().catch(() => "")).trim();
+      throw new Error(`setup request failed (${res.status})${detail ? `: ${detail}` : ""}`);
+    }
+    return runChannelSetup(ndjsonStream<SetupUpdate>(res.body), line);
   },
 };
 
@@ -348,6 +401,7 @@ export const connectionsGroup: CommandGroup = {
     listCommand,
     setCommand,
     pairCommand,
+    setupCommand,
     testCommand,
     sendCommand,
     enableCommand,

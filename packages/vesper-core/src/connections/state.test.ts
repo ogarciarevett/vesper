@@ -45,4 +45,15 @@ describe("channelStates", () => {
     expect(states.length).toBeGreaterThanOrEqual(4);
     expect(states.every((s) => !s.configured && !s.enabled && !s.running)).toBe(true);
   });
+
+  test("self-driving channels report selfPairing; token-then-pair channels do not", () => {
+    const states = channelStates({});
+    // Signal pairs by device-link (pairingNeedsInbound:false) — no token first.
+    expect(byId(states, "signal").selfPairing).toBe(true);
+    // Telegram/Discord need a bot token before pairing — not self-pairing.
+    expect(byId(states, "telegram").selfPairing).toBe(false);
+    expect(byId(states, "discord").selfPairing).toBe(false);
+    // WhatsApp Cloud API is not pairable at all.
+    expect(byId(states, "whatsapp").selfPairing).toBe(false);
+  });
 });

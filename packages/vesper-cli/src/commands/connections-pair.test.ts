@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { PairingUpdate } from "@vesper/core";
-import { runPairing } from "./connections.ts";
+import type { PairingUpdate, SetupUpdate } from "@vesper/core";
+import { runChannelSetup, runPairing } from "./connections.ts";
 
 async function* seq(...updates: PairingUpdate[]): AsyncGenerator<PairingUpdate> {
+  for (const u of updates) yield u;
+}
+
+async function* setupSeq(...updates: SetupUpdate[]): AsyncGenerator<SetupUpdate> {
   for (const u of updates) yield u;
 }
 
@@ -40,6 +44,35 @@ describe("runPairing", () => {
 
   test("returns 1 on expired", async () => {
     const code = await runPairing(seq({ status: "expired" }), () => {});
+    expect(code).toBe(1);
+  });
+});
+
+describe("runChannelSetup", () => {
+  test("prints progress and returns 0 on configured", async () => {
+    const out: string[] = [];
+    const code = await runChannelSetup(
+      setupSeq({ status: "working", message: "Setting up Telegram…" }, { status: "configured" }),
+      (s) => out.push(s),
+    );
+    expect(code).toBe(0);
+    const joined = out.join("\n");
+    expect(joined).toContain("Setting up Telegram");
+    expect(joined.toLowerCase()).toContain("set up");
+  });
+
+  test("returns 1 on awaiting_user and points at the manual fallback", async () => {
+    const out: string[] = [];
+    const code = await runChannelSetup(
+      setupSeq({ status: "awaiting_user", reason: "Telegram needs you to sign in." }),
+      (s) => out.push(s),
+    );
+    expect(code).toBe(1);
+    expect(out.join("\n")).toContain("connections set");
+  });
+
+  test("returns 1 on error", async () => {
+    const code = await runChannelSetup(setupSeq({ status: "error", reason: "boom" }), () => {});
     expect(code).toBe(1);
   });
 });

@@ -25,6 +25,14 @@ export interface AdapterOptions {
   readonly command?: string;
   /** Override the default base args (e.g. `["-p"]`). Prompt is appended after these. */
   readonly args?: readonly string[];
+  /**
+   * Override the base args used in AGENTIC mode ({@link CompleteOptions.agentic}).
+   * Defaults to the adapter's {@link BaseAdapter.defaultAgenticArgs}. This is the knob
+   * for granting the CLI the tool permissions an unattended browser task needs (e.g.
+   * `--dangerously-skip-permissions` or `--allowedTools`); kept config-driven so Vesper
+   * never bakes a permission posture into core.
+   */
+  readonly agenticArgs?: readonly string[];
 }
 
 /**
@@ -43,11 +51,22 @@ export abstract class BaseAdapter implements CLIAdapter {
   readonly #run: ProcessRunner;
   readonly #command: string | undefined;
   readonly #args: readonly string[] | undefined;
+  readonly #agenticArgs: readonly string[] | undefined;
 
   constructor(options: AdapterOptions = {}) {
     this.#run = options.run ?? runProcess;
     this.#command = options.command;
     this.#args = options.args;
+    this.#agenticArgs = options.agenticArgs;
+  }
+
+  /**
+   * Default base args for AGENTIC mode. Defaults to the one-shot {@link defaultArgs};
+   * a subclass overrides this when its agentic invocation differs (see the claude
+   * adapter). Config can override via {@link AdapterOptions.agenticArgs}.
+   */
+  protected get defaultAgenticArgs(): readonly string[] {
+    return this.defaultArgs;
   }
 
   /** Resolved command: caller override, else the subclass default. */
@@ -58,6 +77,11 @@ export abstract class BaseAdapter implements CLIAdapter {
   /** Resolved base args: caller override, else the subclass default. */
   private get resolvedArgs(): readonly string[] {
     return this.#args ?? this.defaultArgs;
+  }
+
+  /** Resolved agentic args: caller override, else the subclass default agentic args. */
+  private get resolvedAgenticArgs(): readonly string[] {
+    return this.#agenticArgs ?? this.defaultAgenticArgs;
   }
 
   /**
@@ -72,7 +96,8 @@ export abstract class BaseAdapter implements CLIAdapter {
   }
 
   async complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult> {
-    const argv = [...this.resolvedArgs, prompt];
+    const baseArgs = opts?.agentic === true ? this.resolvedAgenticArgs : this.resolvedArgs;
+    const argv = [...baseArgs, prompt];
 
     try {
       const res = await this.#run(this.resolvedCommand, argv, {

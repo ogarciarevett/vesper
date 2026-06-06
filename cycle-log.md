@@ -1185,3 +1185,106 @@ Backend->Client->Review workflow; the review's 2 real HIGH gaps were then fixed 
   files (the only `biome ci` errors are pre-existing `client/index.html` `!important` styles, unchanged here);
   no new dependency, no migration, no LLM SDK (Hard rule 12 intact — the brain is the CLI via `ctx.complete`).
   Issue-capped: record = this entry + spec + commit.
+- DOGFOOD (live, post-ship, against a real daemon + real `claude` + a throwaway git repo): the full flow is
+  END-TO-END VERIFIED — worktree created -> real `claude` produced parseable SPEC/PLAN -> `swe:build` sub-agent
+  wrote the file -> `GET /diff` returned the exact structured per-file patch -> decision route 401 WITHOUT a
+  token / approved WITH a minted single-use code -> `git add` -> TEST ran ONLY after approval. Found + fixed
+  THREE real bugs the mocked suite couldn't catch: (1) `POST /api/pipelines/:id/run` dropped the body, so the
+  lead could never receive `repo`/`wish` — the only daemon-side trigger was param-less (now reads `{params,cli}`
+  from the body, +2 tests); (2) `bun test` exits NONZERO on "0 test files matching" — a false `test_failed` for
+  any change that adds no bun tests (now tolerated via `bunTestPassed`, +tests); (3) `biome ci` exits NONZERO on
+  "No files were processed" — same false-failure class (now tolerated via `biomeCiPassed`, +tests). 1174 / 0 after.
+- FOLLOW-ON found by dogfood (needs Omar — cross-cutting, NOT improvised): the CLI adapter's 30s per-call
+  timeout is too short for real coding turns and intermittently aborts the 4-call cycle ungracefully (the run
+  errors mid-cycle, leaving a worktree). `CompleteFn` has no timeout knob, so a fix touches the shared CLI
+  adapter contract used by every pipeline — surface before changing.
+
+---
+
+## channel-auto-onboarding — one "Connect" button, no guides (Slices 0-4)
+
+SPEC: `specs/channel-auto-onboarding.md`. Issue-capped: record = spec + this entry + commit (Rule 11).
+Decision basis (Omar, 2026-06-06): full automation now; delegate the browser loop to the user's CLI (no new
+Vesper dependency, Hard rule 12 intact); all four channels; the new UI token field is LOCAL-ORIGIN only.
+
+- WHY: the Channels page was a directory of "setup guide" links — for a fresh user every channel dead-ended.
+  Two distinct failures, fixed by two halves:
+  - The genuinely zero-token channels (WhatsApp-personal, Signal) were gated OFF. The UI showed "Connect" only
+    when `c.configured`, but a device-link channel only becomes configured BY pairing — a chicken-and-egg
+    deadlock. The QR engine already existed (`pairingNeedsInbound:false` skips the token precondition); it was
+    switched off in the surface. (Slice 1)
+  - The browser deliberately had NO way to enter a credential ("the browser never accepts a credential") — so a
+    non-technical user could never set a token at all. (Slice 0 adds the element; Slice 3 automates it.)
+- WHAT:
+  - Slice 0 — `POST /api/connections/:id/token` (local-origin only, fail-closed 503, audited as
+    channel+method, NEVER the token) + a per-channel password field reusing the exact CLI `setToken` path.
+  - Slice 1 — core `ChannelState.selfPairing` (pairable && self-driving) + the UI gate fix so device-link
+    channels show "Connect" with no token.
+  - Slice 2 — `CompleteOptions.agentic` + `AdapterOptions.agenticArgs` (+ config `agenticArgs`): the adapter
+    runs the user's CLI agentically (its agent-browser skill) with a long timeout. Also the natural home for
+    the per-call timeout knob the SWE dogfood asked for. Default agenticArgs = the one-shot args, so an
+    unconfigured CLI degrades to manual rather than driving a browser without permission.
+  - Slice 3 — core `connections/setup.ts` (pure prompt builders + STRICT per-provider token regex; a token is
+    accepted ONLY on a confident match, never from prose) + host `ChannelSetupCoordinator` (agentic complete ->
+    strict parse -> persist via setToken -> audit). Best-effort: login wall / unparseable / timeout / CLI error
+    all end `awaiting_user` (graceful fallback), never a dead-end.
+  - Slice 4 — `POST /api/connections/:id/setup` (ndjson stream, mirrors /pair) + ONE "Connect" button routed
+    by channel kind (device-link/configured -> pairing; pairable token channel w/ no token -> setup, falling
+    back to the inline token field on `awaiting_user`) + `vesper connections setup <id>`.
+- SECURITY: the token-set route is local-origin only by Omar's explicit call (setting a channel token
+  designates who may drive the agent — accepted for the single-user local runtime). The OTHER privileged routes
+  (diff decision, template edit) stay approval-gated. The minted/entered token never appears in a response, a
+  log, or an audit row (audit kinds `connection_token_set` / `connection_setup_{started,succeeded,failed}` carry
+  channel + outcome only; reused the existing `stripSensitive` choke point).
+- VERIFIED: full suite 1203 / 0 (+22). biome ci exit 0 (only the pre-existing `index.html` `!important`
+  warnings). Client bundle builds. TWO throwaway real-HTTP E2Es (deleted after): (a) Slice 0 — POST token ->
+  vault+enable -> badge flips, empty 400, cross-origin 403 (10/10); (b) Slices 3/4 — route -> REAL coordinator
+  -> persist on the happy path (token never in the stream) AND graceful `awaiting_user` on a simulated login
+  wall, audit redacted (7/7). No new dependency, no migration, no LLM SDK.
+- CAVEAT (honest): the ACTUAL agent-browser drive of @BotFather / the Discord developer portal is NOT
+  live-verified — it needs the user's CLI to ship a browser skill AND `agenticArgs` to grant it tool
+  permission, plus real logged-in accounts (ToS-sensitive). By design it is best-effort and falls back to the
+  manual token field. The wow-path is unproven; the safety net (manual entry) is proven.
+- FOLLOW-ONS (not improvised): chain setup directly into pairing (today setup mints the token, then the user
+  presses Connect again for the chat-id capture); a config-driven default `agenticArgs` per CLI once a safe
+  permission posture is settled; WhatsApp-Cloud has no automated setup (token-only) — could add one.
+
+---
+
+## voice-in-UI — "Talk to Vesper" Mode A (browser speech + the CLI brain)
+
+Slice of `specs/voice-conversation.md` (Mode A: conversation in the focused window). Issue-capped:
+record = spec + this entry + commit.
+
+- WHY: the Voice section was a dead stub. The full voice spec defers a Tauri/Whisper NATIVE shell, but
+  that's only needed for SYSTEM-WIDE dictation (Mode B). The in-window conversation (Mode A, spec line 119)
+  runs in the browser today — no native shell.
+- WHAT: a real `voiceSection` (replacing the stub). Mic via the browser's `SpeechRecognition`
+  (feature-detected), the brain is the EXISTING `POST /api/chat` (router -> the user's CLI, Hard rule 12
+  intact — no new brain, no cloud voice provider), replies spoken with local `speechSynthesis`; barge-in
+  cancels playback. Typing always works as the fallback; spoken replies are the universally-local half.
+- LOCAL-FIRST CAVEAT (honest): `speechSynthesis` is local (OS voices). Browser `SpeechRecognition` may route
+  audio to an online service depending on the browser (Chrome) — so mic input is opt-in + feature-detected,
+  with an in-UI note. Not live-verified (no mic/browser in CI); the render path compiles + bundles.
+- VERIFIED: full suite green; biome ci exit 0; the client bundle builds with both speech APIs. Pure client +
+  the existing chat path — no server change, no new dependency.
+
+## skills-UI — read-only skill library shared across pipelines + Vesper
+
+Reuses `specs/skill-train.md` (the engine). Issue-capped: record = spec + this entry + commit.
+
+- WHY: the Skills section was a dead stub, but skills are a shared concept across pipelines + Vesper — a
+  library view is high-value. The engine + `vesper skill {train,list,diff,accept,revert}` CLI already exist;
+  there was no read API/UI.
+- WHAT: a host `SkillLibrary` (reads `.ai/skills/<name>/{SKILL.md,tasks.json}` + the skill-train state
+  `best.md`/`history.jsonl`; tolerates skills with no harness; path-traversal-guarded via `assertSkillName`),
+  two routes (`GET /api/skills` list + `GET /api/skills/:name` detail, kebab-validated, fail-closed), shared
+  view types in `world/types.ts` (the `SweDiffView` pattern, exported from `@vesper/ui`), and a live
+  `skillsSection` (list -> detail: frontmatter, tasks, SKILL.md body, training-status badges
+  `candidate ready`/`up to date`, latest scores). READ-ONLY — training/accept stay on the cost- and
+  confirmation-gated `vesper skill` CLI.
+- VERIFIED: full suite 1214 / 0; biome ci exit 0; bundle builds. Real-HTTP E2E (4/4) over the repo's 15 real
+  skills: list returned all 15, served a real SKILL.md body, blocked a `../package.json` traversal (400). No
+  new dependency, no migration.
+- FOLLOW-ONS: training-from-the-UI (gated like the CLI's cost confirm); a proper inline diff (committed vs
+  best) in the detail view; surfacing which pipelines reference each skill.

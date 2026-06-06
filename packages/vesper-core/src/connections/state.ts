@@ -32,6 +32,14 @@ export interface ChannelState {
   readonly running: boolean;
   /** The handler supports QR/link pairing (scan-to-connect). */
   readonly pairable: boolean;
+  /**
+   * The channel pairs WITHOUT a prior credential — pairing itself establishes the
+   * session (device-link channels: WhatsApp-personal, Signal). True when the plugin is
+   * `pairable` AND self-driving (`pairingNeedsInbound === false`). The surface uses this
+   * to show "Connect" for a fresh channel that needs no token, instead of hiding it
+   * behind `configured` (which it can only reach BY pairing — the chicken-and-egg gate).
+   */
+  readonly selfPairing: boolean;
   readonly docsUrl: string;
   readonly allowedHosts: readonly string[];
 }
@@ -59,6 +67,8 @@ export function channelStates(opts: {
       // A channel with no shipped handler can never run, regardless of the input.
       running: available && running.has(descriptor.id),
       pairable: plugin?.pairable === true,
+      // Self-driving pairing (device-link) needs no token first — pairing IS the setup.
+      selfPairing: plugin?.pairable === true && plugin?.pairingNeedsInbound === false,
       docsUrl: descriptor.docsUrl,
       allowedHosts: wiring?.allowedHosts ?? descriptor.allowedHosts,
     };
