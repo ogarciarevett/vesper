@@ -492,7 +492,9 @@ this section after each ship.
 
 1. **SPEC** — declare the unit of work as an OpenSpec proposal at `specs/<feature>.md`.
 2. **PLAN** — break the spec into ordered, individually-completable tasks.
-3. **BUILD** — produce the artifact, task by task (TDD for vault/storage/cli/scheduler).
+3. **BUILD** — produce the artifact, task by task (TDD for vault/storage/cli/scheduler). Any task
+   whose diff touches the UI (`packages/vesper-ui/**`) is not done until it passes the impeccable
+   UI/UX audit gate — see "UI/UX audit gate (impeccable)" below.
 4. **TEST** — verify against acceptance criteria. Fail → back to BUILD (post REVERTED comment).
 5. **REVIEW** — self-review the diff against spec. Flag deviations.
 6. **SIMPLIFY** — reduce. Delete dead branches, collapse needless abstraction, inline single-use
@@ -515,7 +517,7 @@ transitions the Linear issue and posts a comment — see the "Linear status prot
 | `/plan` | PLAN | | `/code-simplify` | SIMPLIFY |
 | `/build` | BUILD | | (manual) | IMPROVE |
 | `/test` | TEST | | `/ship` | SHIP/DELEGATE |
-| | | | (manual) | REPEAT |
+| `$impeccable {audit,critique}` | BUILD: UI gate | | (manual) | REPEAT |
 
 The `/spec`, `/plan`, etc. slashes are Claude Code's agent-skills plugin commands; Codex, Gemini,
 and opencode do not share that slash UI but DO run the same skills. Codex auto-discovers skills from
@@ -526,6 +528,28 @@ tool, the numbered cycle steps above are the cross-tool source of truth.
 Advancement gates: stop and show Omar after `/spec` and after `/plan`; await acknowledgment.
 TDD is test-first for vault/storage/cli/scheduler (CLI adapter tests **mock the process seam** —
 no real CLI calls in the suite; the suite must shell out to nothing).
+
+### UI/UX audit gate (impeccable)
+
+Any BUILD task whose diff touches the UI (`packages/vesper-ui/**`) is **not complete** until it passes
+an impeccable UI/UX audit of the surface it changed. This is a sub-step of BUILD (step 3), run per
+task — not a separate cycle step. Run **both** Evaluate commands on the changed surface:
+
+- `$impeccable audit <surface>` — technical quality: accessibility, performance, responsive,
+  anti-patterns; scored P0-P3.
+- `$impeccable critique <surface>` — UX review: visual hierarchy, information architecture, cognitive
+  load, heuristics.
+
+Rules:
+- The skill is vendored at `.ai/skills/impeccable/` (materialized to the per-tool dirs by
+  `bun run sync:ai`). Project context is `docs/PRODUCT.md`; `docs/DESIGN.md` is generated once via
+  `$impeccable document` (run it on the first UI task if `DESIGN.md` is still missing, then proceed).
+- **P0/P1 findings MUST be fixed before the task counts as done** — loop back within BUILD and
+  re-audit. P2/P3 are fixed when cheap, otherwise captured as follow-ups in the IMPROVE reflection.
+- **Dark-glass is the committed brand identity** (`docs/PRODUCT.md`) — preserve it; do not let the
+  audit's generic "glassmorphism as default" flag strip the intended aesthetic.
+- Non-UI tasks (core / cli / storage / scheduler / docs) skip this gate entirely; a cycle with no UI
+  changes at all skips it entirely.
 
 ---
 

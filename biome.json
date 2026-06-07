@@ -14,6 +14,7 @@
       "!**/.gemini",
       "!**/.cursor",
       "!**/.ai/generated",
+      "!**/.ai/skills/impeccable",
       "!**/.githooks",
       "!**/dist",
       "!**/node_modules",

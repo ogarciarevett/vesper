@@ -16,6 +16,9 @@ target/
 # Vesper local runtime directory
 .vesper/
 
+# impeccable (UI/UX audit skill) runtime artifacts — critique snapshots, live-mode config
+.impeccable/
+
 # Environment / secrets
 .env
 .env.*
