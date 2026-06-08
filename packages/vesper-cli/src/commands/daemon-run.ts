@@ -27,6 +27,7 @@ import { loadConfig, saveConfig, type VesperConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
+import { makeMemoryProvider } from "../embeddings.ts";
 import { makeNotifyFn } from "../make-notify.ts";
 import { makeSoftwareEngineerSurface } from "../make-software-engineer.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
@@ -162,6 +163,9 @@ export const daemonRunCommand: Command = {
     // repo's committed artifacts) + the per-developer skill-train state; absent dirs ->
     // an empty list (e.g. a daemon launched outside the repo).
     const skillLibrary = new SkillLibrary({ skillsDir: ".ai/skills", trainDir: skillTrainDir() });
+    // Semantic memory (RAG): status + search backed by the configured bring-your-own
+    // embedder. With none configured it degrades to available:false (no crash, no probe).
+    const memory = await makeMemoryProvider(config, vault, uiStore);
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
@@ -194,6 +198,7 @@ export const daemonRunCommand: Command = {
         setup: (id) => channelSetup.setup(id),
       },
       skills: skillLibrary,
+      memory,
       pairing,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),

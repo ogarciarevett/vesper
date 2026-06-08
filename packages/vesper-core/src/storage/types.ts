@@ -6,6 +6,7 @@
  */
 
 import type { Capability } from "../capabilities/index.ts";
+import type { RagSourceKind } from "../rag/types.ts";
 
 /** A row from the `events` table. */
 export interface EventRow {
@@ -254,6 +255,42 @@ export interface ListRunsOptions {
  * Synchronous interface to the Vesper local store.
  * All operations throw {@link StorageError} on failure.
  */
+/** Input to {@link Store.upsertRagDocument}. `dimensions` is derived from `embedding.length`. */
+export interface RagDocumentInput {
+  readonly sourceKind: RagSourceKind;
+  readonly sourceId: string;
+  /** The chunk that was embedded — kept for display + safe re-embed on a model swap. */
+  readonly text: string;
+  /** The embedder id used; a change makes this a distinct row (re-index trigger). */
+  readonly embedderId: string;
+  /** The embedding vector; stored inline as a little-endian Float32 BLOB. */
+  readonly embedding: Float32Array;
+  /** Index timestamp (ms); defaults to now when omitted. */
+  readonly indexedAt?: number;
+}
+
+/** One indexed vector hydrated for the brute-force cosine scan ({@link Store.listRagVectors}). */
+export interface RagVectorRow {
+  readonly sourceKind: RagSourceKind;
+  readonly sourceId: string;
+  readonly text: string;
+  readonly dimensions: number;
+  readonly embedding: Float32Array;
+}
+
+/** Optional pre-filters for {@link Store.listRagVectors}. */
+export interface ListRagVectorsOptions {
+  readonly sourceKind?: RagSourceKind;
+  readonly embedderId?: string;
+}
+
+/** Scope for {@link Store.pruneRagDocuments} — at least one field should be set. */
+export interface PruneRagDocumentsOptions {
+  readonly embedderId?: string;
+  readonly sourceKind?: RagSourceKind;
+  readonly sourceId?: string;
+}
+
 export interface Store {
   /**
    * Apply any pending forward migrations. Safe to call repeatedly — already-applied
@@ -364,6 +401,27 @@ export interface Store {
    * Backs the Memory surface's status.
    */
   ragDocumentCount(): number;
+
+  /**
+   * Insert or update one indexed RAG document, keyed on (sourceKind, sourceId, embedderId).
+   * Idempotent: re-upserting the same key updates the text + embedding in place rather than
+   * adding a row. The embedding is stored inline as a Float32 BLOB for brute-force cosine
+   * search (no sqlite-vec dependency).
+   */
+  upsertRagDocument(input: RagDocumentInput): void;
+
+  /**
+   * Read indexed vectors for the brute-force KNN scan, optionally pre-filtered by sourceKind
+   * and/or embedderId. Each row's embedding is rehydrated as a Float32Array.
+   */
+  listRagVectors(options?: ListRagVectorsOptions): readonly RagVectorRow[];
+
+  /**
+   * Delete indexed documents matching the given scope; returns the number removed. Used for a
+   * controlled re-index (prune the stale embedder, then re-index) — never a truncate (Hard
+   * rule 4).
+   */
+  pruneRagDocuments(options: PruneRagDocumentsOptions): number;
 
   /**
    * Close the underlying database connection. After this call the store must not be used.

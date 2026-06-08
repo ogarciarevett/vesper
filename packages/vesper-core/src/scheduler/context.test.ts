@@ -120,6 +120,18 @@ function makeStore(): {
       return null;
     },
     upsertTemplate() {},
+    // RAG Store methods (migrations 009/010): unused by the context double, stubbed
+    // so the mock still satisfies the widened Store interface.
+    ragDocumentCount() {
+      return 0;
+    },
+    upsertRagDocument() {},
+    listRagVectors() {
+      return [];
+    },
+    pruneRagDocuments() {
+      return 0;
+    },
     close() {},
   };
   return { store, finished, events, contexts };

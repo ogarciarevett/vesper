@@ -4,6 +4,8 @@ import type {
   ApprovalTokenStore,
   ChannelState,
   PairingSession,
+  RagHit,
+  RagStatus,
   RunOutcome,
   RunTreeNode,
   Scheduler,
@@ -17,6 +19,7 @@ import {
   RUN_EVENT,
   ragStatus,
   SchedulerError,
+  StorageError,
 } from "@vesper/core";
 import { ModuleRegistry } from "../modules/registry.ts";
 import type { UiModule } from "../modules/types.ts";
@@ -142,6 +145,17 @@ export interface UiServerDeps {
   readonly skills?: {
     list(): Promise<readonly SkillSummary[]>;
     get(name: string): Promise<SkillDetail | null>;
+  };
+  /**
+   * Semantic-memory (RAG) surface. `status` returns the live {@link RagStatus} (never
+   * throws — degrades to unavailable when no embedder is configured); `search` runs the
+   * `ragSearch` seam and may throw `StorageError("rag_unavailable")` when disabled (the
+   * route catches it and reports `available:false`). Absent -> `/api/memory` reports the
+   * scaffold's count-only unavailable status and `/api/memory/search` returns no hits.
+   */
+  readonly memory?: {
+    status(): Promise<RagStatus>;
+    search(query: string, k: number): Promise<readonly RagHit[]>;
   };
   /**
    * Software-engineer pipeline surface. `loadDiff` returns the structured per-file
@@ -484,11 +498,34 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         return json(deps.skills === undefined ? [] : await deps.skills.list());
       }
 
-      // GET /api/memory — semantic-memory (RAG) status. Never throws: today RAG is
-      // scaffolded but disabled (no embedding model), so this reports available:false +
-      // the indexed-document count. Lights up once the on-device embedder is enabled.
+      // GET /api/memory — semantic-memory (RAG) status. Never throws. With a memory
+      // provider wired it reports the live status (provider/model/dims + indexed count);
+      // without one it reports the count-only unavailable status (degrades gracefully).
       if (req.method === "GET" && pathname === "/api/memory") {
-        return json(ragStatus(store.ragDocumentCount()));
+        if (deps.memory === undefined) {
+          return json(ragStatus({ configured: false, indexedDocuments: store.ragDocumentCount() }));
+        }
+        return json(await deps.memory.status());
+      }
+
+      // GET /api/memory/search?q=&k= — semantic search over indexed history. Local-only
+      // (guarded above). Returns { hits, available }; a disabled engine yields
+      // { hits: [], available: false } rather than an error so the Memory page degrades.
+      if (req.method === "GET" && pathname === "/api/memory/search") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (q.length === 0) return json({ error: "q is required" }, 400);
+        if (deps.memory === undefined) return json({ hits: [], available: false });
+        const kRaw = Number(url.searchParams.get("k") ?? "5");
+        const k = Number.isInteger(kRaw) && kRaw > 0 ? Math.min(kRaw, 20) : 5;
+        try {
+          const hits = await deps.memory.search(q, k);
+          return json({ hits, available: true });
+        } catch (err) {
+          if (err instanceof StorageError && err.reason === "rag_unavailable") {
+            return json({ hits: [], available: false });
+          }
+          return json({ error: err instanceof Error ? err.message : "search failed" }, 500);
+        }
       }
 
       // GET /api/skills/:name — one skill's full detail. The name is kebab-shaped

@@ -439,26 +439,34 @@ reading `.ai/skills` + the skill-train state) shared across pipelines + Vesper; 
 cost-gated `vesper skill` CLI. No new dependency, no migration. Issue-capped: record = spec + `cycle-log.md`
 + commit (Rule 11).
 
-**RAG memory (semantic recall) SCAFFOLDED — embedding model deferred (Omar's call).** `specs/rag-memory.md`
-slice: the no-dependency structure landed so the seam + surface exist and degrade cleanly, while the heavy
-dependency (an on-device embedding model + sqlite-vec — the FIRST new runtime dep since opt-in Baileys, which
-needs explicit Omar authorization + isolation in an opt-in package) is deferred. Shipped: migration
-**009_rag_index** (the plain `rag_documents` metadata sidecar ONLY — the vec0 virtual table is created lazily
-at index-open once the extension loads, so the migration runner never crashes a vanilla `bun:sqlite`; spec
-said "007" but 007/008 were taken — reconciled to 009); the `vesper-core/rag/` seam (`Embedder` interface,
-`RagDocument`/`RagHit` types, `ragSearch` throwing the new typed `StorageError("rag_unavailable")`, and a
-non-throwing `ragStatus`); `store.ragDocumentCount()`; `GET /api/memory` (status, never throws); and a live
-Memory section wired to it (replacing the stub — the old `sections/stubs.ts`/`stub.ts` are now gone). The
-embedder + vec0 KNN + indexer/backfill + `vesper rag` CLI land WITH the authorized model. No new dependency,
-no LLM SDK. Issue-capped: record = spec + `cycle-log.md` + commit (Rule 11).
+**RAG memory (semantic recall) SHIPPED — bring-your-own embeddings, zero new dependency.** `specs/rag-memory.md`
+(v2): semantic recall over Vesper's own history now works end-to-end — configure -> index -> search — sourced
+from the USER's own embeddings provider, NOT a bundled model (Omar's call 2026-06-07). Shipped: migration
+**009_rag_index** (the `rag_documents` metadata sidecar) + **010_rag_embedding_vector** (inline Float32 BLOB);
+the `vesper-core/rag/` seam (the bring-your-own HTTP `Embedder` — `ollama` + `openai` formats over the shipped
+`allowlistedFetch`, no SDK; brute-force cosine KNN in `cosine.ts`, NO sqlite-vec; `ragSearch`/`openRagIndex`/
+`ragStatus`; `indexer.ts` indexDocument/backfill/indexRun); store helpers (`upsertRagDocument`/`listRagVectors`/
+`pruneRagDocuments`); the `embeddings` config block (the codebase's FIRST API-key concept outside channel creds —
+vault holds the key, config holds only its name) + `makeEmbedder` resolver; `vesper rag {setup,index,search,status}`
+(+ an Ollama onboarding probe in `vesper init`, detect-and-offer); and the live Memory UI section (status +
+`GET /api/memory/search`, dark-glass preserved). **Hard rule 12 carve-out (clarification, NOT a reversal):**
+embeddings via the user's own local server / own API key over a raw allowlisted fetch with NO provider SDK are a
+retrieval utility, not the conversational brain — the brain stays the CLI; egress is `NETWORK_FETCH`-gated +
+host-allowlisted to the configured provider only. No new runtime dependency, no LLM SDK. Issue-capped: record =
+spec + `cycle-log.md` + commit (Rule 11). Out of scope (follow-on): a bundled on-device model + vec0 ANN; exposing
+`ragSearch` on `PipelineContext`; auto-evolve/chatbot grounding on the same seam.
 
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1218 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1266 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
-**Next:** the Vesper World UI redesign (Omar dislikes the current look — a design prompt is in hand);
-the Voice **native shell** follow-up (Tauri/Rust audio + Whisper STT + hotkey + Mode-B dictation, gated on
-Omar's Hard-rule-14 nod) and the opt-in ElevenLabs cloud voice. Software-Engineer follow-ons: the opt-in OSS
+**Next:** the **Autonomous Loop** (`specs/autonomous-loop.md`, **DEV-113**, held at SPEC for Omar's ack) —
+LLM-authored self-prompting loops where the model writes each iteration's prompt (AUTHOR -> EXECUTE -> CRITIC
+over `ctx.complete`) and the human only sets the objective + which pipeline runs the loop; v1 is a bounded,
+capability-sandboxed REASONING loop. The rest of the personal-agent **pipelines** (career, social, trading,
+hermes, secretary — the always-on, connected-24/7 backbone). The Voice **native shell** follow-up (Tauri/Rust
+audio + Whisper STT + hotkey + Mode-B dictation, gated on Omar's Hard-rule-14 nod) and the opt-in ElevenLabs
+cloud voice. Software-Engineer follow-ons: the opt-in OSS
 browser-VSCode child, per-file selective staging, the reject->rebuild + simplify->re-gate loops, a
 cwd-hardened TEST sandbox (owned by `security-hardening.md`), and a longer per-call CLI timeout for the
 SWE cycle (the 30s adapter default intermittently aborts a 4-call coding turn — `CompleteFn` needs a

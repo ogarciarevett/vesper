@@ -5,6 +5,7 @@ import { daemonGroup } from "./daemon.ts";
 import { evolveGroup } from "./evolve.ts";
 import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
+import { ragGroup } from "./rag.ts";
 import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
 import { skillGroup } from "./skill.ts";
@@ -25,6 +26,7 @@ export const registry: readonly Registrable[] = [
   uiCommand,
   scheduleGroup,
   runsGroup,
+  ragGroup,
   skillGroup,
   evolveGroup,
   voiceGroup,

@@ -42,6 +42,13 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "skills-dir",
   "val-fraction",
   "theme",
+  "provider",
+  "endpoint",
+  "model",
+  "dimensions",
+  "vault-key",
+  "k",
+  "source",
 ]);
 
 function isGroup(entry: Registrable): entry is CommandGroup {

@@ -175,4 +175,16 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_rag_docs_vec ON rag_documents(vec_rowid);
     `,
   },
+  {
+    // RAG embeddings, completed slice (specs/rag-memory.md v2). Stores the embedding
+    // vector INLINE as a little-endian Float32 BLOB so brute-force cosine KNN runs in
+    // TypeScript with NO sqlite-vec dependency (a personal corpus is small). Nullable +
+    // additive: existing rag_documents rows (none in practice) keep NULL until reindexed.
+    // `vec_rowid` from 009 is retained only as a forward-compat bridge to a future vec0
+    // table. Forward-only; appended AFTER 009.
+    id: "010_rag_embedding_vector",
+    sql: `
+      ALTER TABLE rag_documents ADD COLUMN embedding BLOB;
+    `,
+  },
 ];

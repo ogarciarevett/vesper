@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import type { Capability } from "../capabilities/index.ts";
 import { isCapability } from "../capabilities/index.ts";
+import type { RagSourceKind } from "../rag/types.ts";
 import { StorageError } from "./errors.ts";
 import { MIGRATIONS } from "./migrations.ts";
 import type {
@@ -14,10 +15,14 @@ import type {
   EventRow,
   FinishRunInput,
   ListEventsOptions,
+  ListRagVectorsOptions,
   ListRunEventsOptions,
   ListRunsOptions,
   ListTurnsOptions,
   PipelineTemplateRow,
+  PruneRagDocumentsOptions,
+  RagDocumentInput,
+  RagVectorRow,
   RecordRunContextInput,
   RecordRunInput,
   RunContext,
@@ -106,6 +111,15 @@ interface RawPipelineTemplateRow {
   updated_at: unknown;
 }
 
+/** Raw shape returned for the `rag_documents` vector-scan projection. */
+interface RawRagVectorRow {
+  source_kind: unknown;
+  source_id: unknown;
+  text: unknown;
+  dimensions: unknown;
+  embedding: unknown;
+}
+
 function assertString(value: unknown, column: string): string {
   if (typeof value !== "string") {
     throw new StorageError(
@@ -168,6 +182,44 @@ function parsePayload(raw: unknown, column: string): Record<string, unknown> {
     throw new StorageError("query_failed", `column "${column}" is not a JSON object`);
   }
   return parsed as Record<string, unknown>;
+}
+
+/** Rehydrate a BLOB column into a Float32Array, copying to guarantee a 4-byte-aligned buffer. */
+function assertFloat32(value: unknown, column: string): Float32Array {
+  if (!(value instanceof Uint8Array)) {
+    throw new StorageError(
+      "query_failed",
+      `expected BLOB for column "${column}", got ${typeof value}`,
+    );
+  }
+  // new Uint8Array(view) copies into its own buffer at offset 0 (works for Buffer too).
+  const copy = new Uint8Array(value);
+  return new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4));
+}
+
+const RAG_SOURCE_KINDS: ReadonlySet<RagSourceKind> = new Set<RagSourceKind>([
+  "event",
+  "run",
+  "run_event",
+  "skill",
+]);
+
+function assertRagSourceKind(value: unknown, column: string): RagSourceKind {
+  const str = assertString(value, column);
+  if (!RAG_SOURCE_KINDS.has(str as RagSourceKind)) {
+    throw new StorageError("query_failed", `unrecognised rag source_kind "${str}"`);
+  }
+  return str as RagSourceKind;
+}
+
+function toRagVectorRow(raw: RawRagVectorRow): RagVectorRow {
+  return {
+    sourceKind: assertRagSourceKind(raw.source_kind, "source_kind"),
+    sourceId: assertString(raw.source_id, "source_id"),
+    text: assertString(raw.text, "text"),
+    dimensions: assertNumber(raw.dimensions, "dimensions"),
+    embedding: assertFloat32(raw.embedding, "embedding"),
+  };
 }
 
 function toEventRow(raw: RawEventRow): EventRow {
@@ -664,6 +716,99 @@ export class SqliteStore implements Store {
     } catch (cause) {
       if (cause instanceof StorageError) throw cause;
       throw new StorageError("query_failed", "failed to count rag documents", { cause });
+    }
+  }
+
+  upsertRagDocument(input: RagDocumentInput): void {
+    const id = crypto.randomUUID();
+    const indexedAt = input.indexedAt ?? Date.now();
+    const dimensions = input.embedding.length;
+    const blob = new Uint8Array(
+      input.embedding.buffer,
+      input.embedding.byteOffset,
+      input.embedding.byteLength,
+    );
+    try {
+      // vec_rowid (from migration 009) is unused by brute-force search and kept only as a
+      // forward-compat bridge to a future vec0 table. Assign the next free integer for new
+      // rows; the ON CONFLICT update path leaves an existing row's vec_rowid untouched.
+      // Single-writer (WAL), so this read-then-write is race-free.
+      const next = this.#db
+        .query<{ n: number }, []>("SELECT COALESCE(MAX(vec_rowid), 0) + 1 AS n FROM rag_documents")
+        .get();
+      const vecRowid = next?.n ?? 1;
+      this.#db
+        .query<void, [string, number, string, string, string, string, number, number, Uint8Array]>(
+          `INSERT INTO rag_documents
+             (id, vec_rowid, source_kind, source_id, text, embedder_id, dimensions, indexed_at, embedding)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source_kind, source_id, embedder_id) DO UPDATE SET
+             text = excluded.text,
+             dimensions = excluded.dimensions,
+             indexed_at = excluded.indexed_at,
+             embedding = excluded.embedding`,
+        )
+        .run(
+          id,
+          vecRowid,
+          input.sourceKind,
+          input.sourceId,
+          input.text,
+          input.embedderId,
+          dimensions,
+          indexedAt,
+          blob,
+        );
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to upsert rag document", { cause });
+    }
+  }
+
+  listRagVectors(options: ListRagVectorsOptions = {}): readonly RagVectorRow[] {
+    try {
+      const conditions: string[] = [];
+      const params: string[] = [];
+      if (options.sourceKind !== undefined) {
+        conditions.push("source_kind = ?");
+        params.push(options.sourceKind);
+      }
+      if (options.embedderId !== undefined) {
+        conditions.push("embedder_id = ?");
+        params.push(options.embedderId);
+      }
+      const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+      const sql = `SELECT source_kind, source_id, text, dimensions, embedding FROM rag_documents${where}`;
+      const rows = this.#db.query<RawRagVectorRow, string[]>(sql).all(...params);
+      return rows.map(toRagVectorRow);
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to list rag vectors", { cause });
+    }
+  }
+
+  pruneRagDocuments(options: PruneRagDocumentsOptions): number {
+    try {
+      const conditions: string[] = [];
+      const params: string[] = [];
+      if (options.embedderId !== undefined) {
+        conditions.push("embedder_id = ?");
+        params.push(options.embedderId);
+      }
+      if (options.sourceKind !== undefined) {
+        conditions.push("source_kind = ?");
+        params.push(options.sourceKind);
+      }
+      if (options.sourceId !== undefined) {
+        conditions.push("source_id = ?");
+        params.push(options.sourceId);
+      }
+      const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+      const result = this.#db
+        .query<void, string[]>(`DELETE FROM rag_documents${where}`)
+        .run(...params);
+      return Number(result.changes);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to prune rag documents", { cause });
     }
   }
 

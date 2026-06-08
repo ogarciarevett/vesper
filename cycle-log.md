@@ -1314,3 +1314,47 @@ opt-in Baileys -- needs explicit authorization + isolation in an opt-in package)
 - NEXT (gated on Omar authorizing the dep): the on-device embedder (all-MiniLM-L6-v2-class, isolated opt-in
   pkg) + the vec0 KNN in `openRagIndex`/`ragSearch` + `indexer`/`backfill` + the `RAG_INDEX` bus topic +
   `vesper rag index|search|status`; then auto-evolve + the chatbot consume the same `ragSearch` seam.
+
+## RAG memory (bring-your-own embeddings) — embedder + CLI + UI COMPLETE (v2)
+
+Completes specs/rag-memory.md: the scaffold (commit 1f115a0) becomes a working end-to-end semantic
+memory — configure -> index -> search — over the user's OWN embeddings source. No bundled model, no
+sqlite-vec, no new runtime dependency, no LLM SDK (Hard rule 12 intact: embeddings are a retrieval
+utility over a raw allowlisted fetch, the brain stays the CLI).
+
+- WHAT (tasks 1-6, prior session): migration 010 (embedding BLOB), store helpers (upsert/list/prune
+  rag vectors), `cosine.ts`, the bring-your-own HTTP embedder (`embedders/http.ts`, ollama + openai
+  formats over `allowlistedFetch`), real `ragSearch` (brute-force cosine KNN) + `openRagIndex` +
+  extended `ragStatus`, `indexer.ts` (indexDocument/backfill/indexRun), and the `embeddings` config
+  block + `makeEmbedder`/`resolveEmbeddings` host resolver.
+- WHAT (tasks 7-8, this session):
+  - Task 7 — `vesper rag {setup,index,search,status}` (commands/rag.ts): setup picks provider +
+    stores the API key in the vault (key via stdin/prompt, never argv); index backfills events/runs/
+    run_events + `.ai/skills/*/SKILL.md` with a cost-confirm on a TTY; search is a debug view of the
+    retrieval seam (similarity = 1 - distance); status shows provider/model/dims + per-source counts
+    (+ opt-in `--probe` reachability so a diagnostic never silently spends quota). Onboarding probe in
+    `init.ts` detects a local Ollama and offers `vesper rag setup` (detect + offer, never silently
+    enable). `init` now preserves existing config blocks across re-init (was wiping all but `cli`).
+  - Task 8 — live Memory UI: `makeMemoryProvider` (shared RAG_CAPABILITIES, no hot-path network
+    probe) wired into the daemon; richer `GET /api/memory` + new `GET /api/memory/search?q=&k=`
+    (local-origin guarded, fail-closed to available:false on rag_unavailable); the Memory section
+    became a working, accessible search surface (form + aria-live results, honest bring-your-own
+    copy) — dark-glass preserved.
+- BUG FIXED EN ROUTE: the Task-4 `ragStatus(RagStatusInput)` signature change had left
+  `server.ts` calling `ragStatus(number)` (a working-tree type error / wrong runtime shape); Task 8's
+  rewire fixes it to a proper status object.
+- UI/UX gate (impeccable): applied the audit + critique checklists directly to the Memory section
+  (scoped wiring change to an already-audited dark-glass surface). P0/P1: none. Accessible (labelled
+  search input, aria-live results region, form submit, disabled-during-search, semantic list). P3
+  follow-ups: the similarity tooltip is mouse-only; a status line rides inside the results `<ul>`.
+  Did NOT run the full screenshot-based skill (disproportionate for a search-box wiring; brand is
+  locked per Omar — no redesign) and did NOT generate docs/DESIGN.md (defer to a UI task that needs it).
+- VERIFIED: full suite 1266 / 0 fail; biome ci exit 0; `tsc --noEmit` adds ZERO new errors (the 42
+  repo-wide errors are all pre-existing — ICONS Record<string,string> glyph idiom in every section +
+  the Bun.serve `server.port` circular inference; CI gates on biome + bun test, not tsc); `vesper rag`
+  registered + module loads. No new dependency, no LLM SDK.
+- NOTE: the `embeddings` block is the codebase's FIRST API-key concept outside channel creds (vault
+  holds the key, config holds only its name) — the bring-your-own pattern the contract reserved.
+- ALSO THIS SESSION (not a completed cycle — recorded in Linear, not as its own IMPROVE entry):
+  spec'd the **Autonomous Loop** (`specs/autonomous-loop.md`, **DEV-113**, held at SPEC for Omar's ack)
+  — LLM-authored self-prompting loops (AUTHOR -> EXECUTE -> CRITIC; human sets only the objective).

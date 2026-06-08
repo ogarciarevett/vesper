@@ -37,6 +37,22 @@ export interface ConnectionConfig {
   readonly params?: Readonly<Record<string, string>>;
 }
 
+/** Embeddings providers for RAG semantic memory — bring-your-own (local server or API key). */
+export type EmbeddingsProvider = "ollama" | "openai" | "voyage";
+
+/**
+ * Non-secret wiring for the RAG embedder. The API key (openai/voyage) lives in the vault,
+ * keyed by `vaultKey` (a default per-provider name when omitted); `ollama` needs no key.
+ * `endpoint`/`model`/`dimensions` override the provider defaults.
+ */
+export interface EmbeddingsConfig {
+  readonly provider: EmbeddingsProvider;
+  readonly endpoint?: string;
+  readonly model?: string;
+  readonly dimensions?: number;
+  readonly vaultKey?: string;
+}
+
 /** The `~/.vesper/config.json` shape. */
 export interface VesperConfig {
   readonly cli: {
@@ -78,6 +94,8 @@ export interface VesperConfig {
    * falls back to {@link DEFAULT_VOICE_SETTINGS} when absent.
    */
   readonly voice?: VoiceSettings;
+  /** RAG semantic-memory embeddings wiring (bring-your-own). Absent -> RAG disabled. */
+  readonly embeddings?: EmbeddingsConfig;
 }
 
 /** A fresh config with no default and no overrides. */
@@ -254,6 +272,36 @@ function normalizeUi(raw: unknown): VesperConfig["ui"] | undefined {
   return theme !== undefined ? { theme } : undefined;
 }
 
+const EMBEDDINGS_PROVIDERS: ReadonlySet<EmbeddingsProvider> = new Set([
+  "ollama",
+  "openai",
+  "voyage",
+]);
+
+/** Coerce untrusted `embeddings` config; requires a recognized `provider` or drops the block. */
+function normalizeEmbeddings(raw: unknown): EmbeddingsConfig | undefined {
+  if (!isObject(raw)) return undefined;
+  const providerStr = asString(raw.provider);
+  if (providerStr === undefined || !EMBEDDINGS_PROVIDERS.has(providerStr as EmbeddingsProvider)) {
+    return undefined;
+  }
+  const provider = providerStr as EmbeddingsProvider;
+  const endpoint = asString(raw.endpoint);
+  const model = asString(raw.model);
+  const dimensions =
+    typeof raw.dimensions === "number" && Number.isFinite(raw.dimensions) && raw.dimensions > 0
+      ? raw.dimensions
+      : undefined;
+  const vaultKey = asString(raw.vaultKey);
+  return {
+    provider,
+    ...(endpoint !== undefined ? { endpoint } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(dimensions !== undefined ? { dimensions } : {}),
+    ...(vaultKey !== undefined ? { vaultKey } : {}),
+  };
+}
+
 /** Coerce untrusted parsed JSON into a valid {@link VesperConfig}. */
 export function normalizeConfig(raw: unknown): VesperConfig {
   if (!isObject(raw)) return DEFAULT_CONFIG;
@@ -285,6 +333,8 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   if (notify !== undefined) result = { ...result, notify };
   const voice = normalizeVoice(raw.voice);
   if (voice !== undefined) result = { ...result, voice };
+  const embeddings = normalizeEmbeddings(raw.embeddings);
+  if (embeddings !== undefined) result = { ...result, embeddings };
   return result;
 }
 
