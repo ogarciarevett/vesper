@@ -1393,3 +1393,60 @@ model AUTHORs the next prompt, EXECUTEs it, and a CRITIC judges progress — all
 - FOLLOW-ONS (from the spec's Out of Scope): RAG-grounded AUTHOR via `ragSearch`; action loops
   (routing authored steps to `ctx.spawn`/connections) behind the approval coordinator; multi-agent
   competing loops; cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort.
+
+## Orchestrator Home (specs/orchestrator-home.md) — talk to Vesper, watch the swarm SHIPPED
+
+Omar's six-point review of the chat home (2026-06-09, plan approved interactively) shipped as
+seven slices, one commit each (6897ec4, a20f640, 24aa7a8, 71c809a, 2e14538, ceaf9ca, f22d1f8,
+aa55467). The committed record is this entry + the commits (issue-cap fallback).
+
+- A — MODEL PLUMBING: CompleteOptions.model -> `--model <flag>` per adapter; CompleteResult
+  gains cli/model; `models` config block + built-in catalog (canonical id -> {cli, flag, tier,
+  benchmarkNames}); FIXED the makeCompleteFn opts-forwarding bug (per-call timeoutMs now works —
+  closes the long-standing SWE 30s follow-up).
+- B — STREAMING: RunOptions.onStdout incremental reader; claude switches to stream-json
+  (`--include-partial-messages`) when onText is set, NDJSON line-buffered, text_delta forwarded,
+  final result envelope identical to json mode (live fixture captured FIRST, then coded);
+  other CLIs raw-chunk passthrough. Verified live: 11 deltas, streamed == final.
+- C — IO OBSERVABILITY (always-on, Omar's call): every completion persists one io prompt event
+  and one io result event (16KB cap, truncated flag, redactRunSummaries honored, error phase on
+  failure) from the CONTEXT wrapper — all sub-agents inherit it. Migration 011 runs.ctx_cli.
+- D — BENCHMARKS: migration 012 model_benchmarks; daily `benchmark-ingest` cron fetching ONLY
+  deepswe.datacurve.ai/artifacts/leaderboard-live.json (allowlistedFetch; fail-soft, never wipes
+  the snapshot); pure selectModel (hard=best pass@1, easy=cheapest within 0.6x best, medium=best
+  pass-per-dollar, stale>7d -> default); GET /api/models + `vesper models list`. Live-verified
+  (27 rows ingested).
+- E — CONVERSATIONAL STREAMING ORCHESTRATOR: router classify -> label|run|answer|none; answer
+  streams grounded in a live RuntimeContextSnapshot (pipelines+summaries, last runs, schedules)
+  via publish-only ProgressKind "text" -> chat:delta WS frames -> growing bubble; new sessions
+  pre-subscribe (client-generated id, server creates on demand); `vesper chat send` drives the
+  SAME endpoints (parity structural). Live-verified: grounded answer even diagnosed the SWE
+  timeout failures from recent runs.
+- F — ORCHESTRATION PLANS: OrchestrationContract per pipeline (paramKeys/promptParam/
+  maxInstances/acceptsModel/spawnsOwnChildren/capabilities, STATIC map); model-authored staged
+  plan (steps sequential x tasks parallel, mode a closed enum for future nested/dependency
+  modes); fail-closed validation (free-form pipeline ids dropped, params filtered, instances
+  clamped, <=4 tasks); result piping re-authors step N+1 prompts from step N outcomes;
+  per-task model via explicit catalog id or pickModel(difficulty) over the benchmark snapshot;
+  spawnsOwnChildren tasks run as sibling top-level runs (RunOptions.parentRunId = display
+  lineage only — the depth-1 answer). Live-verified: a combined wish produced a 2-task plan
+  with Vesper-authored prompts run in parallel; the loop sub-agent's calls were served by
+  codex gpt-5.5 chosen from the benchmarks.
+- G — UI: rail renders io events as collapsible PROMPT/RESULT/ERROR terminal blocks (cli+model+
+  duration header); provider model badges (hand-authored monochrome marks: Anthropic/OpenAI/
+  Google/xAI/generic) on every run row via run.context.model + new run.cli. Impeccable scoped
+  pass: P0/P1 none.
+- H — PARITY: `vesper runs replay <runId>` prints the same stream terminal-style, daemon-down.
+
+LESSONS: (1) exactOptionalPropertyTypes rejects the `...(f(x) !== undefined ? {k: f(x)} : {})`
+double-call spread — extract locals; the HEAD-worktree tsc parity diff caught every regression
+(CI does not gate tsc; keep doing the diff per slice). (2) Type-only names in an `export {} from`
+re-export are NOT in scope — import them separately. (3) Capture a live fixture BEFORE coding a
+parser against a third-party stream format (claude stream-json, DeepSWE JSON) — both shapes
+diverged from assumptions. (4) Subscribe-before-send needs a client-supplied session id; the
+store's CreateSessionInput.id already supported it.
+
+FOLLOW-ONS: nested/dependency plan modes (shape is ready); native stream formats for codex/
+gemini/opencode; Codex-style Progress checklist + Environment header as a dedicated run view;
+in-UI run abort; orchestration contracts for future pipelines (career/secretary/trader);
+benchmark sources beyond DeepSWE when Omar trusts one; per-task budget caps in plans.

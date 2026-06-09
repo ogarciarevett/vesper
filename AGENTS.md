@@ -475,8 +475,33 @@ up-front run row) so the client watches the loop think live over the existing ru
 No migration, no new dependency; verified LIVE end-to-end. Issue-record: DEV-113 (pre-cap issue) +
 `cycle-log.md` + the commit.
 
+**Orchestrator Home SHIPPED (specs/orchestrator-home.md — talk to Vesper, watch the swarm).**
+Omar's six-point chat-home review landed as seven slices (commits 6897ec4..aa55467): (A) per-call
+**model routing** — `CompleteOptions.model` -> the adapter's `--model` flag, a `models` config
+catalog (canonical id -> {cli, flag, tier, benchmarkNames}), `CompleteResult.cli/model`, and the
+`makeCompleteFn` opts-forwarding FIX (per-call `timeoutMs` finally reaches the adapter — closes the
+SWE 30s follow-up). (B) **streaming completions** — `onText` deltas; claude uses stream-json
+(verified against a live fixture; final result identical to json mode), other CLIs raw-chunk
+passthrough. (C) **always-on IO observability** — every completion persists `io` prompt/result
+run-events (16KB cap, redaction honored, error phase) from the context wrapper, so every sub-agent
+is inspectable; migration 011 `runs.ctx_cli`. (D) **benchmark intelligence** — migration 012 +
+the daily `benchmark-ingest` cron (ONLY deepswe.datacurve.ai, allowlisted, fail-soft) + pure
+`selectModel(difficulty)` + `GET /api/models` + `vesper models`. (E) **conversational streaming
+orchestrator** — router classify {label|run|answer|none}; `answer` streams grounded in a live
+runtime snapshot via the publish-only `"text"` progress kind -> `chat:delta` frames -> a growing
+bubble; `vesper chat send` drives the same endpoints (UI/CLI parity structural). (F)
+**orchestration plans** — static `OrchestrationContract` map; the model authors a staged plan
+(steps sequential x tasks parallel; fail-closed validation; result piping re-authors later prompts
+from earlier outcomes; per-task model via the benchmark snapshot); `spawnsOwnChildren` tasks run as
+sibling top-level runs (`RunOptions.parentRunId`, display lineage only — the depth-1 answer);
+VESPER authors every sub-agent prompt. (G) **UI** — the rail renders io events as PROMPT/RESULT
+terminal blocks and provider model badges (hand-authored marks) per run. (H) `vesper runs replay`.
+Live-verified end-to-end: a combined wish produced a Vesper-authored 2-task plan whose loop
+sub-agent ran on codex gpt-5.5 picked from the benchmarks. Issue-capped record: spec +
+`cycle-log.md` + the commits (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1294 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1350 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the rest of the personal-agent **pipelines** (career, social, trading,
@@ -484,13 +509,15 @@ hermes, secretary — the always-on, connected-24/7 backbone). The Voice **nativ
 audio + Whisper STT + hotkey + Mode-B dictation, gated on Omar's Hard-rule-14 nod) and the opt-in ElevenLabs
 cloud voice. Software-Engineer follow-ons: the opt-in OSS
 browser-VSCode child, per-file selective staging, the reject->rebuild + simplify->re-gate loops, a
-cwd-hardened TEST sandbox (owned by `security-hardening.md`), and a longer per-call CLI timeout for the
-SWE cycle (the 30s adapter default intermittently aborts a 4-call coding turn — `CompleteFn` needs a
-timeout knob; cross-cutting, surfaced by the post-ship live dogfood). Distribution's remaining follow-ups: a real
+cwd-hardened TEST sandbox (owned by `security-hardening.md`); the per-call CLI timeout knob now EXISTS
+(orchestrator-home slice A) — wire generous timeouts into the SWE cycle's lead calls. Distribution's remaining follow-ups: a real
 `npm publish` against a tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths.
 Autonomous-loop follow-ons (spec Out of Scope): RAG-grounded AUTHOR via `ragSearch`; action loops (authored
 steps routed to `ctx.spawn`/connections) behind the approval coordinator; multi-agent competing loops;
-cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort. Update
+cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort. Orchestrator-home follow-ons:
+nested/dependency plan modes (the plan shape is mode-extensible); native stream formats for
+codex/gemini/opencode; a dedicated run view with the Codex-style Progress checklist; orchestration
+contracts for the future personal-agent pipelines. Update
 this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.
