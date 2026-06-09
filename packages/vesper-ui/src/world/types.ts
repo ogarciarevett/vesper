@@ -47,6 +47,8 @@ export interface RunTreeInfo {
     readonly parentRunId: string | null;
     /** Latest context-window fill, or null if no usage was recorded for this run. */
     readonly context: RunContextInfo | null;
+    /** Adapter that served the run's most recent completion (model-badge fallback). */
+    readonly cli: string | null;
   };
   readonly children: readonly RunTreeInfo[];
 }

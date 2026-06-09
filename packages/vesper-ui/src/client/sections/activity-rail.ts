@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import type { RunContextInfo, RunEventInfo, RunTreeInfo } from "../../world/types.ts";
+import { markFor } from "../shell/model-mark.ts";
 import { injectStyle, type LiveMessage, type SectionContext } from "../shell/section.ts";
 import { openDiffReview } from "./diff-review.ts";
 
@@ -28,6 +29,16 @@ const RAIL_CSS = `
   .akind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-2); min-width: 58px; }
   .amsg { color: var(--ink); word-break: break-word; }
   .alog .empty { font-size: 13px; color: var(--ink-faint); font-style: italic; }
+  .amark { width: 15px; height: 15px; color: var(--ink-soft); display: inline-grid; place-items: center; flex: none; }
+  .amark svg { width: 100%; height: 100%; }
+  .amodel { font-size: 11px; color: var(--ink-soft); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .aio { font-size: 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.25); }
+  .aio summary { cursor: pointer; padding: 5px 9px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); list-style: none; display: flex; gap: 8px; align-items: baseline; }
+  .aio summary::before { content: "\25B8"; color: var(--ink-faint); }
+  .aio[open] summary::before { content: "\25BE"; }
+  .aio.err summary { color: var(--danger); }
+  .aio pre { margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; border-top: 1px solid var(--border); }
+  .aio.prompt pre { color: var(--ink-soft); }
   .swe-review { margin-top: 8px; }
   .swe-review-btn { padding: 5px 14px; border-radius: 8px; border: 1px solid var(--ok); background: rgba(58,208,127,0.1); color: var(--ok); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .swe-review-btn:hover:not(:disabled) { background: rgba(58,208,127,0.2); }
@@ -256,6 +267,12 @@ function collectRunIds(node: RunTreeInfo, into: string[]): void {
 function appendEventRow(log: HTMLElement, ev: RunEventInfo): void {
   const empty = log.querySelector(".empty");
   if (empty !== null) empty.remove();
+  // Completion IO: the sub-agent's input prompt / output text, terminal-style.
+  if (ev.kind === "io") {
+    log.append(buildIoRow(ev));
+    log.scrollTop = log.scrollHeight;
+    return;
+  }
   const row = document.createElement("div");
   row.className = "aevent";
   row.dataset.eventId = ev.id;
@@ -268,6 +285,34 @@ function appendEventRow(log: HTMLElement, ev: RunEventInfo): void {
   row.append(kind, msg);
   log.append(row);
   log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * One collapsible terminal block for an `io` event: PROMPT (dimmed) / RESULT /
+ * ERROR with the full text body and the serving cli + model in the header.
+ */
+function buildIoRow(ev: RunEventInfo): HTMLElement {
+  const phase = ev.message; // "prompt" | "result" | "error"
+  const details = document.createElement("details");
+  details.className = `aio ${phase === "prompt" ? "prompt" : phase === "error" ? "err" : "result"}`;
+  details.dataset.eventId = ev.id;
+
+  const summary = document.createElement("summary");
+  const who: string[] = [phase.toUpperCase()];
+  const cli = typeof ev.data?.cli === "string" ? ev.data.cli : null;
+  const model = typeof ev.data?.model === "string" ? ev.data.model : null;
+  if (cli !== null || model !== null) who.push([cli, model].filter((x) => x !== null).join(" · "));
+  if (typeof ev.data?.durationMs === "number") who.push(`${ev.data.durationMs}ms`);
+  if (ev.data?.truncated === true) who.push("truncated");
+  summary.textContent = who.join("  ");
+  const aria = `${phase} text`;
+  summary.setAttribute("aria-label", aria);
+
+  const pre = document.createElement("pre");
+  pre.textContent = typeof ev.data?.text === "string" ? ev.data.text : "";
+
+  details.append(summary, pre);
+  return details;
 }
 
 function buildRunRow(
@@ -293,7 +338,20 @@ function buildRunRow(
   const status = document.createElement("span");
   status.className = "astatus";
   status.textContent = node.run.status;
-  top.append(dot, name, pill, status);
+  top.append(dot, name);
+  // Model identity badge: provider mark + model id (cli as the fallback).
+  const mark = markFor(node.run.context?.model ?? null, node.run.cli);
+  if (mark !== null) {
+    const markEl = document.createElement("span");
+    markEl.className = "amark";
+    markEl.innerHTML = mark.svg;
+    markEl.title = mark.label;
+    const modelEl = document.createElement("span");
+    modelEl.className = "amodel";
+    modelEl.textContent = node.run.context?.model ?? node.run.cli ?? mark.label;
+    top.append(markEl, modelEl);
+  }
+  top.append(pill, status);
 
   const log = document.createElement("div");
   log.className = "alog";
