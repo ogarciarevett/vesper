@@ -187,4 +187,12 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE rag_documents ADD COLUMN embedding BLOB;
     `,
   },
+  // The CLI adapter that served the run's most recent completion — the model-badge
+  // fallback when the CLI reports no usage envelope (specs/orchestrator-home.md, slice C).
+  {
+    id: "011_run_cli",
+    sql: `
+      ALTER TABLE runs ADD COLUMN ctx_cli TEXT;
+    `,
+  },
 ];

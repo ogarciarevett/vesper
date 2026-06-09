@@ -1174,8 +1174,11 @@ describe("migration 008 — run context", () => {
     db.run(
       "INSERT INTO runs (id, ts, pipeline, status, summary) VALUES ('pre-008', 1000, 'p', 'ok', 'legacy')",
     );
-    // Apply migration 008.
-    for (const stmt of statementsOf(MIGRATIONS[idx008]?.sql ?? "")) db.run(stmt);
+    // Apply 008 and everything after it (the read path selects every later
+    // runs column too, e.g. 011's ctx_cli).
+    for (const m of MIGRATIONS.slice(idx008)) {
+      for (const stmt of statementsOf(m.sql)) db.run(stmt);
+    }
 
     const store = new SqliteStore(db);
     const runs = store.listRuns({ pipeline: "p" });
@@ -1184,6 +1187,7 @@ describe("migration 008 — run context", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]?.id).toBe("pre-008");
     expect(runs[0]?.context).toBeNull();
+    expect(runs[0]?.cli).toBeNull();
   });
 });
 
@@ -1303,5 +1307,44 @@ describe("recordRunContext", () => {
     expect(tree?.run.context?.model).toBe("big");
     expect(tree?.children[0]?.run.context?.usedTokens).toBe(500);
     expect(tree?.children[0]?.run.context?.model).toBe("small");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recordRunCli + io run events (specs/orchestrator-home.md slice C)
+// ---------------------------------------------------------------------------
+
+describe("recordRunCli and io events", () => {
+  test("recordRunCli sets the run's cli badge fallback", () => {
+    const db = new Database(":memory:");
+    const store = new SqliteStore(db);
+    store.migrate();
+    const runId = store.startRun({ pipeline: "loop" });
+
+    store.recordRunCli(runId, "claude");
+    const run = store.listRuns({ pipeline: "loop" })[0];
+    expect(run?.cli).toBe("claude");
+
+    // Absent run id is best-effort (no throw).
+    store.recordRunCli("missing", "gemini");
+    db.close();
+  });
+
+  test("io run events round-trip through append + list", () => {
+    const db = new Database(":memory:");
+    const store = new SqliteStore(db);
+    store.migrate();
+    const runId = store.startRun({ pipeline: "loop" });
+
+    store.appendRunEvent({
+      runId,
+      kind: "io",
+      payload: { message: "prompt", data: { text: "hello", truncated: false } },
+    });
+    const events = store.listRunEvents({ runId });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("io");
+    expect(events[0]?.payload.message).toBe("prompt");
+    db.close();
   });
 });

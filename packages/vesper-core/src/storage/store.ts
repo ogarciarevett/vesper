@@ -61,6 +61,7 @@ interface RawRunRow {
   ctx_used_tokens: unknown;
   ctx_limit: unknown;
   ctx_model: unknown;
+  ctx_cli: unknown;
 }
 
 /** Raw shape returned for the `run_events` table. */
@@ -160,6 +161,7 @@ const RUN_EVENT_KINDS: ReadonlySet<RunEventKind> = new Set<RunEventKind>([
   "spawn",
   "complete",
   "usage",
+  "io",
 ]);
 
 function assertRunEventKind(value: unknown, column: string): RunEventKind {
@@ -236,6 +238,7 @@ function toRunRow(raw: RawRunRow): RunRow {
   const usedTokens = assertNumberOrNull(raw.ctx_used_tokens, "ctx_used_tokens");
   const limit = assertNumberOrNull(raw.ctx_limit, "ctx_limit");
   const model = assertStringOrNull(raw.ctx_model, "ctx_model");
+  const cli = assertStringOrNull(raw.ctx_cli, "ctx_cli");
 
   let context: RunContext | null = null;
   if (usedTokens !== null && limit !== null) {
@@ -248,6 +251,7 @@ function toRunRow(raw: RawRunRow): RunRow {
     pipeline: assertString(raw.pipeline, "pipeline"),
     status: assertString(raw.status, "status"),
     summary: assertString(raw.summary, "summary"),
+    cli,
     parentRunId: assertStringOrNull(raw.parent_run_id, "parent_run_id"),
     statusUpdatedAt: assertNumberOrNull(raw.status_updated_at, "status_updated_at"),
     context,
@@ -491,6 +495,17 @@ export class SqliteStore implements Store {
     }
   }
 
+  recordRunCli(runId: string, cli: string): void {
+    try {
+      this.#db
+        .query<void, [string, string]>("UPDATE runs SET ctx_cli = ? WHERE id = ?")
+        .run(cli, runId);
+      // Best-effort: no error when the row does not exist (changes === 0 is acceptable).
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to record run cli", { cause });
+    }
+  }
+
   recordRunContext(input: RecordRunContextInput): void {
     try {
       this.#db
@@ -574,7 +589,7 @@ export class SqliteStore implements Store {
     const row = this.#db
       .query<RawRunRow, [string]>(
         `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at,
-                ctx_used_tokens, ctx_limit, ctx_model
+                ctx_used_tokens, ctx_limit, ctx_model, ctx_cli
          FROM runs WHERE id = ?`,
       )
       .get(id);
@@ -627,7 +642,7 @@ export class SqliteStore implements Store {
         params.push(options.limit);
       }
 
-      const sql = `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at, ctx_used_tokens, ctx_limit, ctx_model FROM runs${where} ORDER BY ts ASC${limitClause}`;
+      const sql = `SELECT id, ts, pipeline, status, summary, parent_run_id, status_updated_at, ctx_used_tokens, ctx_limit, ctx_model, ctx_cli FROM runs${where} ORDER BY ts ASC${limitClause}`;
       const rows = this.#db.query<RawRunRow, (string | number)[]>(sql).all(...params);
       return rows.map(toRunRow);
     } catch (cause) {

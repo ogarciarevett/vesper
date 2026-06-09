@@ -44,10 +44,17 @@ export interface RunRow {
    * not specify it; `openStore`'s row mapper always populates it (value or null).
    */
   readonly context?: RunContext | null;
+  /**
+   * The CLI adapter that served this run's most recent completion (e.g. "claude"),
+   * or null. The model-badge fallback when the CLI reports no usage envelope.
+   * Optional for the same partial-literal reason as `context`; the row mapper
+   * always populates it.
+   */
+  readonly cli?: string | null;
 }
 
 /** The kind of a {@link RunEventRow} — a step in the live per-run trace. */
-export type RunEventKind = "step" | "log" | "progress" | "spawn" | "complete" | "usage";
+export type RunEventKind = "step" | "log" | "progress" | "spawn" | "complete" | "usage" | "io";
 
 /** A row from the `run_events` table — a single live-trace step for a run. */
 export interface RunEventRow {
@@ -337,6 +344,13 @@ export interface Store {
    * mirrors the non-destructive design decision in the spec).
    */
   recordRunContext(input: RecordRunContextInput): void;
+
+  /**
+   * Record the CLI adapter that served the run's most recent completion
+   * (`runs.ctx_cli`). Best-effort companion to {@link recordRunContext} for
+   * completions that report no usage envelope.
+   */
+  recordRunCli(runId: string, cli: string): void;
 
   /**
    * Append a live-trace event for a run and return its generated id.

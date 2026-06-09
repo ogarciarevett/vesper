@@ -22,6 +22,9 @@ import type {
 /** Default look-back window for {@link PipelineContext.readSignals} (24 hours). */
 const DEFAULT_SIGNAL_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
+/** Cap on prompt/result bodies persisted in `io` run events (chars). */
+export const IO_TEXT_CAP = 16_384;
+
 /**
  * Replace a run summary with size-only metadata, so raw CLI output is never
  * persisted in cleartext when redaction is enabled. The status is kept verbatim
@@ -148,6 +151,31 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
     }
   };
 
+  // Persist + publish one completion-IO live-trace event (kind "io"). Best-effort:
+  // observability must NEVER break a completion (the recordContextUsage pattern).
+  // Bodies are capped and pass the same redactor as run summaries.
+  const emitIo = (message: "prompt" | "result" | "error", data: Record<string, unknown>): void => {
+    try {
+      const eventId = store.appendRunEvent({ runId, kind: "io", payload: { message, data } });
+      deps.events?.emit(RUN_EVENT, {
+        id: eventId,
+        ts: Date.now(),
+        runId,
+        parentRunId,
+        kind: "io",
+        message,
+        data,
+      });
+    } catch {
+      // best-effort
+    }
+  };
+  const ioBody = (text: string): { text: string; truncated: boolean } => {
+    const truncated = text.length > IO_TEXT_CAP;
+    const capped = truncated ? text.slice(0, IO_TEXT_CAP) : text;
+    return { text: redactSummaries === true ? redactSummary(text) : capped, truncated };
+  };
+
   // Built first so `spawn` can hand the parent context to the injected spawn fn.
   const self: PipelineContext = {
     task,
@@ -165,14 +193,38 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         );
       }
       const cli = opts?.cli ?? options?.cli;
-      const result = await complete(prompt, {
+      emitIo("prompt", {
+        ...ioBody(prompt),
         ...(cli !== undefined ? { cli } : {}),
         ...(opts?.model !== undefined ? { model: opts.model } : {}),
-        ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-        ...(opts?.onText !== undefined ? { onText: opts.onText } : {}),
       });
-      recordContextUsage(result.usage);
-      return result;
+      try {
+        const result = await complete(prompt, {
+          ...(cli !== undefined ? { cli } : {}),
+          ...(opts?.model !== undefined ? { model: opts.model } : {}),
+          ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+          ...(opts?.onText !== undefined ? { onText: opts.onText } : {}),
+        });
+        recordContextUsage(result.usage);
+        if (result.cli !== undefined) {
+          try {
+            store.recordRunCli(runId, result.cli);
+          } catch {
+            // best-effort: the badge fallback must never affect the completion.
+          }
+        }
+        emitIo("result", {
+          ...ioBody(result.text),
+          ...(result.cli !== undefined ? { cli: result.cli } : {}),
+          ...(result.model !== undefined ? { model: result.model } : {}),
+          durationMs: result.duration_ms,
+          exitCode: result.exit_code,
+        });
+        return result;
+      } catch (err) {
+        emitIo("error", { text: err instanceof Error ? err.message : String(err) });
+        throw err;
+      }
     },
 
     recordRun({ status, summary }) {

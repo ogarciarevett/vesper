@@ -61,10 +61,12 @@ function makeStore(): {
   finished: FinishRunInput[];
   events: AppendRunEventInput[];
   contexts: RecordRunContextInput[];
+  clis: { runId: string; cli: string }[];
 } {
   const finished: FinishRunInput[] = [];
   const events: AppendRunEventInput[] = [];
   const contexts: RecordRunContextInput[] = [];
+  const clis: { runId: string; cli: string }[] = [];
   const store: Store = {
     migrate() {},
     appendEvent() {
@@ -84,6 +86,9 @@ function makeStore(): {
     },
     recordRunContext(input) {
       contexts.push(input);
+    },
+    recordRunCli(runId, cli) {
+      clis.push({ runId, cli });
     },
     appendRunEvent(input) {
       events.push(input);
@@ -134,7 +139,7 @@ function makeStore(): {
     },
     close() {},
   };
-  return { store, finished, events, contexts };
+  return { store, finished, events, contexts, clis };
 }
 
 const NOW = new Date("2026-05-28T12:00:00.000Z");
@@ -323,8 +328,10 @@ describe("buildPipelineContext.complete — context usage capture", () => {
       limit: 1_000_000,
       model: "claude-opus-4-8[1m]",
     });
-    expect(published).toHaveLength(1);
-    expect(published[0]).toMatchObject({
+    // The bus also carries the slice-C io prompt/result frames; assert the usage one.
+    const usageFrames = published.filter((p) => (p as { kind?: string }).kind === "usage");
+    expect(usageFrames).toHaveLength(1);
+    expect(usageFrames[0]).toMatchObject({
       runId: RUN_ID,
       parentRunId: "parent-7",
       kind: "usage",
@@ -657,5 +664,124 @@ describe("redactSummary", () => {
   test("replaces content with a size-only marker", () => {
     expect(redactSummary("hello")).toBe("[redacted: 5 chars]");
     expect(redactSummary("")).toBe("[redacted: 0 chars]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Completion IO observability (specs/orchestrator-home.md slice C)
+// ---------------------------------------------------------------------------
+
+describe("complete IO events", () => {
+  function ioEvents(events: AppendRunEventInput[]): AppendRunEventInput[] {
+    return events.filter((e) => e.kind === "io");
+  }
+
+  function buildIoCtx(opts?: { completeImpl?: CompleteFn; redactSummaries?: boolean }): {
+    ctx: PipelineContext;
+    events: AppendRunEventInput[];
+    clis: { runId: string; cli: string }[];
+    bus: EventBus;
+    published: unknown[];
+  } {
+    const { store, events, clis } = makeStore();
+    const bus = new EventBus();
+    const published: unknown[] = [];
+    bus.on(RUN_EVENT, (payload) => published.push(payload));
+    const completeImpl: CompleteFn =
+      opts?.completeImpl ??
+      (async () => ({ ...makeResult("the reply"), cli: "claude", model: "opus" }));
+    const ctx = buildPipelineContext({
+      task: makeTask(["CLI_INVOKE", "WRITE_STORAGE"]),
+      now: new Date(),
+      runId: RUN_ID,
+      parentRunId: null,
+      store,
+      complete: completeImpl,
+      events: bus,
+      ...(opts?.redactSummaries === true ? { redactSummaries: true } : {}),
+    });
+    return { ctx, events, clis, bus, published };
+  }
+
+  test("a successful completion persists exactly one prompt and one result io event", async () => {
+    const { ctx, events, clis, published } = buildIoCtx();
+    await ctx.complete("what is up?");
+
+    const io = ioEvents(events);
+    expect(io).toHaveLength(2);
+    const promptPayload = io[0]?.payload as { message: string; data: Record<string, unknown> };
+    expect(promptPayload.message).toBe("prompt");
+    expect(promptPayload.data.text).toBe("what is up?");
+    expect(promptPayload.data.truncated).toBe(false);
+
+    const resultPayload = io[1]?.payload as { message: string; data: Record<string, unknown> };
+    expect(resultPayload.message).toBe("result");
+    expect(resultPayload.data.text).toBe("the reply");
+    expect(resultPayload.data.cli).toBe("claude");
+    expect(resultPayload.data.model).toBe("opus");
+    expect(resultPayload.data.exitCode).toBe(0);
+
+    // The serving CLI is recorded as the run badge fallback.
+    expect(clis).toEqual([{ runId: RUN_ID, cli: "claude" }]);
+    // Both events were also published on the bus.
+    expect(published.filter((p) => (p as { kind?: string }).kind === "io")).toHaveLength(2);
+  });
+
+  test("bodies are capped at 16KB with a truncated flag", async () => {
+    const { ctx, events } = buildIoCtx();
+    await ctx.complete("x".repeat(20_000));
+
+    const promptPayload = ioEvents(events)[0]?.payload as { data: Record<string, unknown> };
+    expect(promptPayload.data.truncated).toBe(true);
+    expect((promptPayload.data.text as string).length).toBe(16_384);
+  });
+
+  test("redactSummaries redacts io bodies the same way as run summaries", async () => {
+    const { ctx, events } = buildIoCtx({ redactSummaries: true });
+    await ctx.complete("secret prompt");
+
+    const promptPayload = ioEvents(events)[0]?.payload as { data: Record<string, unknown> };
+    expect(promptPayload.data.text).toBe(redactSummary("secret prompt"));
+    const resultPayload = ioEvents(events)[1]?.payload as { data: Record<string, unknown> };
+    expect(resultPayload.data.text).toBe(redactSummary("the reply"));
+  });
+
+  test("a failing completion emits an io error event and rethrows", async () => {
+    const { ctx, events } = buildIoCtx({
+      completeImpl: async () => {
+        throw new CLIError("timeout", "claude: timed out after 30000ms");
+      },
+    });
+
+    await expect(ctx.complete("hi")).rejects.toThrow(/timed out/);
+    const io = ioEvents(events);
+    expect(io).toHaveLength(2); // prompt + error
+    const errorPayload = io[1]?.payload as { message: string; data: Record<string, unknown> };
+    expect(errorPayload.message).toBe("error");
+    expect(errorPayload.data.text).toContain("timed out");
+  });
+
+  test("a throwing store never breaks the completion (best-effort)", async () => {
+    const { store } = makeStore();
+    const broken: Store = {
+      ...store,
+      appendRunEvent() {
+        throw new Error("disk full");
+      },
+      recordRunCli() {
+        throw new Error("disk full");
+      },
+    };
+    const ctx = buildPipelineContext({
+      task: makeTask(["CLI_INVOKE", "WRITE_STORAGE"]),
+      now: new Date(),
+      runId: RUN_ID,
+      parentRunId: null,
+      store: broken,
+      complete: async () => ({ ...makeResult("ok"), cli: "claude" }),
+    });
+
+    const result = await ctx.complete("hi");
+    expect(result.text).toBe("ok");
   });
 });
