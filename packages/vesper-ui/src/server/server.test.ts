@@ -1333,3 +1333,110 @@ describe("UI server — autonomous loop", () => {
     expect(store.listRuns({ pipeline: "loop" })).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming chat deltas (specs/orchestrator-home.md slice E)
+// ---------------------------------------------------------------------------
+
+describe("UI server — chat:delta streaming", () => {
+  test("a publish-only text event reaches the session topic as chat:delta and is never persisted", async () => {
+    const lDir = mkdtempSync(join(tmpdir(), "vesper-ui-delta-"));
+    const path = join(lDir, "vesper.db");
+    openStore(path).close();
+    const lDb = new Database(path);
+    const lStore = openStore(path);
+    const sessionId = "aaaaaaaa-bbbb-4ccc-8ddd-111111111111";
+
+    const registry = new HandlerRegistry();
+    registry.register("answerer", async (ctx) => {
+      ctx.emitProgress({ kind: "text", message: "Hello ", data: { sessionId } });
+      ctx.emitProgress({ kind: "text", message: "world", data: { sessionId } });
+      ctx.recordRun({ status: "ok", summary: "Hello world" });
+    });
+    const scheduler = new Scheduler({ db: lDb, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "answerer",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "answerer",
+      required_capabilities: ["WRITE_STORAGE"],
+    });
+    const lHandle = await startUiServer({ scheduler, store: lStore, seed: "s", port: 0 });
+
+    try {
+      const deltas: string[] = [];
+      const ws = new WebSocket(`${lHandle.url.replace("http", "ws")}/api/live`);
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "subscribe", sessionId }));
+          resolve();
+        };
+      });
+      ws.onmessage = (event) => {
+        const frame = JSON.parse(String(event.data)) as { type?: string; text?: string };
+        if (frame.type === "chat:delta" && typeof frame.text === "string") {
+          deltas.push(frame.text);
+        }
+      };
+
+      const res = await fetch(`${lHandle.url}/api/pipelines/answerer/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+      // Give the published frames a beat to arrive.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(deltas.join("")).toBe("Hello world");
+      // Publish-only: no run_events row carries the deltas.
+      const runId = ((await res.json()) as { runId: string }).runId;
+      const kinds = lStore.listRunEvents({ runId }).map((e) => e.kind);
+      expect(kinds).not.toContain("text");
+      ws.close();
+    } finally {
+      lHandle.stop();
+      lStore.close();
+      lDb.close();
+      rmSync(lDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a client-supplied unknown sessionId is created with that exact id", async () => {
+    const lDir = mkdtempSync(join(tmpdir(), "vesper-ui-sess-"));
+    const path = join(lDir, "vesper.db");
+    openStore(path).close();
+    const lDb = new Database(path);
+    const lStore = openStore(path);
+    const registry = new HandlerRegistry();
+    registry.register("router", async (ctx) => {
+      ctx.recordRun({ status: "ok", summary: "hi there" });
+    });
+    const scheduler = new Scheduler({ db: lDb, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "router",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "router",
+      required_capabilities: ["WRITE_STORAGE"],
+    });
+    const lHandle = await startUiServer({ scheduler, store: lStore, seed: "s", port: 0 });
+    try {
+      const sessionId = "bbbbbbbb-cccc-4ddd-8eee-222222222222";
+      const res = await fetch(`${lHandle.url}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "hello", sessionId }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessionId: string };
+      expect(body.sessionId).toBe(sessionId);
+      expect(lStore.listSessions().some((s) => s.id === sessionId)).toBe(true);
+    } finally {
+      lHandle.stop();
+      lStore.close();
+      lDb.close();
+      rmSync(lDir, { recursive: true, force: true });
+    }
+  });
+});

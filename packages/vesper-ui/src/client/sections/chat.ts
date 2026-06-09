@@ -64,6 +64,8 @@ class ChatSection {
   #sessionId: string | null = null;
   #lastTs = 0;
   #sending = false;
+  /** The growing assistant bubble fed by chat:delta frames; replaced by the final turn. */
+  #streamRow: HTMLElement | null = null;
   readonly #seen = new Map<string, RenderedTurn>();
 
   constructor(ctx: SectionContext, host: HTMLElement) {
@@ -134,6 +136,8 @@ class ChatSection {
   #onLive(msg: LiveMessage): void {
     if (msg.type === "chat:turn") {
       this.#onLiveTurn(msg);
+    } else if (msg.type === "chat:delta") {
+      this.#onDelta(msg);
     } else if (msg.type === "socket:open") {
       // Reconnected — re-subscribe + re-backfill the session and the followed run.
       if (this.#sessionId !== null) {
@@ -150,7 +154,28 @@ class ChatSection {
     if (typeof frame.turnId !== "string" || typeof frame.text !== "string") return;
     const role = frame.role === "user" ? "user" : "assistant";
     const runId = typeof frame.runId === "string" ? frame.runId : null;
+    // The durable assistant turn replaces the streamed bubble (it carries the
+    // full text + the Watch button) — drop the stream so the text never doubles.
+    if (role === "assistant") this.#clearStream();
     this.#renderTurn({ id: frame.turnId, role, text: frame.text, runId });
+  }
+
+  /** Append a streamed delta to the growing assistant bubble (created on first delta). */
+  #onDelta(frame: LiveMessage): void {
+    if (typeof frame.text !== "string" || frame.text.length === 0) return;
+    if (this.#streamRow === null) {
+      // The stream supersedes the static "thinking..." placeholder.
+      this.#thread.querySelector(".bubble.pending")?.remove();
+      this.#streamRow = div("bubble assistant streaming");
+      this.#thread.append(this.#streamRow);
+    }
+    this.#streamRow.textContent = (this.#streamRow.textContent ?? "") + frame.text;
+    this.#scrollToEnd();
+  }
+
+  #clearStream(): void {
+    this.#streamRow?.remove();
+    this.#streamRow = null;
   }
 
   async #submit(): Promise<void> {
@@ -165,23 +190,27 @@ class ChatSection {
     const thinking = this.#renderPending();
 
     try {
+      // Generate the session id CLIENT-side for a new conversation and subscribe
+      // BEFORE sending, so the very first reply's chat:delta stream is received
+      // (the server creates an unknown supplied id on demand).
+      if (this.#sessionId === null) {
+        this.#sessionId = crypto.randomUUID();
+        this.#ctx.wsSend({ type: "subscribe", sessionId: this.#sessionId });
+      }
       const body = await this.#ctx.api.postJson<{ sessionId?: string; runId?: string | null }>(
         "/api/chat",
-        this.#sessionId === null ? { message } : { sessionId: this.#sessionId, message },
+        { sessionId: this.#sessionId, message },
       );
       thinking.remove();
       if (typeof body.sessionId !== "string") {
         this.#ctx.toast("could not send");
         return;
       }
-      if (this.#sessionId === null) {
-        this.#sessionId = body.sessionId;
-        this.#ctx.wsSend({ type: "subscribe", sessionId: body.sessionId });
-      }
       if (typeof body.runId === "string") void this.#rail.follow(body.runId);
       await this.#backfill();
     } catch (err) {
       thinking.remove();
+      this.#clearStream();
       this.#ctx.toast(err instanceof Error ? err.message : "could not send");
     } finally {
       this.#sending = false;

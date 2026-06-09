@@ -39,6 +39,7 @@ import {
   makeRouterHandler,
   ROUTE_ALLOWLIST,
   ROUTER_HANDLER_ID,
+  type RuntimeContextSnapshot,
   routerHandler,
   routerTaskInput,
 } from "./router/handler.ts";
@@ -59,6 +60,7 @@ import {
   softwareEngineerTaskInput,
 } from "./software-engineer/index.ts";
 
+export type { RuntimeContextSnapshot } from "./router/handler.ts";
 export type { ChangeDecision, ParsedDiff, SweBuildDeps } from "./software-engineer/index.ts";
 
 // Re-export the software-engineer host surface so the daemon (cli) can wire the
@@ -110,6 +112,8 @@ export interface PipelineDescriptor {
   readonly handlerId: string;
   readonly handler: TaskHandler;
   readonly taskInput?: RegisterTaskInput;
+  /** One-line description surfaced to the orchestrator's runtime snapshot. */
+  readonly summary?: string;
 }
 
 /**
@@ -133,6 +137,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: SELFTEST_HANDLER_ID,
     handler: selftestHandler,
     taskInput: selftestTaskInput,
+    summary: "runtime self-test: sends a probe prompt through the configured CLI",
   },
   // The chatbot-home dispatcher: a chat message is a manual run of this pipeline. It
   // classifies the wish via the CLI and spawns one allowlisted built-in. Adds
@@ -141,11 +146,13 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: ROUTER_HANDLER_ID,
     handler: routerHandler,
     taskInput: routerTaskInput,
+    summary: "the chat orchestrator: answers questions or dispatches wishes to pipelines",
   },
   {
     handlerId: SKILL_TRAIN_HANDLER_ID,
     handler: skillTrainHandler,
     taskInput: skillTrainTaskInput,
+    summary: "trains an agent skill against its validation tasks (SkillOpt-style)",
   },
   // The autonomous loop: LLM-authored self-prompting (AUTHOR -> EXECUTE -> CRITIC)
   // toward a human-set objective. v1 is a pure reasoning loop — the declared set is
@@ -154,11 +161,13 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: LOOP_HANDLER_ID,
     handler: loopHandler,
     taskInput: loopTaskInput,
+    summary: "autonomous reasoning loop toward an objective: the model authors each prompt itself",
   },
   {
     handlerId: ORCHESTRATOR_DEMO_HANDLER_ID,
     handler: orchestratorDemoHandler,
     taskInput: orchestratorDemoTaskInput,
+    summary: "demo of parallel sub-agent fan-out (spawns demo workers)",
   },
   // Daily model-intelligence snapshot: fetches the trusted DeepSWE leaderboard
   // (host-allowlisted) so the orchestrator can pick models by cost + intelligence.
@@ -166,6 +175,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: BENCHMARK_INGEST_HANDLER_ID,
     handler: benchmarkIngestHandler,
     taskInput: benchmarkIngestTaskInput,
+    summary: "daily model-benchmark snapshot from DeepSWE for cost-aware model routing",
   },
   // Self-reflection: a daily, OPT-IN (enabled:false) cron that reads the runtime's
   // own health, reflects via the user's CLI, and writes proposals to `events`. The
@@ -174,6 +184,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: AUTO_EVOLVE_HANDLER_ID,
     handler: autoEvolveHandler,
     taskInput: autoEvolveTaskInput,
+    summary: "daily self-reflection: reads runtime health and proposes skills/fixes",
   },
   // The flagship: a visualized, human-gated coding cycle in a throwaway git
   // worktree. The lead spawns one `swe:build` sub-agent per file-disjoint task,
@@ -184,6 +195,8 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: SOFTWARE_ENGINEER_HANDLER_ID,
     handler: softwareEngineerUnwired,
     taskInput: softwareEngineerTaskInput,
+    summary:
+      "human-gated coding cycle in a throwaway git worktree (spec, plan, build, diff review)",
   },
   // Spawn-only worker: registered as a handler so orchestrator-demo can `ctx.spawn`
   // it, but it has no task of its own (not shown in `schedule list`).
@@ -205,6 +218,14 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
  * the full capability set, so the scheduler's capability check stays meaningful
  * (deny-by-default): a task can never receive a capability no pipeline declared.
  */
+/** One-line {id, summary} rows for every runnable pipeline (the snapshot's pipeline list). */
+export function pipelineSummaries(): { id: string; summary: string }[] {
+  return PIPELINES.filter((d) => d.taskInput !== undefined).map((d) => ({
+    id: d.handlerId,
+    summary: d.summary ?? "",
+  }));
+}
+
 export function grantedCapabilities(): Capability[] {
   const granted = new Set<Capability>();
   for (const descriptor of PIPELINES) {
@@ -243,6 +264,11 @@ export interface RegisterPipelinesOptions {
    * when omitted, the lead registers as an un-wired fail-fast handler.
    */
   readonly softwareEngineerCoordinator?: ChangeDecisionCoordinator;
+  /**
+   * Live runtime snapshot for the router's `answer` action (pipelines, recent
+   * runs, schedules). Host-injected; absent -> answers carry an empty snapshot.
+   */
+  readonly getRuntimeContext?: () => RuntimeContextSnapshot;
 }
 
 /** Resolve the handler to register for a descriptor, applying any host-injected wiring. */
@@ -250,8 +276,18 @@ function resolveHandler(
   descriptor: PipelineDescriptor,
   options: RegisterPipelinesOptions,
 ): TaskHandler {
-  if (descriptor.handlerId === ROUTER_HANDLER_ID && options.getDefaultParams !== undefined) {
-    return makeRouterHandler({ getDefaultParams: options.getDefaultParams });
+  if (
+    descriptor.handlerId === ROUTER_HANDLER_ID &&
+    (options.getDefaultParams !== undefined || options.getRuntimeContext !== undefined)
+  ) {
+    return makeRouterHandler({
+      ...(options.getDefaultParams !== undefined
+        ? { getDefaultParams: options.getDefaultParams }
+        : {}),
+      ...(options.getRuntimeContext !== undefined
+        ? { getRuntimeContext: options.getRuntimeContext }
+        : {}),
+    });
   }
   if (
     descriptor.handlerId === SOFTWARE_ENGINEER_HANDLER_ID &&

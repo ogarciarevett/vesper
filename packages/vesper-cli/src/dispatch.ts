@@ -57,6 +57,7 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "author-cli",
   "execute-cli",
   "critic-cli",
+  "session",
 ]);
 
 function isGroup(entry: Registrable): entry is CommandGroup {

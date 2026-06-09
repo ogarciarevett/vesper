@@ -177,8 +177,13 @@ export interface SubAgentHandle {
   readonly done: Promise<RunOutcome>;
 }
 
-/** The kind of a live-trace {@link ProgressEvent}. Structurally mirrors storage `RunEventKind`. */
-export type ProgressKind = "step" | "log" | "progress" | "spawn" | "complete";
+/**
+ * The kind of a live-trace {@link ProgressEvent}. Mostly mirrors storage
+ * `RunEventKind`, with one deliberate divergence: `"text"` is PUBLISH-ONLY —
+ * streamed assistant deltas ride the bus to live clients but are never persisted
+ * (the durable record of a completion's text is the `io` result event).
+ */
+export type ProgressKind = "step" | "log" | "progress" | "spawn" | "complete" | "text";
 
 /** A single live-trace step a handler emits via {@link PipelineContext.emitProgress}. */
 export interface ProgressEvent {

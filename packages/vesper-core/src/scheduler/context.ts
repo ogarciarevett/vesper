@@ -239,6 +239,20 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
 
     emitProgress(event) {
       assertCapabilities(["WRITE_STORAGE"], task.required_capabilities);
+      // "text" deltas are publish-only: they stream to live clients but are never
+      // persisted (the io result event is the durable record of the full text).
+      if (event.kind === "text") {
+        deps.events?.emit(RUN_EVENT, {
+          id: crypto.randomUUID(),
+          ts: Date.now(),
+          runId,
+          parentRunId,
+          kind: "text",
+          message: event.message,
+          ...(event.data !== undefined ? { data: event.data } : {}),
+        });
+        return;
+      }
       const payload: Record<string, unknown> = { message: event.message };
       if (event.data !== undefined) payload.data = event.data;
       // Ride the persisted row's id + ts on the bus payload so a live frame

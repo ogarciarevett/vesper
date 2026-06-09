@@ -891,7 +891,18 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         }
 
         // Create the session lazily; a brand-new session is titled from the message.
-        const sessionId = requested ?? store.createSession({ title: message.slice(0, 80) });
+        // A client-SUPPLIED unknown id is created with that exact id — this lets the
+        // client subscribe to chat:<id> BEFORE the first send, so the first reply's
+        // chat:delta stream is not missed (UI + `vesper chat` both rely on it).
+        let sessionId: string;
+        if (requested === null) {
+          sessionId = store.createSession({ title: message.slice(0, 80) });
+        } else {
+          const exists = store.listSessions().some((s) => s.id === requested);
+          sessionId = exists
+            ? requested
+            : store.createSession({ id: requested, title: message.slice(0, 80) });
+        }
         const userTurnId = store.appendTurn({ sessionId, role: "user", text: message });
         publishChatTurn(server, sessionId, {
           turnId: userTurnId,
@@ -1062,6 +1073,18 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
   const onRunEvent = (payload?: unknown): void => {
     if (!isRecord(payload) || typeof payload.runId !== "string") return;
     const event = payload as unknown as RunEventPayload;
+    // Streamed assistant deltas (publish-only "text" kind) ride to the chat
+    // transcript topic as chat:delta frames; they never hit the agent log.
+    if (event.kind === "text") {
+      const sessionId = isRecord(event.data) ? event.data.sessionId : undefined;
+      if (typeof sessionId === "string" && UUID_RE.test(sessionId)) {
+        server.publish(
+          `chat:${sessionId}`,
+          JSON.stringify({ type: "chat:delta", runId: event.runId, text: event.message }),
+        );
+      }
+      return;
+    }
     server.publish(`agent:${event.runId}`, JSON.stringify({ type: "run:event", event }));
     server.publish(
       "world",

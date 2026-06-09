@@ -62,6 +62,81 @@ const DEFAULT_CHILD_CAPABILITIES: readonly Capability[] = ["WRITE_STORAGE"];
 /** Max characters of the user message embedded in the classify prompt (bound the prompt). */
 const MESSAGE_MAX_LENGTH = 2_000;
 
+/** Minimum interval between streamed text-delta flushes (coalescing window, ms). */
+const DELTA_FLUSH_MS = 75;
+
+/**
+ * A frozen snapshot of the runtime the orchestrator answers FROM — ground truth,
+ * not model memory. Host-injected (the daemon builds it from the pipeline
+ * registry, the runs table, and the schedule list).
+ */
+export interface RuntimeContextSnapshot {
+  readonly pipelines: readonly { readonly id: string; readonly summary: string }[];
+  readonly recentRuns: readonly {
+    readonly pipeline: string;
+    readonly status: string;
+    readonly summary: string;
+    readonly ts: number;
+  }[];
+  readonly schedules: readonly {
+    readonly id: string;
+    readonly kind: string;
+    readonly schedule_expr: string;
+    readonly enabled: boolean;
+  }[];
+}
+
+/** The empty snapshot used when the host wired no runtime-context provider. */
+const EMPTY_SNAPSHOT: RuntimeContextSnapshot = { pipelines: [], recentRuns: [], schedules: [] };
+
+/**
+ * Build the ANSWER prompt: Vesper speaks as the orchestrator, grounded in the
+ * runtime snapshot (so "what pipelines are available?" is answered from ground
+ * truth). The user message is fenced; the reply is plain conversational text.
+ */
+function buildAnswerPrompt(message: string, snapshot: RuntimeContextSnapshot): string {
+  const pipelines =
+    snapshot.pipelines.length > 0
+      ? snapshot.pipelines.map((p) => `- ${p.id}: ${p.summary}`).join("\n")
+      : "(none registered)";
+  const runs =
+    snapshot.recentRuns.length > 0
+      ? snapshot.recentRuns
+          .map((r) => `- [${r.status}] ${r.pipeline}: ${r.summary.slice(0, 120)}`)
+          .join("\n")
+      : "(no recent runs)";
+  const schedules =
+    snapshot.schedules.length > 0
+      ? snapshot.schedules
+          .map(
+            (s) =>
+              `- ${s.id} (${s.kind}${s.schedule_expr ? ` ${s.schedule_expr}` : ""}, ${s.enabled ? "enabled" : "disabled"})`,
+          )
+          .join("\n")
+      : "(none)";
+
+  return [
+    "You are Vesper, a local-first personal automation runtime, talking to your owner.",
+    "Answer their message conversationally and concretely FROM the runtime state below —",
+    "this is ground truth; do not invent pipelines or runs that are not listed.",
+    "Be brief and useful. Plain text only (no markdown headers).",
+    "",
+    "Registered pipelines:",
+    pipelines,
+    "",
+    "Recent runs (newest last):",
+    runs,
+    "",
+    "Schedules:",
+    schedules,
+    "",
+    "Owner's message:",
+    "<<<",
+    message,
+    ">>>",
+  ].join("\n");
+}
+
 /** Read the user message from params; empty string when absent/non-string. */
 function readMessage(params: RunParams): string {
   const raw = params.message;
@@ -76,9 +151,11 @@ function readMessage(params: RunParams): string {
 function buildClassifyPrompt(message: string, labels: readonly string[]): string {
   return [
     "You are a strict intent classifier for a local automation runtime.",
-    `Choose EXACTLY ONE label from this closed set: ${labels.join(", ")}, none.`,
-    'Answer with the single label only — no punctuation, no explanation. Use "none" when',
-    "the request matches no label or is ambiguous.",
+    `Choose EXACTLY ONE label from this closed set: ${labels.join(", ")}, answer, none.`,
+    'Pick a pipeline label ONLY when the user asks to RUN that automation. Pick "answer"',
+    "when they are asking a question, conversing, or asking about the runtime itself",
+    '(its pipelines, runs, schedules, status). Use "none" when the request is ambiguous.',
+    "Answer with the single label only — no punctuation, no explanation.",
     "",
     "User request:",
     "<<<",
@@ -112,6 +189,12 @@ export interface RouterHandlerOptions {
    * `store.getTemplate`); defaults to no defaults when absent (tests / non-daemon).
    */
   readonly getDefaultParams?: (handlerId: string) => RunParams;
+  /**
+   * Returns the live {@link RuntimeContextSnapshot} the `answer` action grounds in.
+   * Host-injected (the daemon builds it from the registry + store + schedule list);
+   * absent -> answers carry an empty snapshot (tests / non-daemon callers).
+   */
+  readonly getRuntimeContext?: () => RuntimeContextSnapshot;
 }
 
 /**
@@ -121,6 +204,7 @@ export interface RouterHandlerOptions {
 export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandler {
   const allowlist = options.allowlist ?? ROUTE_ALLOWLIST;
   const getDefaultParams = options.getDefaultParams;
+  const getRuntimeContext = options.getRuntimeContext;
   const labels = Object.keys(allowlist);
 
   return async (ctx) => {
@@ -137,6 +221,54 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
 
     ctx.emitProgress({ kind: "step", message: "classifying request" });
     const result = await ctx.complete(buildClassifyPrompt(message, labels));
+    const token =
+      result.text
+        .trim()
+        .toLowerCase()
+        .match(/[a-z0-9_-]+/)?.[0] ?? "";
+
+    // ANSWER: the orchestrator replies conversationally, grounded in the live
+    // runtime snapshot, STREAMING deltas to the chat (publish-only "text" kind;
+    // the io result event is the durable record).
+    if (token === "answer") {
+      ctx.emitProgress({ kind: "step", message: "answering from runtime context" });
+      const snapshot = getRuntimeContext?.() ?? EMPTY_SNAPSHOT;
+      const sessionId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : undefined;
+
+      let pending = "";
+      let lastFlush = 0;
+      const flush = (force: boolean): void => {
+        if (pending.length === 0) return;
+        const now = Date.now();
+        if (!force && now - lastFlush < DELTA_FLUSH_MS) return;
+        ctx.emitProgress({
+          kind: "text",
+          message: pending,
+          ...(sessionId !== undefined ? { data: { sessionId } } : {}),
+        });
+        pending = "";
+        lastFlush = now;
+      };
+
+      // Generous per-call timeout: a grounded conversational answer can exceed the
+      // 30s process default (slice A made the override reach the adapter).
+      const reply = await ctx.complete(buildAnswerPrompt(message, snapshot), {
+        timeoutMs: 120_000,
+        onText: (delta) => {
+          pending += delta;
+          flush(false);
+        },
+      });
+      flush(true);
+
+      const answer = reply.text.trim();
+      ctx.recordRun({
+        status: "ok",
+        summary: answer.length > 0 ? answer : "(no response)",
+      });
+      return;
+    }
+
     const label = resolveLabel(result.text, allowlist);
 
     // No-eval fallback: an unmapped/free-form label NEVER becomes a handler id.

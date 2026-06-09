@@ -316,3 +316,125 @@ describe("router registration", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The `answer` action (specs/orchestrator-home.md slice E)
+// ---------------------------------------------------------------------------
+
+describe("router answer action", () => {
+  function makeAnswerCtx(replyText: string): {
+    ctx: PipelineContext;
+    prompts: string[];
+    recorded: { status: string; summary: string }[];
+    textEvents: { message: string; data?: Record<string, unknown> }[];
+    spawned: number;
+  } {
+    const prompts: string[] = [];
+    const recorded: { status: string; summary: string }[] = [];
+    const textEvents: { message: string; data?: Record<string, unknown> }[] = [];
+    const state = { spawned: 0 };
+    const ctx = {
+      task: {
+        id: "router",
+        kind: "manual",
+        schedule_expr: "",
+        handler_id: "router",
+        enabled: true,
+        last_run_at: null,
+        last_error: null,
+        max_runs_per_day: null,
+        max_concurrent: null,
+        max_duration_ms: null,
+        runs_today: 0,
+        runs_today_date: null,
+        attempt_count: 0,
+        next_attempt_at: null,
+        required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE", "SPAWN_SUBAGENT"],
+      },
+      now: new Date(2026, 0, 1),
+      params: {
+        message: "what pipelines are available?",
+        sessionId: "11111111-2222-4333-8444-555555555555",
+      },
+      runId: "router-run",
+      parentRunId: null,
+      async complete(
+        prompt: string,
+        opts?: { onText?: (d: string) => void },
+      ): Promise<CompleteResult> {
+        prompts.push(prompt);
+        // First call = classify -> "answer"; second = the grounded answer, streamed.
+        if (prompts.length === 1) {
+          return {
+            text: "answer",
+            exit_code: 0,
+            raw_stdout: "answer",
+            raw_stderr: "",
+            duration_ms: 1,
+          };
+        }
+        for (const piece of replyText.match(/.{1,6}/g) ?? []) opts?.onText?.(piece);
+        return {
+          text: replyText,
+          exit_code: 0,
+          raw_stdout: replyText,
+          raw_stderr: "",
+          duration_ms: 1,
+        };
+      },
+      recordRun({ status, summary }: { status: string; summary: string }) {
+        recorded.push({ status, summary });
+        return "router-run";
+      },
+      emitProgress(e: { kind: string; message: string; data?: Record<string, unknown> }) {
+        if (e.kind === "text")
+          textEvents.push({ message: e.message, ...(e.data ? { data: e.data } : {}) });
+      },
+      spawn() {
+        state.spawned += 1;
+        throw new Error("answer must not spawn");
+      },
+    } as unknown as PipelineContext;
+    return { ctx, prompts, recorded, textEvents, spawned: state.spawned };
+  }
+
+  test("answers from the runtime snapshot, streams deltas, never spawns", async () => {
+    const reply = "I can run selftest, loop, and software-engineer.";
+    const { ctx, prompts, recorded, textEvents } = makeAnswerCtx(reply);
+    const handler = makeRouterHandler({
+      getRuntimeContext: () => ({
+        pipelines: [
+          { id: "selftest", summary: "runtime self-test" },
+          { id: "loop", summary: "autonomous reasoning loop" },
+        ],
+        recentRuns: [{ pipeline: "loop", status: "succeeded", summary: "done", ts: 1 }],
+        schedules: [
+          { id: "benchmark-ingest", kind: "cron", schedule_expr: "15 6 * * *", enabled: true },
+        ],
+      }),
+    });
+
+    await handler(ctx);
+
+    // The answer prompt is grounded: it names the registered pipelines.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("selftest: runtime self-test");
+    expect(prompts[1]).toContain("benchmark-ingest");
+    expect(prompts[1]).toContain("what pipelines are available?");
+
+    // Streamed deltas reassemble to the full reply and carry the session id.
+    expect(textEvents.length).toBeGreaterThanOrEqual(1);
+    expect(textEvents.map((e) => e.message).join("")).toBe(reply);
+    expect(textEvents[0]?.data?.sessionId).toBe("11111111-2222-4333-8444-555555555555");
+
+    // The durable turn is the full answer; nothing was dispatched.
+    expect(recorded).toEqual([{ status: "ok", summary: reply }]);
+  });
+
+  test("an empty snapshot still answers (no provider wired)", async () => {
+    const { ctx, recorded } = makeAnswerCtx("Nothing has run yet.");
+    const handler = makeRouterHandler({});
+    await handler(ctx);
+    expect(recorded[0]?.status).toBe("ok");
+  });
+});

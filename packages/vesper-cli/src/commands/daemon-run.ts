@@ -17,6 +17,7 @@ import {
   ChangeDecisionCoordinator,
   grantedCapabilities,
   PIPELINES,
+  pipelineSummaries,
   registerPipelines,
 } from "@vesper/pipelines";
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
@@ -104,6 +105,21 @@ export const daemonRunCommand: Command = {
     registerPipelines(scheduler, registry, {
       getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
       softwareEngineerCoordinator: sweCoordinator,
+      // Ground truth for the router's `answer` action: registered pipelines,
+      // the last ten runs, and the schedule list — read live per chat turn.
+      getRuntimeContext: () => ({
+        pipelines: pipelineSummaries(),
+        recentRuns: uiStore
+          .listRuns({})
+          .slice(-10)
+          .map((r) => ({ pipeline: r.pipeline, status: r.status, summary: r.summary, ts: r.ts })),
+        schedules: scheduler.list().map((t) => ({
+          id: t.id,
+          kind: t.kind,
+          schedule_expr: t.schedule_expr,
+          enabled: t.enabled,
+        })),
+      }),
     });
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
