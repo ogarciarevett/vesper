@@ -169,6 +169,7 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         ...(cli !== undefined ? { cli } : {}),
         ...(opts?.model !== undefined ? { model: opts.model } : {}),
         ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+        ...(opts?.onText !== undefined ? { onText: opts.onText } : {}),
       });
       recordContextUsage(result.usage);
       return result;

@@ -66,6 +66,11 @@ function resolveModelInfo(envelope: ClaudeJsonEnvelope): {
  * Constructor accepts {@link AdapterOptions} so the CLI layer can override
  * command and args from `~/.vesper/config.json`.
  */
+/** Narrow an `unknown` to a plain object record. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 export class ClaudeCodeAdapter extends BaseAdapter {
   readonly name = "claude";
   protected readonly defaultCommand = "claude";
@@ -75,43 +80,104 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     super(options);
   }
 
+  /**
+   * Streaming mode: `--output-format stream-json` emits NDJSON (one event per
+   * line; `--verbose` is required in print mode, `--include-partial-messages`
+   * adds the `stream_event` deltas). The chunk handler buffers partial lines
+   * across chunks and forwards ONLY `text_delta` payloads; the final
+   * `type:"result"` line is what {@link parseOutput} reads from the buffered
+   * stdout, so the result is identical to the non-streaming call.
+   */
+  protected override streamMode(onText: (delta: string) => void): {
+    readonly args?: readonly string[];
+    readonly onChunk: (chunk: string) => void;
+  } {
+    let buffer = "";
+    const handleLine = (line: string): void => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        // Not NDJSON (old CLI / overridden args) — pass the raw line through so
+        // the caller still streams SOMETHING rather than nothing.
+        onText(trimmed);
+        return;
+      }
+      if (!isRecord(parsed) || parsed.type !== "stream_event") return;
+      const event = parsed.event;
+      if (!isRecord(event) || event.type !== "content_block_delta") return;
+      const delta = event.delta;
+      if (isRecord(delta) && delta.type === "text_delta" && typeof delta.text === "string") {
+        onText(delta.text);
+      }
+    };
+    return {
+      args: ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"],
+      onChunk: (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) handleLine(line);
+      },
+    };
+  }
+
+  /**
+   * Extract text + usage from a parsed result envelope, or undefined when the
+   * value is not a `result` envelope with a string `result`.
+   */
+  #parseEnvelope(raw: unknown): { text: string; usage?: CompleteUsage } | undefined {
+    if (!isClaudeJsonEnvelope(raw) || typeof raw.result !== "string") return undefined;
+
+    const u = raw.usage;
+    const inputTokens = toNumber(u?.input_tokens);
+    const outputTokens = toNumber(u?.output_tokens);
+
+    // Only produce usage when the required token fields are present.
+    if (inputTokens === undefined || outputTokens === undefined) {
+      return { text: raw.result };
+    }
+    // Include the optional cache fields only when present (exactOptionalPropertyTypes).
+    const cacheReadTokens = toNumber(u?.cache_read_input_tokens);
+    const cacheCreationTokens = toNumber(u?.cache_creation_input_tokens);
+    const { model, contextWindow } = resolveModelInfo(raw);
+    const usage: CompleteUsage = {
+      inputTokens,
+      outputTokens,
+      model,
+      ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+      ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+    };
+
+    return { text: raw.result, usage };
+  }
+
   protected override parseOutput(stdout: string): { text: string; usage?: CompleteUsage } {
+    // One JSON document: the `--output-format json` envelope.
     try {
-      const raw: unknown = JSON.parse(stdout);
-
-      if (!isClaudeJsonEnvelope(raw)) {
-        return { text: stdout.trim() };
-      }
-
-      if (typeof raw.result !== "string") {
-        // Not a result envelope (could be a different JSON shape) — fall back.
-        return { text: stdout.trim() };
-      }
-
-      const u = raw.usage;
-      const inputTokens = toNumber(u?.input_tokens);
-      const outputTokens = toNumber(u?.output_tokens);
-
-      // Only produce usage when the required token fields are present.
-      if (inputTokens === undefined || outputTokens === undefined) {
-        return { text: raw.result };
-      }
-      // Include the optional cache fields only when present (exactOptionalPropertyTypes).
-      const cacheReadTokens = toNumber(u?.cache_read_input_tokens);
-      const cacheCreationTokens = toNumber(u?.cache_creation_input_tokens);
-      const { model, contextWindow } = resolveModelInfo(raw);
-      const usage: CompleteUsage = {
-        inputTokens,
-        outputTokens,
-        model,
-        ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
-        ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-      };
-
-      return { text: raw.result, usage };
+      const envelope = this.#parseEnvelope(JSON.parse(stdout));
+      if (envelope !== undefined) return envelope;
+      return { text: stdout.trim() };
     } catch {
-      // JSON.parse threw — stdout is plain text (old claude version, test stub, etc.).
+      // Not a single document — try NDJSON (stream-json mode): the LAST line that
+      // parses to a result envelope carries the same shape as the json mode.
+      for (const line of stdout.split("\n").reverse()) {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) continue;
+        try {
+          const parsed: unknown = JSON.parse(trimmed);
+          if (isRecord(parsed) && parsed.type === "result") {
+            const envelope = this.#parseEnvelope(parsed);
+            if (envelope !== undefined) return envelope;
+          }
+        } catch {
+          // skip non-JSON lines
+        }
+      }
+      // Plain text (old claude version, test stub, etc.).
       return { text: stdout.trim() };
     }
   }

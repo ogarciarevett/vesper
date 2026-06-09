@@ -6,6 +6,12 @@ export interface RunOptions {
   readonly input?: string;
   /** Kill the child after this many milliseconds. Default 30_000. */
   readonly timeoutMs?: number;
+  /**
+   * Called with each stdout chunk AS IT ARRIVES (decoded text). The final
+   * {@link RunResult.stdout} is unchanged — the same full text, buffered. A
+   * throwing listener never affects the run.
+   */
+  readonly onStdout?: (chunk: string) => void;
 }
 
 /** Result of a finished child process. */
@@ -87,9 +93,39 @@ export const runProcess: ProcessRunner = async (command, args, options = {}) => 
     proc.kill();
   }, timeoutMs);
 
+  // Incremental stdout: only when a listener is attached — the buffered
+  // fast-path stays byte-identical for every existing caller.
+  const readStdout = async (): Promise<string> => {
+    const onStdout = options.onStdout;
+    // The instanceof check narrows Bun.spawn's loose stdout union; with "pipe"
+    // it is always a ReadableStream, so the buffered path below is unreachable
+    // in practice when a listener is attached.
+    const stdout = proc.stdout;
+    if (onStdout === undefined || !(stdout instanceof ReadableStream)) {
+      return new Response(proc.stdout).text();
+    }
+    const reader = stdout.getReader();
+    const decoder = new TextDecoder();
+    let out = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      if (chunk.length === 0) continue;
+      out += chunk;
+      try {
+        onStdout(chunk);
+      } catch {
+        // A listener error must never affect the process result.
+      }
+    }
+    out += decoder.decode();
+    return out;
+  };
+
   try {
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
+      readStdout(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);

@@ -96,6 +96,7 @@ export function makeCompleteFn(
     return adapter.complete(prompt, {
       ...(modelFlag !== undefined ? { model: modelFlag } : {}),
       ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(opts?.onText !== undefined ? { onText: opts.onText } : {}),
     });
   };
 }

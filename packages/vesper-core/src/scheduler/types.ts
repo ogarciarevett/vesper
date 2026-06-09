@@ -81,6 +81,8 @@ export type CompleteFn = (
     readonly model?: string;
     /** Per-call process-timeout override (ms). */
     readonly timeoutMs?: number;
+    /** Incremental assistant text (see `CompleteOptions.onText`). */
+    readonly onText?: (delta: string) => void;
   },
 ) => Promise<CompleteResult>;
 
@@ -215,7 +217,12 @@ export interface PipelineContext {
    */
   complete(
     prompt: string,
-    opts?: { readonly cli?: string; readonly model?: string; readonly timeoutMs?: number },
+    opts?: {
+      readonly cli?: string;
+      readonly model?: string;
+      readonly timeoutMs?: number;
+      readonly onText?: (delta: string) => void;
+    },
   ): Promise<CompleteResult>;
   /** Write a `runs` row for this pipeline. Requires the task to declare `WRITE_STORAGE`. */
   recordRun(input: { readonly status: string; readonly summary: string }): string;

@@ -46,3 +46,26 @@ describe("runProcess", () => {
     expect(caught?.stderr).toContain("err");
   });
 });
+
+describe("runProcess onStdout", () => {
+  test("receives chunks incrementally and the final stdout is the full text", async () => {
+    const chunks: string[] = [];
+    const result = await runProcess("sh", ["-c", "printf 'first '; sleep 0.05; printf 'second'"], {
+      onStdout: (chunk) => chunks.push(chunk),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("first second");
+    expect(chunks.join("")).toBe("first second");
+    expect(chunks.length).toBeGreaterThanOrEqual(2); // proved incremental, not one buffer
+  });
+
+  test("a throwing listener never affects the result", async () => {
+    const result = await runProcess("sh", ["-c", "printf ok"], {
+      onStdout: () => {
+        throw new Error("listener boom");
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("ok");
+  });
+});

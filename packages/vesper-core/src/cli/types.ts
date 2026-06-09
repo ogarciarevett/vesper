@@ -98,4 +98,12 @@ export interface CompleteOptions {
    * catalog ids are translated by the host resolver BEFORE reaching the adapter.
    */
   readonly model?: string;
+  /**
+   * Incremental assistant text. Presence switches the adapter into its streaming
+   * output mode when it has one (claude: `--output-format stream-json`); adapters
+   * without a structured stream pass raw stdout chunks through as they flush —
+   * worst case the whole reply arrives as one late chunk (honest degradation).
+   * The final {@link CompleteResult} is identical to the non-streaming call.
+   */
+  readonly onText?: (delta: string) => void;
 }

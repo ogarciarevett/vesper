@@ -859,3 +859,95 @@ describe("CompleteOptions.model", () => {
     expect(result.model).toBe("claude-opus-4-8");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming (specs/orchestrator-home.md slice B)
+// ---------------------------------------------------------------------------
+
+// Derived from a LIVE `claude -p --output-format stream-json --verbose
+// --include-partial-messages` capture (2026-06-09): system noise, two text
+// deltas, and the final result envelope (same shape as --output-format json).
+const STREAM_FIXTURE_LINES = [
+  '{"type":"system","subtype":"hook_started","hook_id":"x"}',
+  '{"type":"stream_event","event":{"type":"message_start","message":{}}}',
+  '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The"}}}',
+  '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" quick brown fox."}}}',
+  '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}',
+  JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result: "The quick brown fox.",
+    usage: { input_tokens: 20842, output_tokens: 10, cache_read_input_tokens: 15500 },
+    modelUsage: { "claude-fable-5[1m]": { inputTokens: 20842, contextWindow: 1000000 } },
+  }),
+];
+
+/** A runner that feeds `chunks` to options.onStdout and returns their join as stdout. */
+function streamingRunner(chunks: readonly string[]): {
+  run: ProcessRunner;
+  captured: { args: readonly string[] }[];
+} {
+  const captured: { args: readonly string[] }[] = [];
+  const run: ProcessRunner = async (_cmd, args, options) => {
+    captured.push({ args });
+    for (const chunk of chunks) options?.onStdout?.(chunk);
+    return okResult({ stdout: chunks.join("") });
+  };
+  return { run, captured };
+}
+
+describe("claude streaming (stream-json)", () => {
+  test("forwards text deltas and parses the final result envelope, even with awkward chunk splits", async () => {
+    const ndjson = `${STREAM_FIXTURE_LINES.join("\n")}\n`;
+    // Split mid-line to exercise the cross-chunk line buffer.
+    const cut = ndjson.indexOf('"text":"The"') + 4;
+    const { run, captured } = streamingRunner([ndjson.slice(0, cut), ndjson.slice(cut)]);
+    const adapter = new ClaudeCodeAdapter({ run });
+
+    const deltas: string[] = [];
+    const result = await adapter.complete("p", { onText: (d) => deltas.push(d) });
+
+    expect(deltas).toEqual(["The", " quick brown fox."]);
+    expect(result.text).toBe("The quick brown fox.");
+    expect(result.usage?.model).toBe("claude-fable-5[1m]");
+    expect(result.usage?.contextWindow).toBe(1_000_000);
+    expect(result.model).toBe("claude-fable-5[1m]");
+    // Args switched to the streaming set, prompt still last.
+    expect(captured[0]?.args).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+      "p",
+    ]);
+  });
+
+  test("non-JSON stream lines pass through raw (old CLI degradation)", async () => {
+    const { run } = streamingRunner(["plain text reply\n"]);
+    const adapter = new ClaudeCodeAdapter({ run });
+    const deltas: string[] = [];
+    const result = await adapter.complete("p", { onText: (d) => deltas.push(d) });
+    expect(deltas).toEqual(["plain text reply"]);
+    expect(result.text).toBe("plain text reply");
+  });
+
+  test("without onText the args and behavior are the buffered json mode", async () => {
+    const { run, captured } = streamingRunner([]);
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("p");
+    expect(captured[0]?.args).toEqual(["-p", "--output-format", "json", "p"]);
+  });
+});
+
+describe("raw-passthrough streaming (codex/gemini/opencode)", () => {
+  test("chunks reach onText verbatim and args are unchanged", async () => {
+    const { run, captured } = streamingRunner(["hel", "lo"]);
+    const adapter = new CodexAdapter({ run });
+    const deltas: string[] = [];
+    const result = await adapter.complete("p", { onText: (d) => deltas.push(d) });
+    expect(deltas).toEqual(["hel", "lo"]);
+    expect(result.text).toBe("hello");
+    expect(captured[0]?.args).toEqual(["exec", "p"]);
+  });
+});

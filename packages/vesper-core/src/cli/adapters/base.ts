@@ -104,8 +104,30 @@ export abstract class BaseAdapter implements CLIAdapter {
     return ["--model", model];
   }
 
+  /**
+   * Per-call streaming mode, built when {@link CompleteOptions.onText} is set.
+   * The default forwards raw stdout chunks to `onText` with the normal args —
+   * honest degradation for CLIs without a structured stream format. An adapter
+   * with a real stream mode (claude) overrides this to return its stream args
+   * plus a stateful chunk handler (state is per call, never per adapter).
+   */
+  protected streamMode(onText: (delta: string) => void): {
+    readonly args?: readonly string[];
+    readonly onChunk: (chunk: string) => void;
+  } {
+    return { onChunk: onText };
+  }
+
   async complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult> {
-    const baseArgs = opts?.agentic === true ? this.resolvedAgenticArgs : this.resolvedArgs;
+    const onText = opts?.onText;
+    // Agentic mode keeps its own args; streaming there falls back to raw passthrough
+    // (the structured stream args would conflict with the agentic invocation).
+    const stream =
+      onText !== undefined && opts?.agentic !== true ? this.streamMode(onText) : undefined;
+    const passthrough = onText !== undefined && opts?.agentic === true ? onText : undefined;
+    const baseArgs =
+      opts?.agentic === true ? this.resolvedAgenticArgs : (stream?.args ?? this.resolvedArgs);
+    const onStdout = stream?.onChunk ?? passthrough;
     const argv = [
       ...baseArgs,
       ...(opts?.model !== undefined ? this.modelArgs(opts.model) : []),
@@ -114,7 +136,8 @@ export abstract class BaseAdapter implements CLIAdapter {
 
     try {
       const res = await this.#run(this.resolvedCommand, argv, {
-        timeoutMs: opts?.timeoutMs,
+        ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+        ...(onStdout !== undefined ? { onStdout } : {}),
       });
 
       if (res.exitCode !== 0) {
