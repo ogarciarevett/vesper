@@ -464,14 +464,28 @@ host-allowlisted to the configured provider only. No new runtime dependency, no 
 spec + `cycle-log.md` + commit (Rule 11). Out of scope (follow-on): a bundled on-device model + vec0 ANN; exposing
 `ragSearch` on `PipelineContext`; auto-evolve/chatbot grounding on the same seam.
 
+**Autonomous Loop (DEV-113) SHIPPED.** LLM-authored self-prompting loops (`specs/autonomous-loop.md`,
+v1): the human sets ONLY the objective; per iteration the model AUTHORs the next prompt, EXECUTEs it,
+and a CRITIC judges progress — all three roles over `ctx.complete` (brain stays the CLI, Hard rule 12).
+New `vesper-core/loop/`: the three meta-prompts (deliberately the LAST hand-written prompts in the
+system), a fail-closed fenced-JSON verdict parser (a malformed critic stalls the loop, never falsely
+succeeds it), and the bounded `runLoop` engine — `maxIterations` hard ceiling 50, no-progress stall
+detection, wall-clock budget (injectable clock), live-trace `emitProgress` per role, one
+metadata-granularity `loop_iteration` audit event per iteration (never prompt/result bodies). The
+built-in `loop` pipeline declares EXACTLY `CLI_INVOKE` + `WRITE_STORAGE` — v1 is a pure REASONING loop
+(no files, no network, no notify; action loops are a follow-on behind the approval coordinator).
+`vesper loop run|list|show` projects the cost (~3 x maxIterations CLI calls) and confirms on a TTY
+(`--yes` to skip); `show` replays the author/execute/critic timeline from `run_events`. Vesper World
+gained a Loop section: `POST /api/loop/run` answers 202 with the runId (read from the scheduler's
+up-front run row) so the client watches the loop think live over the existing run-events WebSocket.
+No migration, no new dependency; verified LIVE end-to-end. Issue-record: DEV-113 (pre-cap issue) +
+`cycle-log.md` + the commit.
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1266 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1294 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
-**Next:** the **Autonomous Loop** (`specs/autonomous-loop.md`, **DEV-113**, held at SPEC for Omar's ack) —
-LLM-authored self-prompting loops where the model writes each iteration's prompt (AUTHOR -> EXECUTE -> CRITIC
-over `ctx.complete`) and the human only sets the objective + which pipeline runs the loop; v1 is a bounded,
-capability-sandboxed REASONING loop. The rest of the personal-agent **pipelines** (career, social, trading,
+**Next:** the rest of the personal-agent **pipelines** (career, social, trading,
 hermes, secretary — the always-on, connected-24/7 backbone). The Voice **native shell** follow-up (Tauri/Rust
 audio + Whisper STT + hotkey + Mode-B dictation, gated on Omar's Hard-rule-14 nod) and the opt-in ElevenLabs
 cloud voice. Software-Engineer follow-ons: the opt-in OSS
@@ -479,7 +493,10 @@ browser-VSCode child, per-file selective staging, the reject->rebuild + simplify
 cwd-hardened TEST sandbox (owned by `security-hardening.md`), and a longer per-call CLI timeout for the
 SWE cycle (the 30s adapter default intermittently aborts a 4-call coding turn — `CompleteFn` needs a
 timeout knob; cross-cutting, surfaced by the post-ship live dogfood). Distribution's remaining follow-ups: a real
-`npm publish` against a tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths. Update
+`npm publish` against a tag (needs the `NPM_TOKEN` secret), and Homebrew/Linux/Windows install paths.
+Autonomous-loop follow-ons (spec Out of Scope): RAG-grounded AUTHOR via `ragSearch`; action loops (authored
+steps routed to `ctx.spawn`/connections) behind the approval coordinator; multi-agent competing loops;
+cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort. Update
 this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.

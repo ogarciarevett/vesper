@@ -4,6 +4,7 @@ import { channelsSection } from "./channels.ts";
 import { chatSection } from "./chat.ts";
 import { cliSection } from "./cli.ts";
 import { diagnosticsSection } from "./diagnostics.ts";
+import { loopSection } from "./loop.ts";
 import { memorySection } from "./memory.ts";
 import { permissionsSection } from "./permissions.ts";
 import { pipelinesSection } from "./pipelines.ts";
@@ -20,12 +21,14 @@ import { voiceSection } from "./voice.ts";
  * each group. "Real" sections (Chat, Runtime, CLIs, Permissions, Sandbox, Settings,
  * Diagnostics, About) read live state; Channels/Schedule/Pipelines are thin views;
  * Skills is a live read-only library; Voice is the in-window "Talk to Vesper" (Mode A)
- * surface; Memory wires to the RAG status seam (scaffolded, model deferred).
+ * surface; Memory wires to the RAG status seam (scaffolded, model deferred); Loop
+ * starts an autonomous self-prompting loop and renders its live trace.
  */
 export const ALL_SECTIONS: readonly SectionModule[] = [
   chatSection,
   // Vesper
   pipelinesSection,
+  loopSection,
   channelsSection,
   scheduleSection,
   skillsSection,

@@ -49,6 +49,14 @@ const VALUE_FLAGS: ReadonlySet<string> = new Set([
   "vault-key",
   "k",
   "source",
+  "goal",
+  "success",
+  "max",
+  "no-progress",
+  "budget-ms",
+  "author-cli",
+  "execute-cli",
+  "critic-cli",
 ]);
 
 function isGroup(entry: Registrable): entry is CommandGroup {

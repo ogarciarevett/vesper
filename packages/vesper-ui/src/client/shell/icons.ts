@@ -18,6 +18,7 @@ export const ICONS: Record<string, string> = {
     '<rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9h18M8 2.5v4M16 2.5v4M12 13v3l2 1"/>',
   ),
   skills: svg('<path d="M12 2 3 7l9 5 9-5-9-5z"/><path d="M3 12l9 5 9-5M3 17l9 5 9-5"/>'),
+  loop: svg('<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>'),
   memory: svg(
     '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 4v16M15 4v16M4 9h5M4 15h5M15 9h5M15 15h5"/>',
   ),

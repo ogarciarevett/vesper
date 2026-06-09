@@ -1263,3 +1263,73 @@ describe("UI server — memory status", () => {
     expect(status.indexedDocuments).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Autonomous loop — POST /api/loop/run (specs/autonomous-loop.md)
+// ---------------------------------------------------------------------------
+
+describe("UI server — autonomous loop", () => {
+  test("POST /api/loop/run returns the runId immediately while the loop continues", async () => {
+    const lDir = mkdtempSync(join(tmpdir(), "vesper-ui-loop-"));
+    const path = join(lDir, "vesper.db");
+    openStore(path).close();
+    const lDb = new Database(path);
+    const lStore = openStore(path);
+
+    const registry = new HandlerRegistry();
+    // Stand-in for the real loop pipeline: emits a role step, keeps running past
+    // the route's response, then records — proving the route does NOT await it.
+    registry.register("loop", async (ctx) => {
+      ctx.emitProgress({ kind: "step", message: "iteration 1: authored next prompt" });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      ctx.recordRun({ status: "succeeded", summary: "done" });
+    });
+    const scheduler = new Scheduler({ db: lDb, registry, grants: CAPABILITIES });
+    scheduler.register({
+      id: "loop",
+      kind: "manual",
+      schedule_expr: "",
+      handler_id: "loop",
+      required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE"],
+    });
+    const lHandle = await startUiServer({ scheduler, store: lStore, seed: "s", port: 0 });
+
+    try {
+      const res = await fetch(`${lHandle.url}/api/loop/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ goal: "reach the objective", maxIterations: 3 }),
+      });
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { runId?: string };
+      expect(typeof body.runId).toBe("string");
+
+      // The loop is still in flight when the route answers (the row is `running`).
+      const live = lStore.listRuns({ pipeline: "loop" }).find((r) => r.id === body.runId);
+      expect(live?.status).toBe("running");
+
+      // It finishes on its own afterwards.
+      let final = live;
+      for (let i = 0; i < 40 && final?.status === "running"; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        final = lStore.listRuns({ pipeline: "loop" }).find((r) => r.id === body.runId);
+      }
+      expect(final?.status).toBe("succeeded");
+    } finally {
+      lHandle.stop();
+      lStore.close();
+      lDb.close();
+      rmSync(lDir, { recursive: true, force: true });
+    }
+  });
+
+  test("POST /api/loop/run without a goal is a 400 and starts nothing", async () => {
+    const res = await fetch(`${handle.url}/api/loop/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(store.listRuns({ pipeline: "loop" })).toHaveLength(0);
+  });
+});

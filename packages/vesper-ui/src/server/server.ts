@@ -797,6 +797,47 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         }
       }
 
+      // ── Autonomous loop ──────────────────────────────────────────────────
+      // POST /api/loop/run — start an autonomous loop (specs/autonomous-loop.md) and
+      // return its runId IMMEDIATELY (202) so the client can follow the live
+      // author/execute/critic trace while the loop runs; the terminal outcome arrives
+      // later as the `run:completed` world frame. The scheduler allocates the run row
+      // up front (`startRun`), so a brief poll for a fresh `loop` run row yields the
+      // id without waiting for completion. Behind isLocalRequest (above) like every
+      // mutating route; the loop pipeline itself is capability-sandboxed to
+      // CLI_INVOKE + WRITE_STORAGE (a pure reasoning loop).
+      if (req.method === "POST" && pathname === "/api/loop/run") {
+        const body = await readJsonBody(req);
+        const goal = typeof body?.goal === "string" ? body.goal.trim() : "";
+        if (goal.length === 0) return json({ error: "goal is required" }, 400);
+        const params: Record<string, string> = { goal };
+        const maxIterations = body?.maxIterations;
+        if (typeof maxIterations === "number" && Number.isInteger(maxIterations)) {
+          params.maxIterations = String(maxIterations);
+        }
+        if (typeof body?.successCriteria === "string" && body.successCriteria.trim().length > 0) {
+          params.successCriteria = body.successCriteria.trim();
+        }
+
+        const before = new Set(store.listRuns({ pipeline: "loop" }).map((r) => r.id));
+        let failure: unknown = null;
+        scheduler.run("loop", { params }).catch((err: unknown) => {
+          failure = err; // surfaced below when the run dies before its row appears
+        });
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const fresh = store.listRuns({ pipeline: "loop" }).find((r) => !before.has(r.id));
+          if (fresh !== undefined) return json({ runId: fresh.id }, 202);
+          if (failure !== null) {
+            return json(
+              { error: failure instanceof Error ? failure.message : String(failure) },
+              500,
+            );
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return json({ error: "the loop did not start in time" }, 500);
+      }
+
       // ── Chatbot home ─────────────────────────────────────────────────────
       // POST /api/chat — a chat message is a manual run of the `router` pipeline
       // through the EXISTING run path (no new execution). Persists the user turn,

@@ -1358,3 +1358,38 @@ utility over a raw allowlisted fetch, the brain stays the CLI).
 - ALSO THIS SESSION (not a completed cycle — recorded in Linear, not as its own IMPROVE entry):
   spec'd the **Autonomous Loop** (`specs/autonomous-loop.md`, **DEV-113**, held at SPEC for Omar's ack)
   — LLM-authored self-prompting loops (AUTHOR -> EXECUTE -> CRITIC; human sets only the objective).
+
+## Autonomous Loop (DEV-113) — LLM-authored self-prompting loops SHIPPED
+
+Completes specs/autonomous-loop.md (v1): the human sets ONLY the objective; per iteration the
+model AUTHORs the next prompt, EXECUTEs it, and a CRITIC judges progress — all three roles over
+`ctx.complete` (brain stays the CLI, Hard rule 12; no new dependency, no migration).
+
+- WHAT: `vesper-core/src/loop/` (types; the three meta-prompts — deliberately the LAST hand-written
+  prompts in the system — with a fail-closed fenced-JSON verdict parser; the bounded `runLoop`
+  engine: maxIterations hard ceiling 50, no-progress stall detection, wall-clock budget via an
+  injectable clock, one metadata-granularity `loop_iteration` audit event per iteration, live-trace
+  emitProgress per role; 100% line coverage). The built-in `loop` pipeline declaring EXACTLY
+  CLI_INVOKE + WRITE_STORAGE (v1 is a pure REASONING loop — no files, no network, no notify).
+  `vesper loop run|list|show` (cost projection ~3 x maxIterations + TTY confirm / --yes; `show`
+  replays the author/execute/critic timeline from `run_events`). A Vesper World Loop section +
+  `POST /api/loop/run` answering 202 with the runId read from the scheduler's UP-FRONT run row, so
+  the client subscribes to `agent:<runId>` and watches the loop think live.
+- SPEC DELTAS (deliberate): the engine takes an injected `{ appendEvent, now }` deps object instead
+  of touching the store (core purity; the auto-evolve seam precedent); `recordRun` stays in the
+  engine per spec step 5, so the pipeline handler is a thin param adapter (`buildLoopSpec`).
+- UI/UX gate (impeccable, scoped to the new section): P0/P1 none — labelled controls, aria-live
+  status + timeline, form semantics, disabled-during-run, cost surfaced before start, dark-glass
+  vars only. P3 follow-ups: no in-UI stop control (the daemon abort path is not exposed as a route
+  yet); the timeline is not re-backfilled when the section remounts mid-run.
+- LESSON: `exactOptionalPropertyTypes` rejects the `...(f(x) !== undefined ? { k: f(x) } : {})`
+  double-call spread idiom (the union keeps `| undefined`) — extract a local first. Caught by a
+  HEAD-worktree tsc parity diff, NOT by CI (which gates biome + bun test only); the parity diff is
+  worth repeating on every cycle.
+- VERIFIED: 1294/0 tests (+28); biome ci exit 0; tsc parity with HEAD (core 15 / cli 20, all
+  pre-existing); engine 100% lines; client bundle builds with the section. LIVE: `vesper loop run
+  --goal "State the capital of France in one word." --max 1 --yes` -> succeeded after 1 iteration
+  ("Paris", 18.6s); `vesper loop show` replays the roles.
+- FOLLOW-ONS (from the spec's Out of Scope): RAG-grounded AUTHOR via `ragSearch`; action loops
+  (routing authored steps to `ctx.spawn`/connections) behind the approval coordinator; multi-agent
+  competing loops; cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort.

@@ -22,6 +22,7 @@ import {
   autoEvolveHandler,
   autoEvolveTaskInput,
 } from "./auto-evolve/handler.ts";
+import { LOOP_HANDLER_ID, loopHandler, loopTaskInput } from "./loop/handler.ts";
 import {
   DEMO_WORKER_HANDLER_ID,
   demoWorkerHandler,
@@ -70,6 +71,9 @@ export {
   autoEvolveTaskInput,
   DEMO_WORKER_HANDLER_ID,
   demoWorkerHandler,
+  LOOP_HANDLER_ID,
+  loopHandler,
+  loopTaskInput,
   ORCHESTRATOR_DEMO_HANDLER_ID,
   orchestratorDemoHandler,
   orchestratorDemoTaskInput,
@@ -134,6 +138,14 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: SKILL_TRAIN_HANDLER_ID,
     handler: skillTrainHandler,
     taskInput: skillTrainTaskInput,
+  },
+  // The autonomous loop: LLM-authored self-prompting (AUTHOR -> EXECUTE -> CRITIC)
+  // toward a human-set objective. v1 is a pure reasoning loop — the declared set is
+  // exactly CLI_INVOKE + WRITE_STORAGE, so it cannot write files, fetch, or notify.
+  {
+    handlerId: LOOP_HANDLER_ID,
+    handler: loopHandler,
+    taskInput: loopTaskInput,
   },
   {
     handlerId: ORCHESTRATOR_DEMO_HANDLER_ID,

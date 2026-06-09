@@ -8,7 +8,7 @@ import { ALL_SECTIONS } from "./index.ts";
 // missing/renamed section export is caught in CI instead.
 describe("ALL_SECTIONS", () => {
   test("registers every section with a unique id (catches a missing import)", () => {
-    expect(ALL_SECTIONS).toHaveLength(14);
+    expect(ALL_SECTIONS).toHaveLength(15);
     const ids = ALL_SECTIONS.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
