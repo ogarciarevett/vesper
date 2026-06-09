@@ -125,8 +125,20 @@ export type NotifyFn = (intent: NotifyIntent) => Promise<NotifyOutcome>;
 export interface RunOptions {
   /** Per-run CLI override (highest priority during adapter resolution). */
   readonly cli?: string;
+  /**
+   * Per-run model override applied to every `ctx.complete` in this run (canonical
+   * catalog id or raw flag value). An explicit per-call `opts.model` wins.
+   */
+  readonly model?: string;
   /** Transient run parameters, surfaced as {@link PipelineContext.params}. */
   readonly params?: RunParams;
+  /**
+   * DISPLAY-LINEAGE ONLY: groups this run under a parent in the activity tree
+   * (sets `runs.parent_run_id`). The run is still depth 0 — it keeps its task's
+   * own declared capabilities and MAY spawn its own children. Used by the
+   * orchestrator to launch `spawnsOwnChildren` plan tasks as sibling runs.
+   */
+  readonly parentRunId?: string;
 }
 
 /**
@@ -165,6 +177,8 @@ export interface SubAgentDescriptor {
   readonly capabilities?: readonly Capability[];
   /** Per-child duration cap (ms). Intersected (Math.min) with the parent's remaining budget. */
   readonly maxDurationMs?: number;
+  /** Model override applied to every `ctx.complete` in the child run. */
+  readonly model?: string;
 }
 
 /** Handle returned by {@link PipelineContext.spawn} for an in-flight sub-agent. */

@@ -193,15 +193,16 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         );
       }
       const cli = opts?.cli ?? options?.cli;
+      const model = opts?.model ?? options?.model;
       emitIo("prompt", {
         ...ioBody(prompt),
         ...(cli !== undefined ? { cli } : {}),
-        ...(opts?.model !== undefined ? { model: opts.model } : {}),
+        ...(model !== undefined ? { model } : {}),
       });
       try {
         const result = await complete(prompt, {
           ...(cli !== undefined ? { cli } : {}),
-          ...(opts?.model !== undefined ? { model: opts.model } : {}),
+          ...(model !== undefined ? { model } : {}),
           ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
           ...(opts?.onText !== undefined ? { onText: opts.onText } : {}),
         });

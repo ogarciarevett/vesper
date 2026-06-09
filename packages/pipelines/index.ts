@@ -43,6 +43,7 @@ import {
   routerHandler,
   routerTaskInput,
 } from "./router/handler.ts";
+import type { PlanDifficulty } from "./router/plan.ts";
 import { SELFTEST_HANDLER_ID, selftestHandler, selftestTaskInput } from "./selftest/handler.ts";
 import {
   SKILL_TRAIN_HANDLER_ID,
@@ -60,9 +61,14 @@ import {
   softwareEngineerTaskInput,
 } from "./software-engineer/index.ts";
 
+export { ORCHESTRATION_CONTRACTS, type OrchestrationContract } from "./router/contracts.ts";
 export type { RuntimeContextSnapshot } from "./router/handler.ts";
+export {
+  type OrchestrationPlan,
+  type PlanTask,
+  parseOrchestrationPlan,
+} from "./router/plan.ts";
 export type { ChangeDecision, ParsedDiff, SweBuildDeps } from "./software-engineer/index.ts";
-
 // Re-export the software-engineer host surface so the daemon (cli) can wire the
 // shared coordinator and the UI diff/decision provider through `@vesper/pipelines`.
 export {
@@ -72,6 +78,7 @@ export {
   parseUnifiedDiff,
   SWE_SOURCE,
 } from "./software-engineer/index.ts";
+export type { PlanDifficulty };
 export {
   AUTO_EVOLVE_HANDLER_ID,
   autoEvolveHandler,
@@ -269,6 +276,21 @@ export interface RegisterPipelinesOptions {
    * runs, schedules). Host-injected; absent -> answers carry an empty snapshot.
    */
   readonly getRuntimeContext?: () => RuntimeContextSnapshot;
+  /** Benchmark-driven model pick for plan tasks (see RouterHandlerOptions.pickModel). */
+  readonly pickModel?: (difficulty: PlanDifficulty) => string | undefined;
+  /** Sibling-run launcher for spawnsOwnChildren plan tasks (see RouterHandlerOptions.runSibling). */
+  readonly runSibling?: (
+    handlerId: string,
+    options: {
+      readonly params: RunParams;
+      readonly parentRunId: string;
+      readonly model?: string;
+    },
+  ) => Promise<{
+    readonly runId: string | null;
+    readonly status: string | null;
+    readonly summary: string | null;
+  } | null>;
 }
 
 /** Resolve the handler to register for a descriptor, applying any host-injected wiring. */
@@ -278,7 +300,10 @@ function resolveHandler(
 ): TaskHandler {
   if (
     descriptor.handlerId === ROUTER_HANDLER_ID &&
-    (options.getDefaultParams !== undefined || options.getRuntimeContext !== undefined)
+    (options.getDefaultParams !== undefined ||
+      options.getRuntimeContext !== undefined ||
+      options.pickModel !== undefined ||
+      options.runSibling !== undefined)
   ) {
     return makeRouterHandler({
       ...(options.getDefaultParams !== undefined
@@ -287,6 +312,8 @@ function resolveHandler(
       ...(options.getRuntimeContext !== undefined
         ? { getRuntimeContext: options.getRuntimeContext }
         : {}),
+      ...(options.pickModel !== undefined ? { pickModel: options.pickModel } : {}),
+      ...(options.runSibling !== undefined ? { runSibling: options.runSibling } : {}),
     });
   }
   if (

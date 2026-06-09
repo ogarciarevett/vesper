@@ -438,3 +438,197 @@ describe("router answer action", () => {
     expect(recorded[0]?.status).toBe("ok");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Orchestration plans (specs/orchestrator-home.md slice F)
+// ---------------------------------------------------------------------------
+
+describe("router plan execution", () => {
+  /** Stateful ctx: complete replies come from a queue; spawn resolves per handler. */
+  function makePlanCtx(replies: string[]): {
+    ctx: PipelineContext;
+    prompts: string[];
+    spawned: SubAgentDescriptor[];
+    recorded: { status: string; summary: string }[];
+  } {
+    const prompts: string[] = [];
+    const spawned: SubAgentDescriptor[] = [];
+    const recorded: { status: string; summary: string }[] = [];
+    const ctx = {
+      task: {
+        id: "router",
+        kind: "manual",
+        schedule_expr: "",
+        handler_id: "router",
+        enabled: true,
+        last_run_at: null,
+        last_error: null,
+        max_runs_per_day: null,
+        max_concurrent: null,
+        max_duration_ms: null,
+        runs_today: 0,
+        runs_today_date: null,
+        attempt_count: 0,
+        next_attempt_at: null,
+        required_capabilities: ["CLI_INVOKE", "WRITE_STORAGE", "SPAWN_SUBAGENT"],
+      },
+      now: new Date(2026, 0, 1),
+      params: { message: "use loop and selftest to do a thing" },
+      runId: "router-run",
+      parentRunId: null,
+      async complete(prompt: string): Promise<CompleteResult> {
+        prompts.push(prompt);
+        const text = replies.shift() ?? "none";
+        return { text, exit_code: 0, raw_stdout: text, raw_stderr: "", duration_ms: 1 };
+      },
+      recordRun({ status, summary }: { status: string; summary: string }) {
+        recorded.push({ status, summary });
+        return "router-run";
+      },
+      emitProgress() {},
+      spawn(descriptor: SubAgentDescriptor): SubAgentHandle {
+        spawned.push(descriptor);
+        const outcome: RunOutcome = {
+          taskId: descriptor.handlerId,
+          runId: `child-${spawned.length}`,
+          status: "ok",
+          summary: `${descriptor.label} done`,
+          cli: null,
+          durationMs: 1,
+        };
+        return {
+          runId: `child-${spawned.length}`,
+          handlerId: descriptor.handlerId,
+          label: descriptor.label,
+          done: Promise.resolve(outcome),
+        };
+      },
+    } as unknown as PipelineContext;
+    return { ctx, prompts, spawned, recorded };
+  }
+
+  const planReply = (plan: unknown) => `\`\`\`json\n${JSON.stringify(plan)}\n\`\`\``;
+
+  test("executes a two-step plan sequentially with result piping and model picks", async () => {
+    const replies = [
+      "run", // classify
+      planReply({
+        steps: [
+          {
+            tasks: [{ pipeline: "loop", label: "research", prompt: "goal A", difficulty: "hard" }],
+          },
+          {
+            tasks: [
+              {
+                pipeline: "selftest",
+                label: "summarize",
+                prompt: "old prompt",
+                difficulty: "easy",
+              },
+            ],
+          },
+        ],
+        notes: "n",
+      }),
+      '```json\n[{"label":"summarize","prompt":"summarize what research found"}]\n```', // revision
+    ];
+    const { ctx, prompts, spawned, recorded } = makePlanCtx(replies);
+    const picks: string[] = [];
+    const handler = makeRouterHandler({
+      pickModel: (difficulty) => {
+        picks.push(difficulty);
+        return difficulty === "hard" ? "claude-opus" : "claude-haiku";
+      },
+    });
+
+    await handler(ctx);
+
+    // Both tasks ran, in step order, with the authored prompts in the right params.
+    expect(spawned).toHaveLength(2);
+    expect(spawned[0]?.handlerId).toBe("loop");
+    expect(spawned[0]?.params?.goal).toBe("goal A");
+    expect(spawned[0]?.model).toBe("claude-opus"); // hard -> frontier pick
+    expect(spawned[1]?.handlerId).toBe("selftest");
+    // Result piping: the second step's prompt was re-authored from step-1 results.
+    expect(spawned[1]?.params?.prompt).toBe("summarize what research found");
+    expect(spawned[1]?.model).toBe("claude-haiku");
+    // The revision prompt carried step-1's outcome.
+    expect(prompts[2]).toContain("research");
+    expect(recorded[0]?.status).toBe("ok");
+    expect(recorded[0]?.summary).toContain("research");
+    expect(picks).toEqual(["hard", "easy"]);
+  });
+
+  test("an unplannable wish records a clarify turn (no spawns)", async () => {
+    const { ctx, spawned, recorded } = makePlanCtx(["run", "I refuse to emit JSON"]);
+    const handler = makeRouterHandler({});
+    await handler(ctx);
+    expect(spawned).toHaveLength(0);
+    expect(recorded[0]?.status).toBe("clarify");
+  });
+
+  test("spawnsOwnChildren tasks go through the sibling runner with display lineage", async () => {
+    const replies = [
+      "run",
+      planReply({
+        steps: [
+          {
+            tasks: [
+              {
+                pipeline: "software-engineer",
+                label: "code it",
+                prompt: "the wish",
+                params: { repo: "/tmp/r" },
+              },
+            ],
+          },
+        ],
+      }),
+    ];
+    const { ctx, spawned, recorded } = makePlanCtx(replies);
+    const siblingCalls: {
+      handlerId: string;
+      parentRunId: string;
+      params: Record<string, unknown>;
+    }[] = [];
+    const handler = makeRouterHandler({
+      runSibling: async (handlerId, options) => {
+        siblingCalls.push({
+          handlerId,
+          parentRunId: options.parentRunId,
+          params: { ...options.params },
+        });
+        return { runId: "sib-1", status: "ok", summary: "staged" };
+      },
+    });
+
+    await handler(ctx);
+
+    expect(spawned).toHaveLength(0); // never ctx.spawn for a spawnsOwnChildren task
+    expect(siblingCalls[0]?.handlerId).toBe("software-engineer");
+    expect(siblingCalls[0]?.parentRunId).toBe("router-run");
+    expect(siblingCalls[0]?.params.wish).toBe("the wish");
+    expect(siblingCalls[0]?.params.repo).toBe("/tmp/r");
+    expect(recorded[0]?.status).toBe("ok");
+  });
+
+  test("a spawnsOwnChildren task without a sibling runner fails soft", async () => {
+    const replies = [
+      "run",
+      planReply({
+        steps: [
+          {
+            tasks: [
+              { pipeline: "software-engineer", label: "code", prompt: "w", params: { repo: "/r" } },
+            ],
+          },
+        ],
+      }),
+    ];
+    const { ctx, recorded } = makePlanCtx(replies);
+    const handler = makeRouterHandler({});
+    await handler(ctx);
+    expect(recorded[0]?.status).toBe("partial");
+    expect(recorded[0]?.summary).toContain("sibling runner");
+  });
+});

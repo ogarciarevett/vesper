@@ -161,7 +161,14 @@ export function runSubAgent(args: RunSubAgentArgs): SubAgentHandle {
     ...(notify !== undefined ? { notify } : {}),
     // Thread the descriptor's params through to the child's `ctx.params`, so a
     // parent can parameterize each sub-agent it fans out.
-    ...(descriptor.params !== undefined ? { options: { params: descriptor.params } } : {}),
+    ...(descriptor.params !== undefined || descriptor.model !== undefined
+      ? {
+          options: {
+            ...(descriptor.params !== undefined ? { params: descriptor.params } : {}),
+            ...(descriptor.model !== undefined ? { model: descriptor.model } : {}),
+          },
+        }
+      : {}),
     redactSummaries,
     onRecordRun: (record) => {
       recordedRef.current = record;

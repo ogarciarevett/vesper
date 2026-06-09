@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import {
   ApprovalTokenStore,
+  BENCHMARK_SOURCE,
   CHANNEL_PLUGINS,
   type ChannelRegistry,
   channelStates,
@@ -11,6 +12,7 @@ import {
   KeychainVault,
   openStore,
   Scheduler,
+  selectModel,
   startIpcServer,
 } from "@vesper/core";
 import {
@@ -105,6 +107,25 @@ export const daemonRunCommand: Command = {
     registerPipelines(scheduler, registry, {
       getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
       softwareEngineerCoordinator: sweCoordinator,
+      // Benchmark-driven model routing for plan tasks: pick from the persisted
+      // DeepSWE snapshot + the effective catalog; undefined = no override.
+      pickModel: (difficulty) =>
+        selectModel(
+          uiStore.getModelBenchmarks(BENCHMARK_SOURCE),
+          {
+            ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
+            catalog: effectiveCatalog(config),
+          },
+          difficulty,
+        )?.canonicalId,
+      // Launch spawnsOwnChildren plan tasks (software-engineer) as sibling
+      // top-level runs grouped under the router run (display lineage only).
+      runSibling: async (handlerId, options) =>
+        scheduler.run(handlerId, {
+          params: options.params,
+          parentRunId: options.parentRunId,
+          ...(options.model !== undefined ? { model: options.model } : {}),
+        }),
       // Ground truth for the router's `answer` action: registered pipelines,
       // the last ten runs, and the schedule list — read live per chat turn.
       getRuntimeContext: () => ({

@@ -7,7 +7,7 @@
 
 import type { Command, CommandGroup } from "../dispatch.ts";
 import { uiPort } from "../paths.ts";
-import { cyan, dim, errorLine, line } from "../ui.ts";
+import { dim, errorLine, line } from "../ui.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

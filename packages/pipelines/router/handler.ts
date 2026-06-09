@@ -24,6 +24,15 @@ import {
   orchestratorDemoTaskInput,
 } from "../orchestrator-demo/handler.ts";
 import { SELFTEST_HANDLER_ID, selftestTaskInput } from "../selftest/handler.ts";
+import { ORCHESTRATION_CONTRACTS, type OrchestrationContract } from "./contracts.ts";
+import {
+  buildPlanPrompt,
+  buildStepRevisionPrompt,
+  type PlanDifficulty,
+  type PlanTask,
+  parseOrchestrationPlan,
+  parseStepRevision,
+} from "./plan.ts";
 
 /** Allowlisted handler id referenced by the `router` task. */
 export const ROUTER_HANDLER_ID = "router";
@@ -151,10 +160,12 @@ function readMessage(params: RunParams): string {
 function buildClassifyPrompt(message: string, labels: readonly string[]): string {
   return [
     "You are a strict intent classifier for a local automation runtime.",
-    `Choose EXACTLY ONE label from this closed set: ${labels.join(", ")}, answer, none.`,
-    'Pick a pipeline label ONLY when the user asks to RUN that automation. Pick "answer"',
-    "when they are asking a question, conversing, or asking about the runtime itself",
-    '(its pipelines, runs, schedules, status). Use "none" when the request is ambiguous.',
+    `Choose EXACTLY ONE label from this closed set: ${labels.join(", ")}, run, answer, none.`,
+    "Pick a pipeline label ONLY when the user asks to run exactly that one automation. Pick",
+    '"run" when they ask for WORK to be done that needs planning or combines pipelines',
+    '(e.g. naming several pipelines, or a multi-part task). Pick "answer" when they are',
+    "asking a question, conversing, or asking about the runtime itself (its pipelines,",
+    'runs, schedules, status). Use "none" when the request is ambiguous.',
     "Answer with the single label only — no punctuation, no explanation.",
     "",
     "User request:",
@@ -195,6 +206,40 @@ export interface RouterHandlerOptions {
    * absent -> answers carry an empty snapshot (tests / non-daemon callers).
    */
   readonly getRuntimeContext?: () => RuntimeContextSnapshot;
+  /** The orchestration-contract map. Defaults to {@link ORCHESTRATION_CONTRACTS}. */
+  readonly contracts?: Readonly<Record<string, OrchestrationContract>>;
+  /**
+   * Benchmark-driven model pick for a plan task with no explicit model: returns a
+   * canonical catalog id (or undefined = no override). Host-injected (selectModel
+   * over the persisted snapshot); absent -> no model overrides.
+   */
+  readonly pickModel?: (difficulty: PlanDifficulty) => string | undefined;
+  /**
+   * Launch a `spawnsOwnChildren` plan task as a sibling TOP-LEVEL run (display
+   * lineage via parentRunId; the run keeps its task's own declared capabilities
+   * and may spawn its own children — the depth-1 answer). Host-injected
+   * (`scheduler.run`); absent -> such tasks fail soft with a clear summary.
+   */
+  readonly runSibling?: (
+    handlerId: string,
+    options: {
+      readonly params: RunParams;
+      readonly parentRunId: string;
+      readonly model?: string;
+    },
+  ) => Promise<{
+    readonly runId: string | null;
+    readonly status: string | null;
+    readonly summary: string | null;
+  } | null>;
+}
+
+/** One executed plan task's outcome (feeds the next step's prompt revision). */
+interface TaskOutcome {
+  readonly label: string;
+  readonly status: string;
+  readonly summary: string;
+  readonly runId: string | null;
 }
 
 /**
@@ -205,6 +250,9 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
   const allowlist = options.allowlist ?? ROUTE_ALLOWLIST;
   const getDefaultParams = options.getDefaultParams;
   const getRuntimeContext = options.getRuntimeContext;
+  const contracts = options.contracts ?? ORCHESTRATION_CONTRACTS;
+  const pickModel = options.pickModel;
+  const runSibling = options.runSibling;
   const labels = Object.keys(allowlist);
 
   return async (ctx) => {
@@ -265,6 +313,146 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
       ctx.recordRun({
         status: "ok",
         summary: answer.length > 0 ? answer : "(no response)",
+      });
+      return;
+    }
+
+    // RUN: author an orchestration plan (Vesper writes every sub-agent prompt),
+    // then execute it — steps sequential, tasks within a step parallel.
+    if (token === "run") {
+      ctx.emitProgress({ kind: "step", message: "planning the work" });
+      const planReply = await ctx.complete(buildPlanPrompt(message, contracts), {
+        timeoutMs: 120_000,
+      });
+      const plan = parseOrchestrationPlan(planReply.text, contracts);
+      if (plan === null) {
+        ctx.recordRun({
+          status: "clarify",
+          summary:
+            "I could not turn that into a plan over my pipelines. Could you say which " +
+            "pipeline(s) you want, or describe the task differently?",
+        });
+        return;
+      }
+      const total = plan.steps.reduce((n, s) => n + s.tasks.length, 0);
+      ctx.emitProgress({
+        kind: "step",
+        message: `plan ready: ${total} task(s) across ${plan.steps.length} step(s)`,
+        ...(plan.notes.length > 0 ? { data: { notes: plan.notes } } : {}),
+      });
+
+      const runTask = async (task: PlanTask): Promise<TaskOutcome> => {
+        const contract = contracts[task.pipeline] as OrchestrationContract;
+        const model = contract.acceptsModel
+          ? (task.model ?? pickModel?.(task.difficulty))
+          : undefined;
+        const templateParams = getDefaultParams?.(contract.handlerId) ?? {};
+        const params: RunParams = {
+          ...templateParams,
+          ...task.params,
+          [contract.promptParam]: task.prompt,
+        };
+
+        if (contract.spawnsOwnChildren) {
+          // Sibling top-level run (depth-1 answer): display lineage only; the run
+          // keeps its task's own declared capabilities and may spawn children.
+          if (runSibling === undefined) {
+            return {
+              label: task.label,
+              status: "error",
+              summary: `${task.pipeline} needs the daemon's sibling runner — run this via the daemon`,
+              runId: null,
+            };
+          }
+          ctx.emitProgress({
+            kind: "spawn",
+            message: `launching ${task.pipeline} (sibling run): ${task.label}`,
+            ...(model !== undefined ? { data: { model } } : {}),
+          });
+          const outcome = await runSibling(contract.handlerId, {
+            params,
+            parentRunId: ctx.runId,
+            ...(model !== undefined ? { model } : {}),
+          }).catch((err: unknown) => ({
+            runId: null,
+            status: "error",
+            summary: err instanceof Error ? err.message : String(err),
+          }));
+          return {
+            label: task.label,
+            status: outcome?.status ?? "error",
+            summary: outcome?.summary ?? "(no result)",
+            runId: outcome?.runId ?? null,
+          };
+        }
+
+        ctx.emitProgress({
+          kind: "spawn",
+          message: `spawning ${task.pipeline}: ${task.label}`,
+          ...(model !== undefined ? { data: { model } } : {}),
+        });
+        const handle = ctx.spawn({
+          handlerId: contract.handlerId,
+          label: task.label,
+          params,
+          capabilities: contract.capabilities,
+          ...(model !== undefined ? { model } : {}),
+        });
+        const childOutcome = await handle.done.catch(() => null);
+        return {
+          label: task.label,
+          status: childOutcome?.status ?? "error",
+          summary: childOutcome?.summary ?? "(the sub-agent failed)",
+          runId: handle.runId,
+        };
+      };
+
+      let prior: TaskOutcome[] = [];
+      const all: TaskOutcome[] = [];
+      for (let index = 0; index < plan.steps.length; index++) {
+        const step = plan.steps[index] as (typeof plan.steps)[number];
+        let tasks: readonly PlanTask[] = step.tasks;
+
+        // Result piping: from the second step on, re-author the prompts WITH the
+        // prior outcomes. A failed revision keeps the original prompts (fail-soft).
+        if (index > 0 && prior.length > 0) {
+          ctx.emitProgress({
+            kind: "step",
+            message: `re-authoring step ${index + 1} prompts from prior results`,
+          });
+          const revisionReply = await ctx
+            .complete(buildStepRevisionPrompt(message, tasks, prior), { timeoutMs: 120_000 })
+            .catch(() => null);
+          const revised = revisionReply === null ? null : parseStepRevision(revisionReply.text);
+          if (revised !== null) {
+            tasks = tasks.map((t) =>
+              revised[t.label] !== undefined ? { ...t, prompt: revised[t.label] as string } : t,
+            );
+          }
+        }
+
+        const settled = await Promise.allSettled(tasks.map(runTask));
+        prior = settled.map((r, i) =>
+          r.status === "fulfilled"
+            ? r.value
+            : {
+                label: tasks[i]?.label ?? "task",
+                status: "error",
+                summary: r.reason instanceof Error ? r.reason.message : String(r.reason),
+                runId: null,
+              },
+        );
+        all.push(...prior);
+      }
+
+      const allOk = all.every((o) => o.status === "ok" || o.status === "succeeded");
+      const summary = all
+        .map((o) => `[${o.status}] ${o.label}: ${o.summary}`)
+        .join("\n")
+        .slice(0, 4_000);
+      ctx.recordRun({
+        status: allOk ? "ok" : "partial",
+        summary: summary.length > 0 ? summary : "the plan produced no output",
       });
       return;
     }

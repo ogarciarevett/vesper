@@ -477,7 +477,11 @@ export class Scheduler {
 
     // Allocate the run row up front (status 'running') so the live tree shows the
     // run while it is still in flight, and sub-agents can attach to a real id.
-    const runId = this.#store.startRun({ pipeline: current.handler_id, parentRunId: null });
+    const runId = this.#store.startRun({
+      pipeline: current.handler_id,
+      // Display lineage only (see RunOptions.parentRunId): the run stays depth 0.
+      parentRunId: options?.parentRunId ?? null,
+    });
     const startedAt = performance.now();
     // Tracks whether the run row has reached a terminal status. Declared outside
     // the try so the catch path can tell whether the handler already finalized the
