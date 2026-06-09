@@ -19,6 +19,8 @@ import type {
   ListRunEventsOptions,
   ListRunsOptions,
   ListTurnsOptions,
+  ModelBenchmarkInput,
+  ModelBenchmarkRow,
   PipelineTemplateRow,
   PruneRagDocumentsOptions,
   RagDocumentInput,
@@ -62,6 +64,26 @@ interface RawRunRow {
   ctx_limit: unknown;
   ctx_model: unknown;
   ctx_cli: unknown;
+}
+
+/** Raw shape returned for the `model_benchmarks` table. */
+interface RawBenchmarkRow {
+  id: unknown;
+  source: unknown;
+  fetched_at: unknown;
+  generated_at: unknown;
+  model: unknown;
+  harness: unknown;
+  reasoning_effort: unknown;
+  config: unknown;
+  pass_rate: unknown;
+  pass_at_1: unknown;
+  mean_cost_usd: unknown;
+  median_cost_usd: unknown;
+  mean_input_tokens: unknown;
+  mean_output_tokens: unknown;
+  mean_duration_seconds: unknown;
+  raw_json: unknown;
 }
 
 /** Raw shape returned for the `run_events` table. */
@@ -231,6 +253,27 @@ function toEventRow(raw: RawEventRow): EventRow {
     source: assertString(raw.source, "source"),
     kind: assertString(raw.kind, "kind"),
     payload: parsePayload(raw.payload_json, "payload_json"),
+  };
+}
+
+function toBenchmarkRow(raw: RawBenchmarkRow): ModelBenchmarkRow {
+  return {
+    id: assertString(raw.id, "id"),
+    source: assertString(raw.source, "source"),
+    fetchedAt: assertNumber(raw.fetched_at, "fetched_at"),
+    generatedAt: assertStringOrNull(raw.generated_at, "generated_at"),
+    model: assertString(raw.model, "model"),
+    harness: assertStringOrNull(raw.harness, "harness"),
+    reasoningEffort: assertStringOrNull(raw.reasoning_effort, "reasoning_effort"),
+    config: assertStringOrNull(raw.config, "config"),
+    passRate: assertNumberOrNull(raw.pass_rate, "pass_rate"),
+    passAt1: assertNumberOrNull(raw.pass_at_1, "pass_at_1"),
+    meanCostUsd: assertNumberOrNull(raw.mean_cost_usd, "mean_cost_usd"),
+    medianCostUsd: assertNumberOrNull(raw.median_cost_usd, "median_cost_usd"),
+    meanInputTokens: assertNumberOrNull(raw.mean_input_tokens, "mean_input_tokens"),
+    meanOutputTokens: assertNumberOrNull(raw.mean_output_tokens, "mean_output_tokens"),
+    meanDurationSeconds: assertNumberOrNull(raw.mean_duration_seconds, "mean_duration_seconds"),
+    rawJson: assertString(raw.raw_json, "raw_json"),
   };
 }
 
@@ -824,6 +867,67 @@ export class SqliteStore implements Store {
       return Number(result.changes);
     } catch (cause) {
       throw new StorageError("query_failed", "failed to prune rag documents", { cause });
+    }
+  }
+
+  replaceModelBenchmarks(source: string, rows: readonly ModelBenchmarkInput[]): number {
+    const fetchedAt = Date.now();
+    try {
+      const insert = this.#db.query(
+        `INSERT INTO model_benchmarks (
+           id, source, fetched_at, generated_at, model, harness, reasoning_effort,
+           config, pass_rate, pass_at_1, mean_cost_usd, median_cost_usd,
+           mean_input_tokens, mean_output_tokens, mean_duration_seconds, raw_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      this.#db.exec("BEGIN");
+      try {
+        this.#db.query("DELETE FROM model_benchmarks WHERE source = ?").run(source);
+        for (const row of rows) {
+          insert.run(
+            crypto.randomUUID(),
+            source,
+            fetchedAt,
+            row.generatedAt,
+            row.model,
+            row.harness,
+            row.reasoningEffort,
+            row.config,
+            row.passRate,
+            row.passAt1,
+            row.meanCostUsd,
+            row.medianCostUsd,
+            row.meanInputTokens,
+            row.meanOutputTokens,
+            row.meanDurationSeconds,
+            row.rawJson,
+          );
+        }
+        this.#db.exec("COMMIT");
+      } catch (inner) {
+        this.#db.exec("ROLLBACK");
+        throw inner;
+      }
+      return rows.length;
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to replace model benchmarks", { cause });
+    }
+  }
+
+  getModelBenchmarks(source: string): ModelBenchmarkRow[] {
+    try {
+      const rows = this.#db
+        .query<RawBenchmarkRow, [string]>(
+          `SELECT id, source, fetched_at, generated_at, model, harness, reasoning_effort,
+                  config, pass_rate, pass_at_1, mean_cost_usd, median_cost_usd,
+                  mean_input_tokens, mean_output_tokens, mean_duration_seconds, raw_json
+           FROM model_benchmarks WHERE source = ? ORDER BY rowid ASC`,
+        )
+        .all(source);
+      return rows.map(toBenchmarkRow);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to read model benchmarks", { cause });
     }
   }
 

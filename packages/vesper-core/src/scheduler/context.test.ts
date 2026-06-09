@@ -137,6 +137,13 @@ function makeStore(): {
     pruneRagDocuments() {
       return 0;
     },
+    // Benchmark Store methods (migration 012): unused by the context double.
+    replaceModelBenchmarks() {
+      return 0;
+    },
+    getModelBenchmarks() {
+      return [];
+    },
     close() {},
   };
   return { store, finished, events, contexts, clis };

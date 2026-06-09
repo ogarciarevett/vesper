@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type {
   ApprovalTokenStore,
   ChannelState,
+  ModelCatalogEntry,
   PairingSession,
   RagHit,
   RagStatus,
@@ -14,6 +15,7 @@ import type {
 } from "@vesper/core";
 import {
   ApprovalError,
+  BENCHMARK_SOURCE,
   encodeQr,
   RUN_COMPLETED,
   RUN_EVENT,
@@ -145,6 +147,15 @@ export interface UiServerDeps {
   readonly skills?: {
     list(): Promise<readonly SkillSummary[]>;
     get(name: string): Promise<SkillDetail | null>;
+  };
+  /**
+   * Model catalog handed through for `GET /api/models` (the effective merged
+   * catalog + configured default). Absent -> the route serves benchmarks with an
+   * empty catalog.
+   */
+  readonly modelsCatalog?: {
+    readonly default?: string;
+    readonly catalog: Readonly<Record<string, ModelCatalogEntry>>;
   };
   /**
    * Semantic-memory (RAG) surface. `status` returns the live {@link RagStatus} (never
@@ -496,6 +507,31 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // Empty list when no provider is wired (e.g. a daemon launched outside the repo).
       if (req.method === "GET" && pathname === "/api/skills") {
         return json(deps.skills === undefined ? [] : await deps.skills.list());
+      }
+
+      // GET /api/models — the benchmark snapshot + the invocable model catalog
+      // (specs/orchestrator-home.md slice D). `stale` flags a snapshot older than
+      // 7 days (the selector then falls back to the configured default).
+      if (req.method === "GET" && pathname === "/api/models") {
+        const rows = store.getModelBenchmarks(BENCHMARK_SOURCE);
+        const fetchedAt = rows.length > 0 ? Math.max(...rows.map((r) => r.fetchedAt)) : null;
+        const stale = fetchedAt === null || Date.now() - fetchedAt > 7 * 24 * 60 * 60 * 1_000;
+        return json({
+          source: BENCHMARK_SOURCE,
+          fetchedAt,
+          stale,
+          rows: rows.map((r) => ({
+            model: r.model,
+            harness: r.harness,
+            reasoningEffort: r.reasoningEffort,
+            passAt1: r.passAt1,
+            meanCostUsd: r.meanCostUsd,
+          })),
+          catalog: deps.modelsCatalog?.catalog ?? {},
+          ...(deps.modelsCatalog?.default !== undefined
+            ? { default: deps.modelsCatalog.default }
+            : {}),
+        });
       }
 
       // GET /api/memory — semantic-memory (RAG) status. Never throws. With a memory

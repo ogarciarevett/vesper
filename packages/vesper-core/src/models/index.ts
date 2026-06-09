@@ -2,6 +2,18 @@
 // Slice A ships the catalog types; the benchmark store + selectModel land in slice D.
 
 export {
+  BENCHMARK_ALLOWED_HOSTS,
+  BENCHMARK_SOURCE,
+  BENCHMARK_URL,
+  parseLeaderboard,
+} from "./benchmark.ts";
+export {
+  type ModelChoice,
+  type SelectModelOptions,
+  selectModel,
+  type TaskDifficulty,
+} from "./select.ts";
+export {
   DEFAULT_MODEL_CATALOG,
   type ModelCatalogEntry,
   type ModelsConfig,

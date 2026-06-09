@@ -22,7 +22,7 @@ import {
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
 import { machineFingerprint } from "../banner.ts";
 import { ChannelSetupCoordinator } from "../channel-setup-coordinator.ts";
-import { makeAgenticCompleteFn, makeCompleteFn } from "../cli-resolver.ts";
+import { effectiveCatalog, makeAgenticCompleteFn, makeCompleteFn } from "../cli-resolver.ts";
 import { loadConfig, saveConfig, type VesperConfig } from "../config.ts";
 import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts";
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
@@ -199,6 +199,10 @@ export const daemonRunCommand: Command = {
       },
       skills: skillLibrary,
       memory,
+      modelsCatalog: {
+        ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
+        catalog: effectiveCatalog(config),
+      },
       pairing,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),

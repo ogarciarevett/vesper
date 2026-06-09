@@ -195,4 +195,31 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE runs ADD COLUMN ctx_cli TEXT;
     `,
   },
+  // Model-benchmark snapshot (specs/orchestrator-home.md slice D): the latest rows
+  // from the trusted leaderboard (DeepSWE), replaced atomically per ingest. The
+  // orchestrator consults this table to pick a model by cost + intelligence.
+  {
+    id: "012_model_benchmarks",
+    sql: `
+      CREATE TABLE IF NOT EXISTS model_benchmarks (
+        id TEXT PRIMARY KEY NOT NULL,
+        source TEXT NOT NULL,
+        fetched_at INTEGER NOT NULL,
+        generated_at TEXT,
+        model TEXT NOT NULL,
+        harness TEXT,
+        reasoning_effort TEXT,
+        config TEXT,
+        pass_rate REAL,
+        pass_at_1 REAL,
+        mean_cost_usd REAL,
+        median_cost_usd REAL,
+        mean_input_tokens REAL,
+        mean_output_tokens REAL,
+        mean_duration_seconds REAL,
+        raw_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_model_benchmarks_source ON model_benchmarks(source, fetched_at);
+    `,
+  },
 ];

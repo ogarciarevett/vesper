@@ -291,6 +291,35 @@ export interface ListRagVectorsOptions {
   readonly embedderId?: string;
 }
 
+/**
+ * One leaderboard row from a trusted benchmark source (specs/orchestrator-home.md).
+ * Numeric fields are null when the source omitted them; `rawJson` keeps the full
+ * source row so nothing is lost to the projection.
+ */
+export interface ModelBenchmarkInput {
+  readonly generatedAt: string | null;
+  readonly model: string;
+  readonly harness: string | null;
+  readonly reasoningEffort: string | null;
+  readonly config: string | null;
+  readonly passRate: number | null;
+  readonly passAt1: number | null;
+  readonly meanCostUsd: number | null;
+  readonly medianCostUsd: number | null;
+  readonly meanInputTokens: number | null;
+  readonly meanOutputTokens: number | null;
+  readonly meanDurationSeconds: number | null;
+  readonly rawJson: string;
+}
+
+/** A persisted benchmark row: the input plus the store-stamped identity columns. */
+export interface ModelBenchmarkRow extends ModelBenchmarkInput {
+  readonly id: string;
+  readonly source: string;
+  /** Unix ms the snapshot was ingested (staleness checks compare against this). */
+  readonly fetchedAt: number;
+}
+
 /** Scope for {@link Store.pruneRagDocuments} — at least one field should be set. */
 export interface PruneRagDocumentsOptions {
   readonly embedderId?: string;
@@ -436,6 +465,16 @@ export interface Store {
    * rule 4).
    */
   pruneRagDocuments(options: PruneRagDocumentsOptions): number;
+
+  /**
+   * Replace the benchmark snapshot for `source` atomically (delete + insert in one
+   * transaction; latest-snapshot-only — history is a non-goal). Returns the number
+   * of rows inserted.
+   */
+  replaceModelBenchmarks(source: string, rows: readonly ModelBenchmarkInput[]): number;
+
+  /** Read the current benchmark snapshot for `source` (insertion order). */
+  getModelBenchmarks(source: string): ModelBenchmarkRow[];
 
   /**
    * Close the underlying database connection. After this call the store must not be used.

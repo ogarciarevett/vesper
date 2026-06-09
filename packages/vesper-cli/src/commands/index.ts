@@ -6,6 +6,7 @@ import { evolveGroup } from "./evolve.ts";
 import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
 import { loopGroup } from "./loop.ts";
+import { modelsGroup } from "./models.ts";
 import { ragGroup } from "./rag.ts";
 import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
@@ -28,6 +29,7 @@ export const registry: readonly Registrable[] = [
   scheduleGroup,
   runsGroup,
   loopGroup,
+  modelsGroup,
   ragGroup,
   skillGroup,
   evolveGroup,

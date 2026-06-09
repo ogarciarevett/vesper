@@ -15,6 +15,8 @@ export type {
   ListRunEventsOptions,
   ListRunsOptions,
   ListTurnsOptions,
+  ModelBenchmarkInput,
+  ModelBenchmarkRow,
   PipelineTemplateRow,
   RecordRunContextInput,
   RecordRunInput,

@@ -22,6 +22,11 @@ import {
   autoEvolveHandler,
   autoEvolveTaskInput,
 } from "./auto-evolve/handler.ts";
+import {
+  BENCHMARK_INGEST_HANDLER_ID,
+  benchmarkIngestHandler,
+  benchmarkIngestTaskInput,
+} from "./benchmark-ingest/handler.ts";
 import { LOOP_HANDLER_ID, loopHandler, loopTaskInput } from "./loop/handler.ts";
 import {
   DEMO_WORKER_HANDLER_ID,
@@ -69,6 +74,9 @@ export {
   AUTO_EVOLVE_HANDLER_ID,
   autoEvolveHandler,
   autoEvolveTaskInput,
+  BENCHMARK_INGEST_HANDLER_ID,
+  benchmarkIngestHandler,
+  benchmarkIngestTaskInput,
   DEMO_WORKER_HANDLER_ID,
   demoWorkerHandler,
   LOOP_HANDLER_ID,
@@ -151,6 +159,13 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handlerId: ORCHESTRATOR_DEMO_HANDLER_ID,
     handler: orchestratorDemoHandler,
     taskInput: orchestratorDemoTaskInput,
+  },
+  // Daily model-intelligence snapshot: fetches the trusted DeepSWE leaderboard
+  // (host-allowlisted) so the orchestrator can pick models by cost + intelligence.
+  {
+    handlerId: BENCHMARK_INGEST_HANDLER_ID,
+    handler: benchmarkIngestHandler,
+    taskInput: benchmarkIngestTaskInput,
   },
   // Self-reflection: a daily, OPT-IN (enabled:false) cron that reads the runtime's
   // own health, reflects via the user's CLI, and writes proposals to `events`. The
