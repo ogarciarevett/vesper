@@ -237,3 +237,45 @@ describe("loadConfig / saveConfig", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// models block (specs/orchestrator-home.md slice A)
+// ---------------------------------------------------------------------------
+
+describe("normalizeConfig models", () => {
+  test("keeps valid catalog entries and the default id", () => {
+    const config = normalizeConfig({
+      cli: { adapters: {} },
+      models: {
+        default: "claude-sonnet",
+        catalog: {
+          "claude-sonnet": {
+            cli: "claude",
+            flag: "sonnet",
+            tier: "mid",
+            benchmarkNames: ["claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    expect(config.models?.default).toBe("claude-sonnet");
+    expect(config.models?.catalog["claude-sonnet"]?.flag).toBe("sonnet");
+    expect(config.models?.catalog["claude-sonnet"]?.benchmarkNames).toEqual(["claude-sonnet-4-6"]);
+  });
+
+  test("drops malformed entries (missing flag, bad tier) and an empty block", () => {
+    const config = normalizeConfig({
+      cli: { adapters: {} },
+      models: {
+        catalog: {
+          "no-flag": { cli: "claude", tier: "mid" },
+          "bad-tier": { cli: "claude", flag: "x", tier: "ultra" },
+        },
+      },
+    });
+    expect(config.models).toBeUndefined();
+
+    const none = normalizeConfig({ cli: { adapters: {} } });
+    expect(none.models).toBeUndefined();
+  });
+});

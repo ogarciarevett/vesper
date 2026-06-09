@@ -32,6 +32,14 @@ export interface CompleteResult {
   readonly duration_ms: number;
   /** Token usage from the CLI, if the adapter was able to parse it. */
   readonly usage?: CompleteUsage;
+  /** Name of the adapter that served this completion (e.g. "claude"). */
+  readonly cli?: string;
+  /**
+   * Resolved model for this call: the explicitly requested flag value when
+   * {@link CompleteOptions.model} was set, else the model the CLI reported in its
+   * usage envelope, else absent.
+   */
+  readonly model?: string;
 }
 
 /**
@@ -84,4 +92,10 @@ export interface CompleteOptions {
    * 30s process default will abort them.
    */
   readonly agentic?: boolean;
+  /**
+   * Model FLAG VALUE for this call, inserted via the adapter's model flag (e.g.
+   * `--model <value>`). This is the already-resolved per-CLI value — canonical
+   * catalog ids are translated by the host resolver BEFORE reaching the adapter.
+   */
+  readonly model?: string;
 }

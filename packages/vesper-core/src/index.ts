@@ -10,6 +10,7 @@ export { VesperError } from "./errors.ts";
 export * from "./ipc/index.ts";
 export * from "./loop/index.ts";
 export * from "./media/index.ts";
+export * from "./models/index.ts";
 export * from "./presence/index.ts";
 export {
   CommandNotFoundError,

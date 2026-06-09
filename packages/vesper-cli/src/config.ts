@@ -2,6 +2,9 @@ import {
   type AgentMatcherSpec,
   channelById,
   DEFAULT_VOICE_SETTINGS,
+  type ModelCatalogEntry,
+  type ModelsConfig,
+  type ModelTier,
   type VoiceBackend,
   type VoiceBrain,
   type VoiceRoute,
@@ -96,6 +99,12 @@ export interface VesperConfig {
   readonly voice?: VoiceSettings;
   /** RAG semantic-memory embeddings wiring (bring-your-own). Absent -> RAG disabled. */
   readonly embeddings?: EmbeddingsConfig;
+  /**
+   * Model catalog + default for cost-aware model routing. Entries are merged OVER
+   * the built-in `DEFAULT_MODEL_CATALOG` per key (see `effectiveCatalog`). Absent ->
+   * the built-in catalog alone.
+   */
+  readonly models?: ModelsConfig;
 }
 
 /** A fresh config with no default and no overrides. */
@@ -302,6 +311,45 @@ function normalizeEmbeddings(raw: unknown): EmbeddingsConfig | undefined {
   };
 }
 
+const MODEL_TIERS: ReadonlySet<ModelTier> = new Set(["cheap", "mid", "frontier"]);
+
+/** Coerce one catalog entry; requires `cli` + `flag` + a valid `tier` or drops it. */
+function normalizeCatalogEntry(raw: unknown): ModelCatalogEntry | undefined {
+  if (!isObject(raw)) return undefined;
+  const cli = asString(raw.cli);
+  const flag = asString(raw.flag);
+  const tierStr = asString(raw.tier);
+  if (cli === undefined || flag === undefined) return undefined;
+  if (tierStr === undefined || !MODEL_TIERS.has(tierStr as ModelTier)) return undefined;
+  const benchmarkNames = Array.isArray(raw.benchmarkNames)
+    ? raw.benchmarkNames.filter((v): v is string => typeof v === "string")
+    : undefined;
+  return {
+    cli,
+    flag,
+    tier: tierStr as ModelTier,
+    ...(benchmarkNames !== undefined && benchmarkNames.length > 0 ? { benchmarkNames } : {}),
+  };
+}
+
+/** Coerce the untrusted `models` block; malformed catalog entries are dropped. */
+function normalizeModels(raw: unknown): ModelsConfig | undefined {
+  if (!isObject(raw)) return undefined;
+  const catalog: Record<string, ModelCatalogEntry> = {};
+  if (isObject(raw.catalog)) {
+    for (const [id, value] of Object.entries(raw.catalog)) {
+      const entry = normalizeCatalogEntry(value);
+      if (entry !== undefined) catalog[id] = entry;
+    }
+  }
+  const defaultId = asString(raw.default);
+  if (defaultId === undefined && Object.keys(catalog).length === 0) return undefined;
+  return {
+    ...(defaultId !== undefined ? { default: defaultId } : {}),
+    catalog,
+  };
+}
+
 /** Coerce untrusted parsed JSON into a valid {@link VesperConfig}. */
 export function normalizeConfig(raw: unknown): VesperConfig {
   if (!isObject(raw)) return DEFAULT_CONFIG;
@@ -335,6 +383,8 @@ export function normalizeConfig(raw: unknown): VesperConfig {
   if (voice !== undefined) result = { ...result, voice };
   const embeddings = normalizeEmbeddings(raw.embeddings);
   if (embeddings !== undefined) result = { ...result, embeddings };
+  const models = normalizeModels(raw.models);
+  if (models !== undefined) result = { ...result, models };
   return result;
 }
 

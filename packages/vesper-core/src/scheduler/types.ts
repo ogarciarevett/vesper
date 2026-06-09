@@ -72,7 +72,16 @@ export type RunParams = Readonly<Record<string, unknown>>;
  */
 export type CompleteFn = (
   prompt: string,
-  opts?: { readonly cli?: string },
+  opts?: {
+    readonly cli?: string;
+    /**
+     * Model for this call: a canonical catalog id (resolved by the host to an
+     * adapter + flag value) or a raw flag value passed through verbatim.
+     */
+    readonly model?: string;
+    /** Per-call process-timeout override (ms). */
+    readonly timeoutMs?: number;
+  },
 ) => Promise<CompleteResult>;
 
 /**
@@ -201,8 +210,13 @@ export interface PipelineContext {
   /**
    * Send `prompt` through the resolved CLI adapter. Requires the task to declare
    * `CLI_INVOKE`. Resolution order: `opts.cli` -> run-override -> default.
+   * `opts.model` selects a model (canonical catalog id or raw flag value);
+   * `opts.timeoutMs` overrides the per-call process timeout.
    */
-  complete(prompt: string, opts?: { readonly cli?: string }): Promise<CompleteResult>;
+  complete(
+    prompt: string,
+    opts?: { readonly cli?: string; readonly model?: string; readonly timeoutMs?: number },
+  ): Promise<CompleteResult>;
   /** Write a `runs` row for this pipeline. Requires the task to declare `WRITE_STORAGE`. */
   recordRun(input: { readonly status: string; readonly summary: string }): string;
   /**

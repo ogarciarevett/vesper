@@ -95,9 +95,22 @@ export abstract class BaseAdapter implements CLIAdapter {
     return { text: stdout.trim() };
   }
 
+  /**
+   * Args inserted (before the prompt) when {@link CompleteOptions.model} is set.
+   * All four wrapped CLIs accept the long `--model <value>` form; a future adapter
+   * with a different flag overrides this.
+   */
+  protected modelArgs(model: string): readonly string[] {
+    return ["--model", model];
+  }
+
   async complete(prompt: string, opts?: CompleteOptions): Promise<CompleteResult> {
     const baseArgs = opts?.agentic === true ? this.resolvedAgenticArgs : this.resolvedArgs;
-    const argv = [...baseArgs, prompt];
+    const argv = [
+      ...baseArgs,
+      ...(opts?.model !== undefined ? this.modelArgs(opts.model) : []),
+      prompt,
+    ];
 
     try {
       const res = await this.#run(this.resolvedCommand, argv, {
@@ -109,6 +122,7 @@ export abstract class BaseAdapter implements CLIAdapter {
       }
 
       const parsed = this.parseOutput(res.stdout);
+      const resolvedModel = opts?.model ?? parsed.usage?.model ?? undefined;
 
       return {
         text: parsed.text,
@@ -116,8 +130,10 @@ export abstract class BaseAdapter implements CLIAdapter {
         raw_stdout: res.stdout,
         raw_stderr: res.stderr,
         duration_ms: res.durationMs,
-        // Omit the key entirely when absent (exactOptionalPropertyTypes).
+        cli: this.name,
+        // Omit the keys entirely when absent (exactOptionalPropertyTypes).
         ...(parsed.usage !== undefined ? { usage: parsed.usage } : {}),
+        ...(resolvedModel !== undefined && resolvedModel !== null ? { model: resolvedModel } : {}),
       };
     } catch (err) {
       if (err instanceof CLIError) throw err;

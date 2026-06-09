@@ -165,7 +165,11 @@ export function buildPipelineContext(deps: BuildContextDeps): PipelineContext {
         );
       }
       const cli = opts?.cli ?? options?.cli;
-      const result = await complete(prompt, cli !== undefined ? { cli } : {});
+      const result = await complete(prompt, {
+        ...(cli !== undefined ? { cli } : {}),
+        ...(opts?.model !== undefined ? { model: opts.model } : {}),
+        ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
       recordContextUsage(result.usage);
       return result;
     },

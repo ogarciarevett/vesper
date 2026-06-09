@@ -793,3 +793,69 @@ describe("BaseAdapter agentic mode", () => {
     expect(calls[0]?.args).toEqual(["-p", "--output-format", "json", "hi"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Model selection (specs/orchestrator-home.md slice A)
+// ---------------------------------------------------------------------------
+
+describe("CompleteOptions.model", () => {
+  test("inserts --model <value> before the prompt", async () => {
+    let capturedArgs: readonly string[] = [];
+    const run: ProcessRunner = async (_cmd, args) => {
+      capturedArgs = args;
+      return okResult();
+    };
+    const adapter = new ClaudeCodeAdapter({ run });
+    await adapter.complete("my prompt", { model: "haiku" });
+    expect(capturedArgs).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--model",
+      "haiku",
+      "my prompt",
+    ]);
+  });
+
+  test("every adapter uses the long --model flag", async () => {
+    for (const Adapter of [CodexAdapter, GeminiCLIAdapter, OpenCodeAdapter]) {
+      let capturedArgs: readonly string[] = [];
+      const run: ProcessRunner = async (_cmd, args) => {
+        capturedArgs = args;
+        return okResult();
+      };
+      const adapter = new Adapter({ run });
+      await adapter.complete("p", { model: "m-1" });
+      const at = capturedArgs.indexOf("--model");
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(capturedArgs[at + 1]).toBe("m-1");
+      expect(capturedArgs.at(-1)).toBe("p");
+    }
+  });
+
+  test("no model option leaves args unchanged and result.model unset", async () => {
+    const adapter = new CodexAdapter({ run: fixedRunner(okResult()) });
+    const result = await adapter.complete("p");
+    expect(result.model).toBeUndefined();
+    expect(result.cli).toBe("codex");
+  });
+
+  test("the result carries the adapter name and the requested model", async () => {
+    const adapter = new GeminiCLIAdapter({ run: fixedRunner(okResult()) });
+    const result = await adapter.complete("p", { model: "gemini-3.5-flash" });
+    expect(result.cli).toBe("gemini");
+    expect(result.model).toBe("gemini-3.5-flash");
+  });
+
+  test("without an explicit model, the usage-reported model is surfaced", async () => {
+    const envelope = JSON.stringify({
+      type: "result",
+      result: "hi",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      model: "claude-opus-4-8",
+    });
+    const adapter = new ClaudeCodeAdapter({ run: fixedRunner(okResult({ stdout: envelope })) });
+    const result = await adapter.complete("p");
+    expect(result.model).toBe("claude-opus-4-8");
+  });
+});

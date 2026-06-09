@@ -87,3 +87,81 @@ describe("makeCompleteFn", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Model routing (specs/orchestrator-home.md slice A)
+// ---------------------------------------------------------------------------
+
+describe("makeCompleteFn model routing", () => {
+  test("a catalog model picks BOTH the adapter and the flag value", async () => {
+    const { run, calls } = recordingRunner();
+    // Built-in catalog: "claude-haiku" -> { cli: "claude", flag: "haiku" }.
+    const complete = makeCompleteFn(
+      { cli: { default: "codex", adapters: {} } },
+      ["claude", "codex"],
+      run,
+    );
+
+    await complete("hi", { model: "claude-haiku" });
+    expect(calls[0]?.command).toBe("claude"); // catalog wins over the codex default
+    const at = calls[0]?.args.indexOf("--model") ?? -1;
+    expect(calls[0]?.args[at + 1]).toBe("haiku");
+  });
+
+  test("an unknown model id passes through verbatim to the resolved adapter", async () => {
+    const { run, calls } = recordingRunner();
+    const complete = makeCompleteFn({ cli: { default: "claude", adapters: {} } }, ["claude"], run);
+
+    await complete("hi", { model: "some-custom-model" });
+    expect(calls[0]?.command).toBe("claude");
+    const at = calls[0]?.args.indexOf("--model") ?? -1;
+    expect(calls[0]?.args[at + 1]).toBe("some-custom-model");
+  });
+
+  test("a catalog model whose CLI is not installed is dropped (no model flag, default adapter)", async () => {
+    const { run, calls } = recordingRunner();
+    // "gpt" maps to codex, which is NOT installed -> fall back to claude, no flag.
+    const complete = makeCompleteFn({ cli: { default: "claude", adapters: {} } }, ["claude"], run);
+
+    const result = await complete("hi", { model: "gpt" });
+    expect(calls[0]?.command).toBe("claude");
+    expect(calls[0]?.args).not.toContain("--model");
+    expect(result.cli).toBe("claude");
+  });
+
+  test("a conflicting explicit cli + catalog model is a CLIError", async () => {
+    const { run, calls } = recordingRunner();
+    const complete = makeCompleteFn(emptyConfig, ["claude", "codex"], run);
+
+    const err = await complete("hi", { cli: "codex", model: "claude-haiku" }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CLIError);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("config catalog entries override built-ins per key", async () => {
+    const { run, calls } = recordingRunner();
+    const config: VesperConfig = {
+      cli: { default: "claude", adapters: {} },
+      models: { catalog: { "claude-haiku": { cli: "claude", flag: "haiku-next", tier: "cheap" } } },
+    };
+    const complete = makeCompleteFn(config, ["claude"], run);
+
+    await complete("hi", { model: "claude-haiku" });
+    const at = calls[0]?.args.indexOf("--model") ?? -1;
+    expect(calls[0]?.args[at + 1]).toBe("haiku-next");
+  });
+
+  test("timeoutMs is forwarded to the process runner", async () => {
+    let captured: number | undefined;
+    const run: ProcessRunner = async (_cmd, _args, options) => {
+      captured = options?.timeoutMs;
+      return okResult();
+    };
+    const complete = makeCompleteFn(emptyConfig, ["claude"], run);
+
+    await complete("hi", { timeoutMs: 123_456 });
+    expect(captured).toBe(123_456);
+  });
+});
