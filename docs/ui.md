@@ -23,27 +23,35 @@ activity rail on the right shows the run tree live: each completion's PROMPT/RES
 blocks, provider model badges, and progress steps. The empty state offers a **pipeline launcher**:
 pick a pipeline card and the composer is pre-filled with a starter wish.
 
-## Pipelines (the editor)
+## Pipelines (the flow editor)
 
 The Pipelines section lists **your saved pipelines** (Run / Edit / New) above the built-ins
-(Run + read-only template). The editor is a staged rail, deliberately not a node graph:
+(Run + their real prompts under "View template"). The editor is a **drag-and-drop flow canvas**:
 
-- **Stages run in order; the steps inside a stage run at the same time.** Each stage sees the
-  previous stage's results (`{{stages.<n>.<id>.result}}` piping).
-- Two step kinds only: a **prompt** (markdown, with optional skills, an optional command prefix,
-  and a per-step cli + model pick) and a **pipeline** (one of the orchestratable built-ins).
-- An **orchestrator** (on by default) re-authors each stage's prompts from the results so far,
+- **Drag a step in from the palette, wire outputs to inputs.** An arrow means "runs after, and
+  receives the result" (`{{steps.<id>.result}}` in the next prompt). Unconnected steps run at the
+  same time; connections that would loop are refused in plain language.
+- The canvas shows compact nodes; the full form (prompt with markdown preview, skills, cli +
+  model, AI suggestion) appears in the **inspector** only for the selected node.
+- A **Canvas / Markdown** toggle shows the whole pipeline as ONE markdown document — the same
+  format `vesper pipeline export` emits and `~/.vesper/pipelines/*.md` files use.
+- Two step kinds only: a **prompt** and a **pipeline** (one of the orchestratable built-ins).
+  No branching, no conditions — the canvas changes how you see and wire the pipeline, not what
+  it can do.
+- An **orchestrator** (on by default) re-authors downstream prompts from the results so far,
   running on the benchmark frontier pick unless pinned.
 - **Permissions are derived, never picked**: a live "what this pipeline can touch" panel updates
   as you edit, and saving shows plain-language capability cards gated by the same single-use
   approval code as template edits.
 - **Improve with AI** has Vesper read the whole document and propose prompt rewrites, per-step
   cli+model routing (from the daily benchmark snapshot), and audit warnings — applied only when
-  you accept them. Each step card also has a scoped **AI suggestion** button.
+  you accept them.
 - **Cross-share** is present but disabled (coming soon).
 
-Everything the editor does works headlessly first: `vesper pipeline
-list|show|save|run|improve|rm|export` drives the exact same daemon routes.
+A pipeline is also just a **markdown file**: drop one in `~/.vesper/pipelines/` (filename = id)
+and it registers at daemon boot or `vesper pipeline sync`. Everything the editor does works
+headlessly first: `vesper pipeline list|show|new|edit|save|run|improve|rm|export|sync` drives the
+exact same daemon routes.
 
 ## How it maps to Vesper
 

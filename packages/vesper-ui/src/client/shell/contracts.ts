@@ -17,6 +17,8 @@ export interface StatusResponse {
   readonly socket: string;
   readonly defaultCli: string | null;
   readonly clis: readonly CliStatus[];
+  /** The model the orchestrator will use for its own calls; absent when unknown. */
+  readonly orchestratorModel?: string;
   readonly runs: number;
   readonly sessions: number;
   readonly uiPort: number;

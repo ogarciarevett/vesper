@@ -37,6 +37,9 @@ function bootShell(): void {
   const nav = el("nav");
   const titlebar = el("titlebar");
   const toastEl = el("toast");
+  // The cycle-refusal (and every other) toast must be announced, not just shown.
+  toastEl.setAttribute("role", "status");
+  toastEl.setAttribute("aria-live", "polite");
 
   // ── Shared toast ────────────────────────────────────────────────────────────
   let toastTimer: ReturnType<typeof setTimeout> | undefined;

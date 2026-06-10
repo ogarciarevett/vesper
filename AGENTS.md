@@ -155,7 +155,12 @@ fallback for manual reconciliation.
 - **Core stays dependency-free.** `vesper-core`, `vesper-cli`, and `vesper-ui` ship only
   `@biomejs/biome` (devDep) (+ `@types/bun`). No `commander`/`zod`/`keytar` — hand-roll the small
   CLI arg parser. Bun-only: `bun install`, `bun run`, `bun test`, `bun x`. No npm/yarn.
-- **Opt-in package exception (the ONLY runtime dependency; authorized by Omar 2026-06-05).** The
+- **Opt-in package exceptions (TWO authorized runtime dependencies; everything else stays
+  dependency-free).** (1) **Baileys** (authorized by Omar 2026-06-05) and (2) **Drawflow**
+  (authorized by Omar 2026-06-10 — "puedes pasarte la regla siempre y cuando la libreria no pese
+  mucho"): `drawflow@0.0.60` (64 KB unpacked, ZERO transitive deps, plain-DOM, MIT) lives ONLY in
+  `@vesper/ui` and powers the pipeline flow canvas (specs/pipeline-flow-editor.md); React Flow was
+  rejected for weight (React + ReactDOM + @xyflow ~8 MB, a whole framework). Baileys detail: The
   isolated `@vesper/channel-whatsapp-web` package bundles **Baileys** (`baileys`) — a
   reverse-engineered WhatsApp-Web client — to enable personal-account QR pairing. Deliberate and
   contained: Baileys and its transitive deps (incl. a native Rust bridge in v7) live ONLY in that
@@ -436,7 +441,8 @@ permission). New adapter `CompleteOptions.agentic` + config `agenticArgs` (Hard 
 the brain, Vesper adds no browser dep). `vesper connections setup <id>` mirrors it. (2) **Voice** — the
 stub became a live "Talk to Vesper" Mode-A surface: browser `SpeechRecognition` (feature-detected) -> `POST
 /api/chat` (the CLI brain) -> local `speechSynthesis`; no native shell needed (that's only Mode-B
-dictation). (3) **Skills** — the stub became a read-only library (`GET /api/skills[/:name]` + `SkillLibrary`
+dictation). **SUPERSEDED 2026-06-10:** the standalone Voice section was retired — voice lives IN the
+chat composer (see the "Voice in the chat" entry below). (3) **Skills** — the stub became a read-only library (`GET /api/skills[/:name]` + `SkillLibrary`
 reading `.ai/skills` + the skill-train state) shared across pipelines + Vesper; training/accept stay on the
 cost-gated `vesper skill` CLI. No new dependency, no migration. Issue-capped: record = spec + `cycle-log.md`
 + commit (Rule 11).
@@ -473,7 +479,12 @@ built-in `loop` pipeline declares EXACTLY `CLI_INVOKE` + `WRITE_STORAGE` — v1 
 gained a Loop section: `POST /api/loop/run` answers 202 with the runId (read from the scheduler's
 up-front run row) so the client watches the loop think live over the existing run-events WebSocket.
 No migration, no new dependency; verified LIVE end-to-end. Issue-record: DEV-113 (pre-cap issue) +
-`cycle-log.md` + the commit.
+`cycle-log.md` + the commit. **SUPERSEDED (UI surface only, editor v2):** the standalone Loop
+sidebar section was retired (Omar 2026-06-10 — autonomy belongs at the moment of building); the
+loop is now the featured "Autonomous step" palette entry in the pipeline editor (plain-language
+inspector: goal / "Done when" / round cap, live cost projection, the can-only-think constraint) plus
+a "Start autonomous" launcher beside New pipeline. `POST /api/loop/run` and `vesper loop` are
+unchanged; runs stream in the activity rail as before.
 
 **Orchestrator Home SHIPPED (specs/orchestrator-home.md — talk to Vesper, watch the swarm).**
 Omar's six-point chat-home review landed as seven slices (commits 6897ec4..aa55467): (A) per-call
@@ -525,9 +536,77 @@ while workers keep cheap routing. Verified LIVE: save through the real approval 
 with the orchestrator re-authoring stage 2 on the benchmark pick (gpt), and a genuinely useful
 improve audit. No new dependency. Issue-capped: record = spec + `cycle-log.md` + the commit (Rule 11).
 
+**Markdown pipelines + flow editor (editor v2) SHIPPED.** Two Omar course-corrections landed as one
+cycle (`specs/markdown-pipelines.md` + `specs/pipeline-flow-editor.md`). (1) **A pipeline IS a
+markdown document**: hand-rolled md ⟷ doc converter (frontmatter + `# Stage` + `## id — title` +
+attr list + verbatim prompt body; fail-closed with line numbers; round-trip property tested); the
+drop folder `~/.vesper/pipelines/*.md` (filename = id; swept at boot + `vesper pipeline sync`;
+file wins, unchanged files skip the revision bump); `vesper pipeline new|edit|save <file.md>|sync`
+($EDITOR loop with validation + the approval flow) and `export` emits markdown by default
+(`--json` for raw). (2) **The editor is a drag-and-drop DAG canvas** (Drawflow — the authorized
+64 KB dependency; supersedes the staged rail, which Omar found unreadable): palette drag-in,
+compact dark-glass nodes, output→input SVG edges (an edge = "runs after + receives the result"),
+cycle refusal at connect time, pan/zoom, a single-node INSPECTOR (the full step form appears only
+for the selected node), and a Canvas/Markdown view toggle (the whole pipeline as one editable md
+document). Doc v1.1 (additive): optional `layout` (canvas positions) + per-step `after` (explicit
+edges) + `{{steps.<id>.result}}` id-keyed piping; `graph.ts` levels the DAG back into staged
+parallelism (same interpreter, no second engine). (3) **Built-ins stopped being black boxes**:
+every built-in exposes its REAL prompts (router classify/answer/plan/revision, loop author/critic,
+swe spec/plan/build/review, selftest probe — built by calling the real builders with `{{...}}`
+placeholders) via `PipelineDescriptor.prompts` + the template route; the UI "View template" and
+`vesper pipeline show` render them (the old empty-template box is gone, plus the built-in Run form
+now asks the contract's real params). Verified LIVE: a hand-written `morning-note.md` dropped in
+the folder synced, registered, and ran with id-keyed piping. (4) **Editor UX distill (Omar
+2026-06-10, impeccable critique 20/40 → fixes browser-verified 10/10)**: the standalone Loop
+section folded into the editor as the featured "Autonomous step" + "Start autonomous" launcher
+(see the Autonomous Loop entry); Save moved to the top bar and DISABLED while the doc is invalid
+(validation errors now an `role="alert"` strip beside the canvas with click-to-select step links —
+nobody pays the approval ceremony for a doc the daemon will reject); the inspector's 16 skill
+chips + command prefix + cli/model collapsed behind ONE "Advanced — default routing" disclosure
+with a live summary; Delete/Cross-share demoted to a quiet bottom row; Improve audit scrolls into
+view; AA contrast fixes (`--accent-strong` for filled controls, `::placeholder` pinned to soft
+ink). Issue-capped record: specs + `cycle-log.md` + the commit (Rule 11).
+
+**Model picker + live model directory SHIPPED (Omar 2026-06-10 — "the selection of the LLM is
+terrible").** The raw `<select>` of catalog ids became a searchable, provider-grouped dropdown
+(`shell/model-picker.ts`, dependency-free; ComfyUI-style interaction pattern, original code — ComfyUI
+itself is GPL-3, nothing copied): every row shows the provider mark (the rail's hand-authored SVGs),
+the display name, and tier/context meta; groups are the Vesper catalog first, then Anthropic/OpenAI/
+Google from a LIVE directory. The directory is `vesper-core/models/directory.ts`: OpenRouter's PUBLIC
+`/api/v1/models` (NO API key — the AI-SDK-ecosystem source Omar pointed at) through the shipped
+`allowlistedFetch` pinned to `openrouter.ai`, filtered to CLI-servable rows (anthropic->claude with
+dots->dashes flags, openai/gpt-*->codex, google/gemini-*->gemini; `:free`/image/gemma/lyria dropped),
+daemon-cached 1h, fail-soft (`GET /api/models/directory` answers `{available:false}` and the picker
+degrades to the catalog). Runtime: `inferModelCli` in the cli-resolver routes raw directory ids to
+the right adapter by shape ONLY when neither catalog nor explicit `opts.cli` chose one — an explicit
+override (e.g. opencode running a claude model) is never second-guessed. This is a METADATA fetch,
+not LLM access — same carve-out shape as benchmark-ingest/RAG (Hard rule 12 intact; the brain stays
+the CLI). All three editor model selects replaced (prompt-step Advanced, pipeline-step, orchestrator).
+Verified live in a real browser (search/Enter/keyboard/flip-on-short-viewports/native-click; console
+clean). Issue-capped record: `cycle-log.md` + the commit (Rule 11).
+
+**Voice in the chat + ElevenLabs + orchestrator pill + person-to-person tone SHIPPED (Omar
+2026-06-10).** (1) Voice moved INTO the chat composer (ChatGPT/Claude-style; the Voice section is
+gone, 13 sections): a feature-detected mic (SpeechRecognition; final transcript auto-sends) and a
+persisted "Voice replies" toggle that speaks each COMPLETED reply (`shell/speech.ts` — tries `POST
+/api/voice/tts`, falls back to local `speechSynthesis`; `stripForSpeech` keeps markdown out of the
+audio; barge-in stops speech). (2) **ElevenLabs opt-in cloud voice** — `vesper-core/voice/elevenlabs.ts`,
+TTS over the user's OWN API key via `allowlistedFetch` pinned to `api.elevenlabs.io` (NO SDK, no new
+dependency; the brain stays the CLI — this is the voice spec's planned cloud provider, Hard rule 12
+intact). Key in the keychain only (`elevenlabs_api_key`); `voice.tts`/`elevenLabsVoiceId`/`elevenLabsModelId`
+config read FRESH per call (a Settings save needs no restart); a Settings "Voice" card (provider select,
+voice id, key paste — local-origin POST, key never echoed). (3) `/api/status` carries
+`orchestratorModel` (the same template-pin > benchmark-frontier > config-default resolver the router
+uses, extracted to ONE function in daemon-run) and the titlebar shows it as the first top-right pill.
+(4) The router's ANSWER prompt now matches the owner's register — a greeting gets a short human
+greeting, never an unrequested status dump; runtime state stays ground truth for real questions
+(live-verified: "hello hello" -> "Hey hey, Omar. I'm here."). Issue-capped record: `cycle-log.md`
+(addendum 3) + the commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1410 tests / 0 fail**; Biome clean; no
-provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1479 tests / 0 fail**; Biome clean; no
+provider SDKs (the runtime deps are the two authorized opt-ins: Baileys in
+`@vesper/channel-whatsapp-web` and Drawflow in `@vesper/ui`).
 
 **Next:** the rest of the personal-agent **pipelines** (career, social, trading,
 hermes, secretary — the always-on, connected-24/7 backbone). The Voice **native shell** follow-up (Tauri/Rust

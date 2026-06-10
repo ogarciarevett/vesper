@@ -28,20 +28,31 @@ export function mountTitlebar(bar: HTMLElement, deps: TitlebarDeps): void {
   // Status pills (right).
   const pills = document.createElement("div");
   pills.className = "tb-pills no-drag";
+  const modelPill = pill("model", "");
+  modelPill.el.title = "orchestrator model";
+  modelPill.el.hidden = true; // shown only when the daemon reports a model.
   const daemonPill = pill("daemon", "connecting…");
   const cliPill = pill("cli", "…");
-  pills.append(daemonPill.el, cliPill.el);
+  pills.append(modelPill.el, daemonPill.el, cliPill.el);
 
   bar.append(brand, pills);
 
   const refresh = async (): Promise<void> => {
     try {
       const s = await deps.api.getJson<StatusResponse>("/api/status");
+      // Orchestrator model — present only when the daemon knows it (never a dead "—").
+      if (typeof s.orchestratorModel === "string" && s.orchestratorModel.length > 0) {
+        modelPill.el.hidden = false;
+        modelPill.set(true, s.orchestratorModel);
+      } else {
+        modelPill.el.hidden = true;
+      }
       daemonPill.set(true, `v${s.version}`);
       const cli = s.defaultCli ?? "no CLI";
       const cliOk = s.clis.find((c) => c.name === s.defaultCli)?.ok ?? false;
       cliPill.set(s.defaultCli !== null && cliOk, cli);
     } catch {
+      modelPill.el.hidden = true;
       daemonPill.set(false, "offline");
       cliPill.set(false, "—");
     }

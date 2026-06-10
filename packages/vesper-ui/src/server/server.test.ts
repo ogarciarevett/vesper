@@ -111,6 +111,148 @@ describe("UI server", () => {
     expect(Array.isArray(await res.json())).toBe(true);
   });
 
+  test("GET /api/status surfaces the orchestrator model when wired (titlebar pill)", async () => {
+    const scheduler = new Scheduler({ db, registry: new HandlerRegistry(), grants: CAPABILITIES });
+    const h = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      orchestratorModel: () => "claude-opus",
+    });
+    try {
+      const s = (await (await fetch(`${h.url}/api/status`)).json()) as {
+        orchestratorModel?: string;
+      };
+      expect(s.orchestratorModel).toBe("claude-opus");
+    } finally {
+      h.stop();
+    }
+    // The default server (no resolver) omits the field entirely.
+    const bare = (await (await fetch(`${handle.url}/api/status`)).json()) as {
+      orchestratorModel?: string;
+    };
+    expect(bare.orchestratorModel).toBeUndefined();
+  });
+
+  test("voice routes degrade without a provider and serve audio with one", async () => {
+    // Unwired: config reports the local default; tts reports unavailable.
+    const cfg = (await (await fetch(`${handle.url}/api/voice/config`)).json()) as {
+      tts: string;
+      keyConfigured: boolean;
+    };
+    expect(cfg).toEqual({ tts: "local", voiceId: "", keyConfigured: false });
+    const tts = await fetch(`${handle.url}/api/voice/tts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "hello" }),
+    });
+    expect(await tts.json()).toEqual({ available: false });
+
+    // Wired: tts streams audio bytes; setConfig persists and reports the key state.
+    const scheduler = new Scheduler({ db, registry: new HandlerRegistry(), grants: CAPABILITIES });
+    const saved: Array<{ tts?: string; voiceId?: string; apiKey?: string }> = [];
+    const h = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      voice: {
+        tts: (text) =>
+          Promise.resolve(
+            text === "fail"
+              ? null
+              : { audio: new Uint8Array([1, 2, 3]), mime: "audio/mpeg" as const },
+          ),
+        getConfig: () =>
+          Promise.resolve({ tts: "elevenlabs", voiceId: "rachel", keyConfigured: true }),
+        setConfig: (input) => {
+          saved.push(input);
+          return Promise.resolve({ keyConfigured: true });
+        },
+      },
+    });
+    try {
+      const audio = await fetch(`${h.url}/api/voice/tts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "hello" }),
+      });
+      expect(audio.headers.get("content-type")).toBe("audio/mpeg");
+      expect(new Uint8Array(await audio.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+
+      const notConfigured = await fetch(`${h.url}/api/voice/tts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "fail" }),
+      });
+      expect(await notConfigured.json()).toEqual({ available: false });
+
+      const set = await fetch(`${h.url}/api/voice/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tts: "elevenlabs", voiceId: "v1", apiKey: "sk-test" }),
+      });
+      expect(await set.json()).toEqual({ ok: true, keyConfigured: true });
+      expect(saved).toEqual([{ tts: "elevenlabs", voiceId: "v1", apiKey: "sk-test" }]);
+
+      const empty = await fetch(`${h.url}/api/voice/tts`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: "  " }),
+      });
+      expect(empty.status).toBe(400);
+    } finally {
+      h.stop();
+    }
+  });
+
+  test("GET /api/models/directory degrades to unavailable without a provider", async () => {
+    const res = await fetch(`${handle.url}/api/models/directory`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: false, models: [] });
+  });
+
+  test("GET /api/models/directory serves the wired provider and absorbs its failures", async () => {
+    const scheduler = new Scheduler({ db, registry: new HandlerRegistry(), grants: CAPABILITIES });
+    let fail = false;
+    const h = await startUiServer({
+      scheduler,
+      store,
+      seed: "test-seed",
+      port: 0,
+      modelDirectory: {
+        list: () =>
+          fail
+            ? Promise.reject(new Error("offline"))
+            : Promise.resolve([
+                {
+                  flag: "claude-fable-5",
+                  provider: "anthropic" as const,
+                  cli: "claude",
+                  name: "Claude Fable 5",
+                  contextLength: 1_000_000,
+                },
+              ]),
+      },
+    });
+    try {
+      const ok = (await (await fetch(`${h.url}/api/models/directory`)).json()) as {
+        available: boolean;
+        models: Array<{ flag: string }>;
+      };
+      expect(ok.available).toBe(true);
+      expect(ok.models[0]?.flag).toBe("claude-fable-5");
+      fail = true;
+      const down = (await (await fetch(`${h.url}/api/models/directory`)).json()) as {
+        available: boolean;
+      };
+      expect(down).toEqual({ available: false, models: [] });
+    } finally {
+      h.stop();
+    }
+  });
+
   test("presence is detected on demand (no background poll) and cached within the TTL", async () => {
     let calls = 0;
     const scheduler = new Scheduler({ db, registry: new HandlerRegistry(), grants: CAPABILITIES });
@@ -641,10 +783,13 @@ describe("UI server — chat + templates", () => {
       handlerId: string;
       prompt: string;
       defaultParams: Record<string, unknown>;
+      prompts: { name: string; template: string }[];
       config: { id: string };
     };
     expect(body.handlerId).toBe("router");
     expect(body.prompt).toBe("");
+    // No getBuiltinPrompts dep wired -> the read-only catalog is empty, not missing.
+    expect(body.prompts).toEqual([]);
     expect(body.config.id).toBe("router");
   });
 
@@ -1455,6 +1600,11 @@ describe("custom pipelines routes", () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
 
   const stubSurface: CustomPipelinesSurface = {
+    parseMarkdown: (source) =>
+      source.includes("name:")
+        ? { ok: true, capabilities: ["CLI_INVOKE"], errors: [], doc: { v: 1 } }
+        : { ok: false, capabilities: [], errors: ["line 1: missing frontmatter"] },
+    serializeMarkdown: (doc) => (doc.v === 1 ? "---\nname: X\n---\n" : null),
     targets: () => [
       {
         handlerId: "loop",

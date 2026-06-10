@@ -271,6 +271,12 @@ function normalizeVoice(raw: unknown): VoiceSettings | undefined {
     model: asNonEmptyString(raw.model) ?? d.model,
     bargeIn: asBool(raw.bargeIn) ?? d.bargeIn,
     speakReplies: asBool(raw.speakReplies) ?? d.speakReplies,
+    ...(asNonEmptyString(raw.elevenLabsVoiceId) !== undefined
+      ? { elevenLabsVoiceId: asNonEmptyString(raw.elevenLabsVoiceId) as string }
+      : {}),
+    ...(asNonEmptyString(raw.elevenLabsModelId) !== undefined
+      ? { elevenLabsModelId: asNonEmptyString(raw.elevenLabsModelId) as string }
+      : {}),
   };
 }
 

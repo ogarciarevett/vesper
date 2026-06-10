@@ -39,5 +39,7 @@ export interface PipelineTemplate {
   readonly handlerId: string;
   readonly prompt: string;
   readonly defaultParams: Record<string, unknown>;
+  /** Read-only catalog of the built-in's real prompts ({{...}} = dynamic parts). */
+  readonly prompts?: readonly { name: string; template: string }[];
   readonly config: PipelineConfig;
 }

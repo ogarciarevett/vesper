@@ -15,6 +15,13 @@ export {
   type VoiceTurnResult,
   type VoiceTurnSettings,
 } from "./conversation.ts";
+export {
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_ID,
+  ELEVENLABS_ALLOWED_HOSTS,
+  type ElevenLabsTtsOptions,
+  elevenLabsTts,
+} from "./elevenlabs.ts";
 export { VoiceError, type VoiceErrorReason } from "./errors.ts";
 export {
   createVoiceProvider,

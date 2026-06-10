@@ -9,7 +9,9 @@
  */
 
 import {
+  authorPrompt,
   type Capability,
+  criticPrompt,
   type HandlerRegistry,
   type RegisterTaskInput,
   type RunParams,
@@ -35,7 +37,10 @@ import {
   orchestratorDemoHandler,
   orchestratorDemoTaskInput,
 } from "./orchestrator-demo/handler.ts";
+import { ORCHESTRATION_CONTRACTS } from "./router/contracts.ts";
 import {
+  buildAnswerPrompt,
+  buildClassifyPrompt,
   makeRouterHandler,
   ROUTE_ALLOWLIST,
   ROUTER_HANDLER_ID,
@@ -43,8 +48,18 @@ import {
   routerHandler,
   routerTaskInput,
 } from "./router/handler.ts";
-import type { PlanDifficulty } from "./router/plan.ts";
-import { SELFTEST_HANDLER_ID, selftestHandler, selftestTaskInput } from "./selftest/handler.ts";
+import {
+  buildPlanPrompt,
+  buildStepRevisionPrompt,
+  type PlanDifficulty,
+  type PlanTask,
+} from "./router/plan.ts";
+import {
+  SELFTEST_HANDLER_ID,
+  SELFTEST_PROBE_PROMPT,
+  selftestHandler,
+  selftestTaskInput,
+} from "./selftest/handler.ts";
 import {
   SKILL_TRAIN_HANDLER_ID,
   skillTrainHandler,
@@ -60,6 +75,12 @@ import {
   SWE_BUILD_HANDLER_ID,
   softwareEngineerTaskInput,
 } from "./software-engineer/index.ts";
+import {
+  buildPrompt as sweBuildPrompt,
+  planPrompt as swePlanPrompt,
+  reviewPrompt as sweReviewPrompt,
+  specPrompt as sweSpecPrompt,
+} from "./software-engineer/prompts.ts";
 
 // User-authored pipelines (specs/pipeline-editor.md): the doc model, the shared
 // interpreter, and the registration sweep the daemon + CLI build on.
@@ -76,7 +97,15 @@ export {
   type PipelineStep,
   type PromptStep,
   parsePipelineDoc,
+  type StepPosition,
 } from "./custom/doc.ts";
+export {
+  docToGraph,
+  type GraphEdge,
+  type GraphToStagesResult,
+  graphToStages,
+  type PipelineGraph,
+} from "./custom/graph.ts";
 export {
   CUSTOM_TASK_PREFIX,
   type CustomPipelineDeps,
@@ -91,6 +120,11 @@ export {
   parseImproveProposal,
   type StepSuggestion,
 } from "./custom/improve.ts";
+export {
+  type MarkdownParseResult,
+  parsePipelineMarkdown,
+  serializePipelineMarkdown,
+} from "./custom/markdown.ts";
 export {
   type CustomPipelineSource,
   type RegisterCustomPipelineResult,
@@ -158,6 +192,78 @@ export interface PipelineDescriptor {
   readonly taskInput?: RegisterTaskInput;
   /** One-line description surfaced to the orchestrator's runtime snapshot. */
   readonly summary?: string;
+  /**
+   * Read-only prompt catalog: the GENUINE prompt templates this pipeline sends
+   * through `ctx.complete`, rendered by calling the real builders with
+   * `{{placeholder}}` arguments. Display-only — the handlers keep building their
+   * prompts at run time; editing these changes nothing.
+   */
+  readonly prompts?: readonly PipelinePrompt[];
+}
+
+/** One named, read-only prompt template in a pipeline's catalog. */
+export interface PipelinePrompt {
+  readonly name: string;
+  readonly template: string;
+}
+
+// ── Prompt catalogs ─────────────────────────────────────────────────────────
+// Each template is the REAL builder output over placeholder args, so the UI/CLI
+// show the genuine prompt wording with {{...}} markers for the dynamic parts.
+
+/** Placeholder plan task fed to the step-revision builder (shapes the example rows). */
+const PLACEHOLDER_PLAN_TASK: PlanTask = {
+  pipeline: "{{pipeline}}",
+  label: "{{label}}",
+  prompt: "{{prompt}}",
+  model: null,
+  difficulty: "medium",
+  params: {},
+};
+
+/** Placeholder spec doc fed to the software-engineer PLAN/REVIEW builders. */
+const PLACEHOLDER_SPEC = { title: "{{title}}", body: "{{body}}" } as const;
+
+const ROUTER_PROMPTS: readonly PipelinePrompt[] = [
+  { name: "classify", template: buildClassifyPrompt("{{message}}", Object.keys(ROUTE_ALLOWLIST)) },
+  {
+    name: "answer",
+    template: buildAnswerPrompt("{{message}}", { pipelines: [], recentRuns: [], schedules: [] }),
+  },
+  { name: "plan", template: buildPlanPrompt("{{wish}}", ORCHESTRATION_CONTRACTS) },
+  {
+    name: "step-revision",
+    template: buildStepRevisionPrompt(
+      "{{wish}}",
+      [PLACEHOLDER_PLAN_TASK],
+      [{ label: "{{label}}", status: "{{status}}", summary: "{{summary}}" }],
+    ),
+  },
+];
+
+const LOOP_PROMPTS: readonly PipelinePrompt[] = [
+  { name: "author", template: authorPrompt({ goal: "{{goal}}" }, []) },
+  { name: "critic", template: criticPrompt({ goal: "{{goal}}" }, "{{prompt}}", "{{result}}") },
+];
+
+const SOFTWARE_ENGINEER_PROMPTS: readonly PipelinePrompt[] = [
+  { name: "spec", template: sweSpecPrompt("{{wish}}") },
+  { name: "plan", template: swePlanPrompt(PLACEHOLDER_SPEC) },
+  { name: "build", template: sweBuildPrompt("{{instruction}}", ["{{file}}"]) },
+  { name: "review", template: sweReviewPrompt(PLACEHOLDER_SPEC, "{{diff}}") },
+];
+
+const SELFTEST_PROMPTS: readonly PipelinePrompt[] = [
+  { name: "probe", template: SELFTEST_PROBE_PROMPT },
+];
+
+/**
+ * The read-only prompt catalog of one built-in pipeline (empty array when the
+ * pipeline declares none). The UI template route and `vesper pipeline show`
+ * surface these so built-ins stop presenting an empty template box.
+ */
+export function pipelinePrompts(handlerId: string): readonly PipelinePrompt[] {
+  return PIPELINES.find((d) => d.handlerId === handlerId)?.prompts ?? [];
 }
 
 /**
@@ -182,6 +288,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handler: selftestHandler,
     taskInput: selftestTaskInput,
     summary: "runtime self-test: sends a probe prompt through the configured CLI",
+    prompts: SELFTEST_PROMPTS,
   },
   // The chatbot-home dispatcher: a chat message is a manual run of this pipeline. It
   // classifies the wish via the CLI and spawns one allowlisted built-in. Adds
@@ -191,6 +298,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handler: routerHandler,
     taskInput: routerTaskInput,
     summary: "the chat orchestrator: answers questions or dispatches wishes to pipelines",
+    prompts: ROUTER_PROMPTS,
   },
   {
     handlerId: SKILL_TRAIN_HANDLER_ID,
@@ -206,6 +314,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     handler: loopHandler,
     taskInput: loopTaskInput,
     summary: "autonomous reasoning loop toward an objective: the model authors each prompt itself",
+    prompts: LOOP_PROMPTS,
   },
   {
     handlerId: ORCHESTRATOR_DEMO_HANDLER_ID,
@@ -241,6 +350,7 @@ export const PIPELINES: readonly PipelineDescriptor[] = [
     taskInput: softwareEngineerTaskInput,
     summary:
       "human-gated coding cycle in a throwaway git worktree (spec, plan, build, diff review)",
+    prompts: SOFTWARE_ENGINEER_PROMPTS,
   },
   // Spawn-only worker: registered as a handler so orchestrator-demo can `ctx.spawn`
   // it, but it has no task of its own (not shown in `schedule list`).

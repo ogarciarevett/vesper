@@ -8,6 +8,14 @@ export {
   parseLeaderboard,
 } from "./benchmark.ts";
 export {
+  type DirectoryModel,
+  type DirectoryProvider,
+  fetchModelDirectory,
+  MODEL_DIRECTORY_ALLOWED_HOSTS,
+  MODEL_DIRECTORY_URL,
+  parseModelDirectory,
+} from "./directory.ts";
+export {
   type ModelChoice,
   type SelectModelOptions,
   selectModel,

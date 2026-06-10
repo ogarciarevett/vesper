@@ -59,3 +59,8 @@ export function uiPort(): number {
   const n = raw !== undefined ? Number(raw) : Number.NaN;
   return Number.isInteger(n) && n > 0 ? n : 4317;
 }
+
+/** The markdown pipelines drop folder — every *.md here IS a pipeline. */
+export function pipelinesDir(): string {
+  return join(vesperHome(), "pipelines");
+}

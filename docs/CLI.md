@@ -15,6 +15,7 @@ Every `vesper` command, generated from the command registry
 | `vesper cli list` | List supported CLIs with version, working status, and remediation hints. |
 | `vesper cli select <name>` | Set the default CLI adapter (must be installed). |
 | `vesper cli install <name>` | Install a supported LLM CLI (claude/codex/opencode/gemini/cursor). |
+| `vesper chat send "<message>" [--session <id>]` | Send one message to Vesper and stream the reply. |
 | `vesper connections list` | List messaging channels with availability, credential, and enabled status. |
 | `vesper connections set <id> [key=value ...]   # token via stdin` | Store a channel credential (stdin) + any key=value params, and enable it. |
 | `vesper connections pair <id>` | Scan a QR to connect a channel (auto-captures your chat). Daemon must be running. |
@@ -37,7 +38,26 @@ Every `vesper` command, generated from the command registry
 | `vesper schedule run <id> [--cli <name>] [--param key=value] [--quiet]` | Manually run a task by id, invoking the resolved CLI and recording a run. |
 | `vesper schedule enable <id>` | Enable a scheduled task by id. |
 | `vesper schedule disable <id>` | Disable a scheduled task by id. |
+| `vesper pipeline list` | List every pipeline — built-ins and your saved ones. |
+| `vesper pipeline show <id>` | Show a pipeline: doc + capabilities (yours) or its real prompts (built-in). |
+| `vesper pipeline new [file.md]` | Write a starter pipeline markdown file you can edit and save. |
+| `vesper pipeline edit <id>` | Edit a pipeline as markdown in $EDITOR, validate, and save it back. |
+| `vesper pipeline save <file.md\|file.json> [--id <id>] [--validate]` | Validate and save a pipeline document (.md or .json file). |
+| `vesper pipeline sync` | Re-sweep ~/.vesper/pipelines/*.md (every file there IS a pipeline). |
+| `vesper pipeline run <id> [k=v ...] [--cli <name>]` | Run a pipeline now (yours or a built-in). |
+| `vesper pipeline improve <id> [--step <stepId>]` | Ask Vesper to audit a pipeline: prompt rewrites + model routing. |
+| `vesper pipeline rm <id>` | Archive one of your pipelines (recoverable — never destroyed). |
+| `vesper pipeline export <id> [file] [--json]` | Write a pipeline's document to markdown (or JSON with --json). |
 | `vesper runs list [--pipeline <name>] [--status <status>] [--limit <n>]` | List recorded pipeline runs (oldest first). |
+| `vesper runs replay <runId>` | Replay a run's full event stream terminal-style (io prompts/outputs included). |
+| `vesper loop run --goal "<objective>" [--success "<criteria>"] [--max N] [--no-progress K] [--budget-ms M] [--cli <a>] [--author-cli <a>] [--execute-cli <a>] [--critic-cli <a>] [--yes]` | Run an autonomous loop toward an objective (the model authors each prompt). |
+| `vesper loop list [--limit <n>]` | List recorded loop runs (oldest first). |
+| `vesper loop show <runId>` | Replay a loop run's iterations (author / execute / critic) from its live trace. |
+| `vesper models list` | Show the benchmark snapshot and what the selector picks per difficulty. |
+| `vesper rag setup [--provider ollama\|openai\|voyage] [--endpoint URL] [--model M] [--dimensions N] [--vault-key K]   # key via stdin/prompt` | Configure the bring-your-own embeddings provider (and store its API key in the vault). |
+| `vesper rag index [--rebuild] [--skills-dir <dir>] [--yes]` | Embed Vesper's history (events, runs, skills) into the semantic index. |
+| `vesper rag search <query> [--k N] [--source event\|run\|run_event\|skill]` | Semantic search over Vesper's indexed history (debug view of the retrieval seam). |
+| `vesper rag status [--probe]` | Show the embeddings provider, index size, and per-source breakdown. |
 | `vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--val-fraction F] [--dry-run] [--yes]` | Train a skill against its tasks.json via the skill-train pipeline. |
 | `vesper skill list [--skills-dir <dir>]` | List trainable skills (those with a tasks.json validation harness). |
 | `vesper skill diff <name> [--skills-dir <dir>]` | Diff the committed SKILL.md against the trained best candidate. |

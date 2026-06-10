@@ -217,3 +217,71 @@ describe("isValidCustomPipelineId", () => {
     expect(isValidCustomPipelineId("x".repeat(65))).toBe(false);
   });
 });
+
+describe("doc v1.1: layout + after + id-keyed piping", () => {
+  it("accepts layout positions and after dependencies referencing earlier stages", () => {
+    const result = parsePipelineDoc(
+      rawDoc({
+        layout: { draft: { x: 120, y: 80 }, polish: { x: 360, y: 80 } },
+        stages: [
+          { tasks: [{ kind: "prompt", id: "draft", title: "Draft", prompt: "write" }] },
+          {
+            tasks: [
+              {
+                kind: "prompt",
+                id: "polish",
+                title: "Polish",
+                prompt: "improve {{steps.draft.result}}",
+                after: ["draft"],
+              },
+            ],
+          },
+        ],
+      }),
+      ORCHESTRATION_CONTRACTS,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.doc.layout?.draft).toEqual({ x: 120, y: 80 });
+    const polish = result.doc.stages[1]?.tasks[0];
+    expect(polish?.after).toEqual(["draft"]);
+  });
+
+  it("rejects after pointing at unknown, same-stage, or self ids", () => {
+    for (const after of [["ghost"], ["b"], ["a"]]) {
+      const result = parsePipelineDoc(
+        rawDoc({
+          stages: [
+            {
+              tasks: [
+                { kind: "prompt", id: "a", title: "A", prompt: "p", after },
+                { kind: "prompt", id: "b", title: "B", prompt: "q" },
+              ],
+            },
+          ],
+        }),
+        ORCHESTRATION_CONTRACTS,
+      );
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it("rejects layout entries for unknown step ids or non-numeric positions", () => {
+    expect(
+      parsePipelineDoc(rawDoc({ layout: { ghost: { x: 1, y: 2 } } }), ORCHESTRATION_CONTRACTS).ok,
+    ).toBe(false);
+    expect(
+      parsePipelineDoc(rawDoc({ layout: { draft: { x: "1", y: 2 } } }), ORCHESTRATION_CONTRACTS).ok,
+    ).toBe(false);
+  });
+
+  it("interpolates {{steps.<id>.result}} alongside the stage form", () => {
+    const results = new Map([
+      ["1.draft", "stage-keyed"],
+      ["draft", "id-keyed"],
+    ]);
+    expect(
+      interpolateResults("a {{stages.1.draft.result}} b {{steps.draft.result}}", results),
+    ).toBe("a stage-keyed b id-keyed");
+  });
+});

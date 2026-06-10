@@ -26,6 +26,10 @@ export interface VoiceSettings {
   readonly model: string;
   readonly bargeIn: boolean;
   readonly speakReplies: boolean;
+  /** ElevenLabs voice id (tts "elevenlabs" only); module default when unset. */
+  readonly elevenLabsVoiceId?: string;
+  /** ElevenLabs model id (tts "elevenlabs" only); module default when unset. */
+  readonly elevenLabsModelId?: string;
 }
 
 /** The fully-local, offline, free, private default — brain on the CLI, I/O on-device. */

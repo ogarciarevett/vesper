@@ -7,7 +7,12 @@ import {
   type ChannelRegistry,
   channelStates,
   DEFAULT_AGENT_MATCHERS,
+  DEFAULT_ELEVENLABS_VOICE_ID,
+  DEFAULT_VOICE_SETTINGS,
+  type DirectoryModel,
   detectAvailableCLIs,
+  elevenLabsTts,
+  fetchModelDirectory,
   HandlerRegistry,
   KeychainVault,
   openStore,
@@ -21,6 +26,7 @@ import {
   grantedCapabilities,
   ORCHESTRATION_CONTRACTS,
   PIPELINES,
+  pipelinePrompts,
   pipelineSummaries,
   registerCustomPipelines,
   registerPipelines,
@@ -39,13 +45,55 @@ import { makeNotifyFn } from "../make-notify.ts";
 import { makeSoftwareEngineerSurface } from "../make-software-engineer.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
 import { PairingCoordinator } from "../pairing-coordinator.ts";
-import { dbPath, pidPath, runDir, skillTrainDir, socketPath, uiPort } from "../paths.ts";
+import {
+  dbPath,
+  pidPath,
+  pipelinesDir,
+  runDir,
+  skillTrainDir,
+  socketPath,
+  uiPort,
+} from "../paths.ts";
+import { syncPipelinesFolder } from "../pipelines-folder.ts";
 import { SkillLibrary } from "../skill-library.ts";
 import { dim, green, line, yellow } from "../ui.ts";
 import { setToken as setChannelToken } from "./connections.ts";
 
 /** Scheduler tick interval (1 minute). */
 const TICK_INTERVAL_MS = 60_000;
+
+/** How long one fetched model directory serves the picker before re-fetching. */
+const MODEL_DIRECTORY_TTL_MS = 60 * 60 * 1_000;
+
+/** Keychain key for the user's own ElevenLabs API key (voice settings). */
+const ELEVENLABS_VAULT_KEY = "elevenlabs_api_key";
+
+/**
+ * Cached live-directory provider for `GET /api/models/directory`: at most one
+ * OpenRouter fetch per TTL window (allowlisted host, no API key), concurrent
+ * requests share the in-flight fetch, and failures propagate so the route can
+ * answer `{ available: false }` — never a crashed daemon, never a stale error.
+ */
+function makeModelDirectoryProvider(): { list(): Promise<readonly DirectoryModel[]> } {
+  let cached: { at: number; models: readonly DirectoryModel[] } | null = null;
+  let inFlight: Promise<readonly DirectoryModel[]> | null = null;
+  return {
+    list(): Promise<readonly DirectoryModel[]> {
+      if (cached !== null && Date.now() - cached.at < MODEL_DIRECTORY_TTL_MS) {
+        return Promise.resolve(cached.models);
+      }
+      inFlight ??= fetchModelDirectory({ granted: ["NETWORK_FETCH"] })
+        .then((models) => {
+          cached = { at: Date.now(), models };
+          return models;
+        })
+        .finally(() => {
+          inFlight = null;
+        });
+      return inFlight;
+    },
+  };
+}
 
 /**
  * `vesper daemon run` — the foreground daemon process: IPC server + scheduler tick
@@ -108,6 +156,23 @@ export const daemonRunCommand: Command = {
     // The software-engineer pipeline's human-approval gate and the UI decision route
     // share ONE coordinator: the running cycle blocks on it; the route resolves it.
     const sweCoordinator = new ChangeDecisionCoordinator();
+    // The model the orchestrator's own brain calls will use — shared between the
+    // router registration and `/api/status` (the titlebar pill): template pin >
+    // benchmark frontier pick > configured default (undefined = the CLI's own default).
+    const pickRouterOrchestratorModel = (): string | undefined => {
+      const pinned = uiStore.getTemplate("router")?.defaultParams?.orchestratorModel;
+      if (typeof pinned === "string" && pinned.trim().length > 0) return pinned.trim();
+      return (
+        selectModel(
+          uiStore.getModelBenchmarks(BENCHMARK_SOURCE),
+          {
+            ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
+            catalog: effectiveCatalog(config),
+          },
+          "hard",
+        )?.canonicalId ?? config.models?.default
+      );
+    };
     registerPipelines(scheduler, registry, {
       getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
       softwareEngineerCoordinator: sweCoordinator,
@@ -125,20 +190,7 @@ export const daemonRunCommand: Command = {
       // Orchestrator-by-default: the router's own brain calls run on the
       // template's pinned model, else the benchmark frontier pick, else the
       // configured default model (undefined = the CLI's own default).
-      pickOrchestratorModel: () => {
-        const pinned = uiStore.getTemplate("router")?.defaultParams?.orchestratorModel;
-        if (typeof pinned === "string" && pinned.trim().length > 0) return pinned.trim();
-        return (
-          selectModel(
-            uiStore.getModelBenchmarks(BENCHMARK_SOURCE),
-            {
-              ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
-              catalog: effectiveCatalog(config),
-            },
-            "hard",
-          )?.canonicalId ?? config.models?.default
-        );
-      },
+      pickOrchestratorModel: pickRouterOrchestratorModel,
       // Launch spawnsOwnChildren plan tasks (software-engineer) as sibling
       // top-level runs grouped under the router run (display lineage only).
       runSibling: async (handlerId, options) =>
@@ -214,6 +266,17 @@ export const daemonRunCommand: Command = {
       modelRows: () =>
         improveModelRows(effectiveCatalog(config), uiStore.getModelBenchmarks(BENCHMARK_SOURCE)),
     });
+    // The markdown drop folder: every *.md in ~/.vesper/pipelines IS a pipeline
+    // (specs/markdown-pipelines.md). Swept once at boot; `vesper pipeline sync`
+    // re-sweeps through the route below.
+    await mkdir(pipelinesDir(), { recursive: true });
+    const folderSync = await syncPipelinesFolder(pipelinesDir(), customPipelines);
+    for (const failure of folderSync.errors) {
+      line(yellow(`  pipeline file "${failure.file}" skipped: ${failure.errors.join("; ")}`));
+    }
+    if (folderSync.loaded.length > 0) {
+      line(dim(`  pipelines folder: loaded ${folderSync.loaded.join(", ")}`));
+    }
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
     // scheduler + storage directly and gets live run events off its EventBus.
@@ -241,6 +304,61 @@ export const daemonRunCommand: Command = {
     });
     // Late-bind the live registry into the notify resolver (declared before the scheduler).
     channelRegistry = channels.registry;
+
+    // In-chat voice surface (specs/voice-conversation.md, cloud TTS slice): config
+    // + key are read FRESH per call so a Settings save takes effect without a
+    // daemon restart. The key lives in the keychain only; `tts` answers null
+    // whenever ElevenLabs is not fully configured (the chat falls back to the
+    // browser's local voice — never an error mid-conversation).
+    const elevenLabsKey = (): Promise<string | null> =>
+      vault.get(ELEVENLABS_VAULT_KEY).then(
+        (v) => (v.length > 0 ? v : null),
+        () => null,
+      );
+    const voiceSurface = {
+      async tts(text: string): Promise<{ audio: Uint8Array; mime: string } | null> {
+        const cfg = await loadConfig();
+        const v = cfg.voice ?? DEFAULT_VOICE_SETTINGS;
+        if (v.tts !== "elevenlabs") return null;
+        const apiKey = await elevenLabsKey();
+        if (apiKey === null) return null;
+        return elevenLabsTts(text, {
+          apiKey,
+          ...(v.elevenLabsVoiceId !== undefined ? { voiceId: v.elevenLabsVoiceId } : {}),
+          ...(v.elevenLabsModelId !== undefined ? { modelId: v.elevenLabsModelId } : {}),
+          granted: ["NETWORK_FETCH"],
+        });
+      },
+      async getConfig(): Promise<{ tts: string; voiceId: string; keyConfigured: boolean }> {
+        const cfg = await loadConfig();
+        const v = cfg.voice ?? DEFAULT_VOICE_SETTINGS;
+        return {
+          tts: v.tts,
+          voiceId: v.elevenLabsVoiceId ?? DEFAULT_ELEVENLABS_VOICE_ID,
+          keyConfigured: (await elevenLabsKey()) !== null,
+        };
+      },
+      async setConfig(input: {
+        tts?: string;
+        voiceId?: string;
+        apiKey?: string;
+      }): Promise<{ keyConfigured: boolean }> {
+        const apiKey = input.apiKey?.trim() ?? "";
+        if (apiKey.length > 0) await vault.set(ELEVENLABS_VAULT_KEY, apiKey);
+        const cfg = await loadConfig();
+        const base = cfg.voice ?? DEFAULT_VOICE_SETTINGS;
+        const voiceId = input.voiceId?.trim() ?? "";
+        await saveConfig({
+          ...cfg,
+          voice: {
+            ...base,
+            ...(input.tts === "local" || input.tts === "elevenlabs" ? { tts: input.tts } : {}),
+            ...(voiceId.length > 0 ? { elevenLabsVoiceId: voiceId } : {}),
+          },
+        });
+        return { keyConfigured: (await elevenLabsKey()) !== null };
+      },
+    };
     // Pairing (scan-to-connect): the coordinator multiplexes the daemon's single
     // inbound stream into active QR/link pairing sessions and persists the captured
     // chat id on link. Exposed to the UI's POST /api/connections/:id/pair route and
@@ -311,10 +429,16 @@ export const daemonRunCommand: Command = {
       skills: skillLibrary,
       memory,
       customPipelines,
+      syncPipelinesFolder: () => syncPipelinesFolder(pipelinesDir(), customPipelines),
+      // Read-only prompt catalog of the built-ins (the genuine handler prompts).
+      getBuiltinPrompts: pipelinePrompts,
       modelsCatalog: {
         ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
         catalog: effectiveCatalog(config),
       },
+      modelDirectory: makeModelDirectoryProvider(),
+      orchestratorModel: pickRouterOrchestratorModel,
+      voice: voiceSurface,
       pairing,
       ...(config.presence?.pollMs !== undefined ? { presencePollMs: config.presence.pollMs } : {}),
       ...(config.ui?.theme !== undefined ? { defaultTheme: config.ui.theme } : {}),

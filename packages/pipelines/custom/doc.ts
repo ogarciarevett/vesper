@@ -30,6 +30,8 @@ export interface PromptStep {
   readonly cli?: string;
   /** Canonical catalog model id for this step (default: adapter default). */
   readonly model?: string;
+  /** Explicit dependency step ids (the flow editor's edges); earlier stages only. */
+  readonly after?: readonly string[];
 }
 
 /** An invocation of an existing pipeline via its orchestration contract. */
@@ -44,6 +46,8 @@ export interface PipelineStep {
   /** Extra params; every key must be contract-declared (unknown keys are errors). */
   readonly params: Readonly<Record<string, string>>;
   readonly model?: string;
+  /** Explicit dependency step ids (the flow editor's edges); earlier stages only. */
+  readonly after?: readonly string[];
 }
 
 export type PipelineDocStep = PromptStep | PipelineStep;
@@ -69,6 +73,12 @@ export interface PipelineDocSharing {
   readonly memory: boolean;
 }
 
+/** A node position on the flow canvas (editor metadata; never affects execution). */
+export interface StepPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
 /** The validated document the editor saves and the interpreter runs. */
 export interface PipelineDoc {
   readonly v: 1;
@@ -77,6 +87,8 @@ export interface PipelineDoc {
   readonly orchestrator: PipelineDocOrchestrator;
   readonly sharing: PipelineDocSharing;
   readonly stages: readonly PipelineDocStage[];
+  /** Canvas positions keyed by step id (editor metadata; ids must exist). */
+  readonly layout?: Readonly<Record<string, StepPosition>>;
 }
 
 /** Fail-closed parse outcome: a valid doc, or every error found (never partial). */
@@ -123,6 +135,17 @@ function parseStep(
   }
   const model = asTrimmedString(raw.model);
 
+  // Explicit dependencies (flow-editor edges). Shape-checked here; the
+  // cross-stage reference check happens in parsePipelineDoc (needs all stages).
+  let after: string[] | undefined;
+  if (raw.after !== undefined) {
+    if (!Array.isArray(raw.after) || raw.after.some((a) => asTrimmedString(a) === undefined)) {
+      errors.push(`${position} (${id}): after must be an array of step ids`);
+      return undefined;
+    }
+    after = raw.after.map((a) => (a as string).trim());
+  }
+
   if (raw.kind === "prompt") {
     const skills: string[] = [];
     if (raw.skills !== undefined) {
@@ -150,6 +173,7 @@ function parseStep(
       ...(command !== undefined ? { command } : {}),
       ...(cli !== undefined ? { cli } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(after !== undefined ? { after } : {}),
     };
   }
 
@@ -191,6 +215,7 @@ function parseStep(
       prompt,
       params,
       ...(model !== undefined ? { model } : {}),
+      ...(after !== undefined ? { after } : {}),
     };
   }
 
@@ -245,6 +270,7 @@ export function parsePipelineDoc(
   }
 
   const stages: PipelineDocStage[] = [];
+  const attemptedIds = new Set<string>();
   if (!Array.isArray(value.stages) || value.stages.length === 0) {
     errors.push("stages: must be a non-empty array");
   } else if (value.stages.length > MAX_STAGES) {
@@ -252,6 +278,11 @@ export function parsePipelineDoc(
   } else {
     const seenIds = new Set<string>();
     value.stages.forEach((rawStage, stageIndex) => {
+      if (isRecord(rawStage) && Array.isArray(rawStage.tasks)) {
+        for (const rawTask of rawStage.tasks) {
+          if (isRecord(rawTask) && typeof rawTask.id === "string") attemptedIds.add(rawTask.id);
+        }
+      }
       const position = `stages[${stageIndex + 1}]`;
       if (!isRecord(rawStage) || !Array.isArray(rawStage.tasks) || rawStage.tasks.length === 0) {
         errors.push(`${position}: must have a non-empty tasks array`);
@@ -276,12 +307,55 @@ export function parsePipelineDoc(
     });
   }
 
+  // Cross-stage checks: `after` must reference a step in an EARLIER stage (the
+  // flow editor's leveling guarantees this; anything else is a wiring bug).
+  const earlierIds = new Set<string>();
+  for (const stage of stages) {
+    for (const step of stage.tasks) {
+      for (const dep of step.after ?? []) {
+        if (!earlierIds.has(dep)) {
+          errors.push(`step "${step.id}": after "${dep}" must name a step in an earlier stage`);
+        }
+      }
+    }
+    for (const step of stage.tasks) earlierIds.add(step.id);
+  }
+
+  // Canvas layout (editor metadata): numeric positions keyed by existing step ids.
+  let layout: Record<string, StepPosition> | undefined;
+  if (value.layout !== undefined) {
+    if (!isRecord(value.layout)) {
+      errors.push("layout: must be an object of step positions");
+    } else {
+      layout = {};
+      for (const [stepId, raw] of Object.entries(value.layout)) {
+        if (!earlierIds.has(stepId) && !attemptedIds.has(stepId)) {
+          errors.push(`layout: unknown step id "${stepId}"`);
+          continue;
+        }
+        if (!isRecord(raw) || typeof raw.x !== "number" || typeof raw.y !== "number") {
+          errors.push(`layout (${stepId}): position must be { x: number, y: number }`);
+          continue;
+        }
+        layout[stepId] = { x: raw.x, y: raw.y };
+      }
+    }
+  }
+
   if (errors.length > 0 || name === undefined) {
     return { ok: false, errors };
   }
   return {
     ok: true,
-    doc: { v: 1, name, description, orchestrator, sharing, stages },
+    doc: {
+      v: 1,
+      name,
+      description,
+      orchestrator,
+      sharing,
+      stages,
+      ...(layout !== undefined ? { layout } : {}),
+    },
   };
 }
 
@@ -312,14 +386,20 @@ export function deriveCapabilities(
 
 /** Placeholder shape: `{{stages.<stageNumber>.<stepId>.result}}` (1-based stage). */
 const RESULT_PLACEHOLDER_RE = /\{\{stages\.(\d+)\.([a-z0-9-]+)\.result\}\}/g;
+/** Canvas-native placeholder shape: `{{steps.<stepId>.result}}` (id-keyed). */
+const STEP_PLACEHOLDER_RE = /\{\{steps\.([a-z0-9-]+)\.result\}\}/g;
 
 /**
  * Replace known result placeholders; unknown ones are left VISIBLE in the prompt
  * (fail-visible beats silently sending an empty string). Keys are
- * `<stageNumber>.<stepId>` with the stage number 1-based.
+ * `<stageNumber>.<stepId>` (stage form) and bare `<stepId>` (steps form).
  */
 export function interpolateResults(prompt: string, results: ReadonlyMap<string, string>): string {
-  return prompt.replace(RESULT_PLACEHOLDER_RE, (whole, stage: string, stepId: string) => {
-    return results.get(`${stage}.${stepId}`) ?? whole;
-  });
+  return prompt
+    .replace(RESULT_PLACEHOLDER_RE, (whole, stage: string, stepId: string) => {
+      return results.get(`${stage}.${stepId}`) ?? whole;
+    })
+    .replace(STEP_PLACEHOLDER_RE, (whole, stepId: string) => {
+      return results.get(stepId) ?? whole;
+    });
 }

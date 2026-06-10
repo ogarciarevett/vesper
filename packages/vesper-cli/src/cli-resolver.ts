@@ -31,6 +31,21 @@ function resolveModel(config: VesperConfig, model: string): { cli?: string; flag
 }
 
 /**
+ * Infer the serving CLI from a raw model id's shape — how live-directory picks
+ * (e.g. "claude-opus-4-8", "gpt-5.5", "gemini-3.5-flash") route to the right
+ * adapter without a catalog entry. Used ONLY when neither the catalog nor an
+ * explicit `opts.cli` named one, so an override (e.g. opencode running a claude
+ * model) is never second-guessed.
+ */
+export function inferModelCli(model: string): string | undefined {
+  const m = model.toLowerCase();
+  if (m.startsWith("claude") || m === "haiku" || m === "sonnet" || m === "opus") return "claude";
+  if (m.startsWith("gpt-") || m.startsWith("codex") || /^o[0-9]/.test(m)) return "codex";
+  if (m.startsWith("gemini")) return "gemini";
+  return undefined;
+}
+
+/**
  * Build the CLI resolver the scheduler injects as `ctx.complete`.
  *
  * Resolution order: explicit per-run override (must be installed) -> the model
@@ -64,14 +79,24 @@ export function makeCompleteFn(
         `model "${opts?.model}" is served by "${requested.cli}" but cli "${override}" was requested — drop one`,
       );
     }
-    // A catalog model whose CLI is not installed is DROPPED (fall back to the
+    // Raw (non-catalog) ids route by shape — but only when nothing else chose
+    // the adapter, so explicit overrides keep running any model they like.
+    const inferred =
+      requested !== undefined &&
+      requested.cli === undefined &&
+      override === undefined &&
+      opts?.model !== undefined
+        ? inferModelCli(opts.model)
+        : undefined;
+    const routedCli = requested?.cli ?? inferred;
+    // A model whose CLI is not installed is DROPPED (fall back to the
     // default resolution with no model flag) — routing never kills a run.
     const modelCli =
-      requested?.cli !== undefined && installed.includes(requested.cli) ? requested.cli : undefined;
+      routedCli !== undefined && installed.includes(routedCli) ? routedCli : undefined;
     const modelFlag =
       requested === undefined
         ? undefined
-        : requested.cli === undefined || modelCli !== undefined
+        : routedCli === undefined || modelCli !== undefined
           ? requested.flag
           : undefined;
 

@@ -5,11 +5,20 @@ import { h, type SectionContext, type SectionModule, sectionHeader } from "../sh
 import { setTheme, THEMES } from "../shell/themes.ts";
 
 /**
- * Settings — pick the app theme (re-skins instantly, persisted per browser) and view
- * the read-only runtime config (default helper-CLI, UI port, version). Writing config
- * back to `~/.vesper/config.json` is a follow-up (the privileged approval-gated PUT);
- * theme is client-side state so it needs no server write.
+ * Settings — pick the app theme (re-skins instantly, persisted per browser), choose
+ * the voice Vesper replies with (built-in local voice or ElevenLabs with the user's
+ * own key — the key goes to the keychain, never back to the browser), and view the
+ * read-only runtime config (default helper-CLI, UI port, version). Writing the rest
+ * of the config back to `~/.vesper/config.json` is a follow-up (the privileged
+ * approval-gated PUT); theme is client-side state so it needs no server write.
  */
+
+/** GET /api/voice/config — the daemon's voice provider settings (no secrets). */
+interface VoiceConfigResponse {
+  readonly tts: "local" | "elevenlabs";
+  readonly voiceId: string;
+  readonly keyConfigured: boolean;
+}
 export const settingsSection: SectionModule = {
   id: "settings",
   title: "Settings",
@@ -54,6 +63,18 @@ export const settingsSection: SectionModule = {
       h("div", { class: "panel" }, h("div", { class: "panel-title" }, "Appearance"), swatches),
     );
 
+    // Voice — how spoken replies in the chat sound (provider + ElevenLabs key).
+    const voice = h("div", { class: "panel" }, h("div", { class: "panel-title" }, "Voice"));
+    host.append(voice);
+    try {
+      const vc = await ctx.api.getJson<VoiceConfigResponse>("/api/voice/config");
+      voice.append(voiceForm(ctx, vc));
+    } catch {
+      voice.append(
+        h("p", { class: "muted" }, "Voice settings are unavailable (daemon not reachable)."),
+      );
+    }
+
     const cfg = h("div", { class: "panel" }, h("div", { class: "panel-title" }, "Runtime"));
     host.append(cfg);
     try {
@@ -73,6 +94,85 @@ export const settingsSection: SectionModule = {
     injectThemeStyle();
   },
 };
+
+/** The Voice card body: provider select + ElevenLabs voice id / key + save. */
+function voiceForm(ctx: SectionContext, loaded: VoiceConfigResponse): HTMLElement {
+  let current: { tts: string; voiceId: string } = { tts: loaded.tts, voiceId: loaded.voiceId };
+
+  const provider = h("select", { class: "field", id: "voice-provider" });
+  provider.append(
+    h("option", { value: "local" }, "Computer voice (built-in, stays local)"),
+    h("option", { value: "elevenlabs" }, "ElevenLabs (your own API key)"),
+  );
+  provider.value = loaded.tts;
+
+  const voiceId = h("input", {
+    class: "field",
+    type: "text",
+    id: "voice-id",
+    value: loaded.voiceId,
+  });
+  const apiKey = h("input", {
+    class: "field",
+    type: "password",
+    id: "voice-key",
+    placeholder: "paste a new key",
+    autocomplete: "off",
+  });
+  const keyHint = h(
+    "p",
+    { class: "voice-hint" },
+    loaded.keyConfigured ? "A key is saved in your keychain." : "No key saved yet.",
+  );
+
+  const save = h("button", { class: "btn primary", type: "button" }, "Save voice settings");
+  save.addEventListener("click", () => {
+    const body: Record<string, string> = {};
+    if (provider.value !== current.tts) body.tts = provider.value;
+    if (voiceId.value.trim() !== current.voiceId) body.voiceId = voiceId.value.trim();
+    if (apiKey.value.length > 0) body.apiKey = apiKey.value;
+    if (Object.keys(body).length === 0) {
+      ctx.toast("Nothing changed yet");
+      return;
+    }
+    save.disabled = true;
+    void (async () => {
+      try {
+        const res = await ctx.api.postJson<{ ok?: boolean; keyConfigured?: boolean }>(
+          "/api/voice/config",
+          body,
+        );
+        if (res.ok !== true) throw new Error("could not save voice settings");
+        current = {
+          tts: typeof body.tts === "string" ? body.tts : current.tts,
+          voiceId: typeof body.voiceId === "string" ? body.voiceId : current.voiceId,
+        };
+        apiKey.value = ""; // the key is never kept (or echoed) in the browser.
+        keyHint.textContent =
+          res.keyConfigured === true ? "A key is saved in your keychain." : "No key saved yet.";
+        ctx.toast("Voice settings saved");
+      } catch (err) {
+        ctx.toast(err instanceof Error ? err.message : "could not save voice settings");
+      } finally {
+        save.disabled = false;
+      }
+    })();
+  });
+
+  return h(
+    "div",
+    { class: "voice-form" },
+    h("label", { class: "voice-field", for: "voice-provider" }, "Voice provider", provider),
+    h("label", { class: "voice-field", for: "voice-id" }, "ElevenLabs voice id", voiceId),
+    h("label", { class: "voice-field", for: "voice-key" }, "ElevenLabs API key", apiKey, keyHint),
+    save,
+    h(
+      "p",
+      { class: "voice-note" },
+      "ElevenLabs replies are generated with your own API key — text you send is processed by their service. The built-in voice never leaves this computer.",
+    ),
+  );
+}
 
 function kv(k: string, v: string, mono = false): HTMLElement {
   return h(
@@ -96,6 +196,11 @@ function injectThemeStyle(): void {
     .sw-dark { background: linear-gradient(135deg, #1a1a26, #0c0b12); }
     .sw-glass { background: linear-gradient(135deg, #eef2fe, #fdeef5); }
     .sw-hearth { background: linear-gradient(135deg, #3a2a20, #ffb454); }
+    .voice-form { display: flex; flex-direction: column; gap: 14px; max-width: 460px; }
+    .voice-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+    .voice-hint { margin: 0; font-size: 12.5px; font-weight: 400; color: var(--ink-faint); }
+    .voice-note { margin: 0; font-size: 12.5px; color: var(--ink-faint); line-height: 1.5; }
+    .voice-form .btn { align-self: flex-start; }
   `;
   document.head.append(style);
 }

@@ -118,6 +118,39 @@ describe("makeCompleteFn model routing", () => {
     expect(calls[0]?.args[at + 1]).toBe("some-custom-model");
   });
 
+  test("a raw directory-style id routes to its provider's CLI by shape", async () => {
+    const { run, calls } = recordingRunner();
+    // Default is claude, but "gemini-3.5-pro" is not a catalog id — shape wins.
+    const complete = makeCompleteFn(
+      { cli: { default: "claude", adapters: {} } },
+      ["claude", "gemini"],
+      run,
+    );
+
+    await complete("hi", { model: "gemini-3.5-pro" });
+    expect(calls[0]?.command).toBe("gemini");
+    const at = calls[0]?.args.indexOf("--model") ?? calls[0]?.args.indexOf("-m") ?? -1;
+    expect(calls[0]?.args[at + 1]).toBe("gemini-3.5-pro");
+  });
+
+  test("a raw id whose inferred CLI is not installed is dropped (no flag, default adapter)", async () => {
+    const { run, calls } = recordingRunner();
+    const complete = makeCompleteFn({ cli: { default: "claude", adapters: {} } }, ["claude"], run);
+
+    await complete("hi", { model: "gpt-5.5-pro" });
+    expect(calls[0]?.command).toBe("claude");
+    expect(calls[0]?.args).not.toContain("--model");
+  });
+
+  test("an explicit cli override is never second-guessed by shape inference", async () => {
+    const { run, calls } = recordingRunner();
+    const complete = makeCompleteFn(emptyConfig, ["claude", "opencode"], run);
+
+    // opencode can serve claude models; the claude-shaped id must NOT conflict.
+    await complete("hi", { cli: "opencode", model: "claude-opus-4-8" });
+    expect(calls[0]?.command).toBe("opencode");
+  });
+
   test("a catalog model whose CLI is not installed is dropped (no model flag, default adapter)", async () => {
     const { run, calls } = recordingRunner();
     // "gpt" maps to codex, which is NOT installed -> fall back to claude, no flag.

@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@vesper/core": "workspace:*"
+    "@vesper/core": "workspace:*",
+    "drawflow": "^0.0.60"
   }
 }

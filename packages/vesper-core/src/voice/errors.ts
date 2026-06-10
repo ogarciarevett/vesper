@@ -6,6 +6,12 @@ export type VoiceErrorReason =
   | "stt_unavailable"
   /** The selected TTS backend could not render/play speech (e.g. `say` missing off-macOS). */
   | "tts_unavailable"
+  /** A cloud TTS request failed with a non-OK, non-auth HTTP response. */
+  | "tts_failed"
+  /** The cloud TTS provider rejected the supplied credentials (HTTP 401/403). */
+  | "not_authorized"
+  /** TTS was asked to speak empty/whitespace text — refused before any network work. */
+  | "empty_text"
   /** The opt-in cloud path tried to reach a host outside its allowlist. */
   | "network_denied"
   /** The configured provider id is not recognised. */

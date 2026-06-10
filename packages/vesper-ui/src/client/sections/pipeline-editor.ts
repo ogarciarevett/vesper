@@ -1,15 +1,29 @@
 /// <reference lib="dom" />
 /**
- * The pipeline editor (specs/pipeline-editor.md): a staged rail — stages run in
- * order, the cards inside a stage run in parallel — over the SAME daemon routes
- * `vesper pipeline` uses. Deliberately NOT a node graph: add/remove/reorder is
- * the whole gesture set. Permissions are DERIVED and shown twice (the live
- * "what this pipeline can touch" summarizer + plain-language cards at save time,
- * impeccable's progressive-disclosure pattern). Cross-share ships disabled.
+ * The pipeline editor (specs/pipeline-flow-editor.md): a drag-and-drop DAG
+ * canvas (Drawflow) + a single-node inspector, over the SAME daemon routes
+ * `vesper pipeline` uses. The canvas shows compact nodes and edges; the full
+ * step form appears only for the selected node — never a wall of text.
+ * Edges = "runs after, and receives the result"; levels become the doc's
+ * stages on save. Permissions stay DERIVED and are shown twice (live
+ * summarizer + plain-language cards at save time). Cross-share ships disabled.
+ *
+ * Layout follows the document-editor convention: Save lives in the top bar
+ * (disabled while the doc is invalid; issues listed beside the canvas), the
+ * inspector keeps routing/skills behind one "Advanced" disclosure, and the
+ * autonomous loop is a first-class palette step — not a separate section.
  */
 
 import { renderMarkdown } from "../shell/markdown.ts";
+import { contextMeta, createModelPicker, type ModelPickerGroup } from "../shell/model-picker.ts";
 import { h, injectStyle, type SectionContext } from "../shell/section.ts";
+import {
+  createFlowCanvas,
+  type FlowCanvasHandle,
+  type FlowEdge,
+  type FlowNodeView,
+  levelGraph,
+} from "./pipeline-flow.ts";
 
 const STYLE_ID = "sec-pipeline-editor-style";
 const STYLE = `
@@ -20,42 +34,57 @@ const STYLE = `
 .pe-desc { flex: 1; min-width: 260px; font-size: 13px; }
 .pe-id { color: var(--ink-soft); font-family: var(--mono); font-size: 12px; }
 .pe-layout { display: flex; gap: 16px; align-items: flex-start; }
-.pe-rail { flex: 1; min-width: 0; }
+.pe-main { flex: 1; min-width: 0; }
 .pe-side { width: 300px; flex: none; position: sticky; top: 8px; }
-.pe-stage { border: 1px solid var(--border); border-radius: 14px; padding: 12px; margin-bottom: 18px;
-  background: var(--surface); position: relative; }
-.pe-stage + .pe-stage::before { content: ""; position: absolute; top: -19px; left: 28px; width: 2px;
-  height: 18px; background: var(--border); }
-.pe-stage-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.pe-stage-head .t { font-weight: 700; font-size: 13px; }
-.pe-stage-head .hint { color: var(--ink-soft); font-size: 12px; }
-.pe-cards { display: flex; gap: 12px; flex-wrap: wrap; }
-.pe-card { flex: 1 1 320px; min-width: 280px; border: 1px solid var(--border); border-radius: 12px;
-  padding: 12px; background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; }
-.pe-card input[type=text], .pe-card select, .pe-card textarea, .pe-side textarea, .pe-side select {
-  font: inherit; font-size: 13px; background: var(--surface); color: var(--ink);
-  border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; width: 100%; box-sizing: border-box; }
-.pe-card textarea { font-family: var(--mono); font-size: 12.5px; min-height: 110px; resize: vertical; }
+.pe-side textarea, .pe-side select, .pe-inspector input[type=text], .pe-inspector select,
+.pe-inspector textarea { font: inherit; font-size: 13px; background: var(--surface);
+  color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px;
+  width: 100%; box-sizing: border-box; }
+.pe-inspector textarea { font-family: var(--mono); font-size: 12.5px; min-height: 140px; resize: vertical; }
+.pe-inspector { border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+  padding: 14px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.pe-inspector .pe-empty { color: var(--ink-soft); font-size: 13px; }
 .pe-row { display: flex; gap: 8px; align-items: center; }
 .pe-row > * { flex: 1; }
 .pe-row label, .pe-mini { color: var(--ink-soft); font-size: 11.5px; flex: none; }
 .pe-tabs { display: flex; gap: 4px; }
 .pe-tabs button { font: inherit; font-size: 11.5px; padding: 3px 10px; border-radius: 999px;
   border: 1px solid var(--border); background: var(--surface); color: var(--ink-soft); cursor: pointer; }
-.pe-tabs button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pe-tabs button.on { background: var(--accent-strong, var(--accent)); color: #fff; border-color: var(--accent); }
 .pe-preview { font-size: 13.5px; line-height: 1.55; border: 1px dashed var(--border); border-radius: 8px;
   padding: 10px 12px; overflow-wrap: break-word; }
 .pe-preview pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   padding: 8px; overflow: auto; font-size: 12px; }
 .pe-preview h1, .pe-preview h2, .pe-preview h3 { margin: 6px 0; }
-.pe-suggest { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px;
+.pe-suggest { border: 1px solid var(--accent); border-radius: 8px;
   padding: 8px 10px; font-size: 12.5px; display: flex; flex-direction: column; gap: 6px; }
 .pe-caps { display: flex; flex-direction: column; gap: 6px; }
 .pe-cap { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
 .pe-cap code { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
-.pe-errors { color: #ff9d9d; font-size: 12.5px; white-space: pre-wrap; }
-.pe-footer { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
-.pe-coming { color: var(--ink-soft); font-size: 11.5px; }
+.pe-errors { display: none; flex-direction: column; gap: 4px; border: 1px solid var(--danger, #ff9d9d);
+  border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; }
+.pe-errors.has-errors { display: flex; }
+.pe-errors .pe-error { font: inherit; font-size: 12.5px; color: var(--danger, #ff9d9d);
+  background: none; border: none; padding: 0; text-align: left; }
+.pe-errors button.pe-error { cursor: pointer; text-decoration: underline; }
+.pe-top .pe-grow { flex: 1; }
+.pe-quiet { display: flex; gap: 10px; align-items: center; margin-top: 22px; padding-top: 12px;
+  border-top: 1px solid var(--border); flex-wrap: wrap; }
+.pe-quiet .btn { font-size: 12px; padding: 4px 12px; }
+.pe-coming { color: var(--ink-soft); font-size: 12px; }
+.pe-advanced { border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; }
+.pe-advanced summary { cursor: pointer; font-size: 12px; color: var(--ink-soft); padding: 7px 0; }
+.pe-advanced[open] { padding-bottom: 10px; }
+.pe-advanced .pe-body { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.pe-loop-note { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; margin: 0; }
+.pe-loop-cost { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.pe-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.pe-view-tabs button { font: inherit; font-size: 12px; padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--ink-soft); cursor: pointer; }
+.pe-view-tabs button.on { background: var(--accent-strong, var(--accent)); color: #fff; border-color: var(--accent); }
+.pe-md { width: 100%; box-sizing: border-box; min-height: 480px; font-family: var(--mono);
+  font-size: 12.5px; background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 14px; padding: 14px; resize: vertical; }
 @media (max-width: 920px) {
   .pe-layout { flex-direction: column; }
   .pe-side { width: 100%; position: static; }
@@ -75,7 +104,7 @@ const STYLE = `
 .pe-skills { display: flex; gap: 6px; flex-wrap: wrap; }
 .pe-skill { font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
   cursor: pointer; color: var(--ink-soft); background: var(--surface); }
-.pe-skill.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pe-skill.on { background: var(--accent-strong, var(--accent)); border-color: var(--accent); color: #fff; }
 `;
 
 /** Plain-language capability copy (the editor face of the CLI's labels). */
@@ -104,6 +133,21 @@ const CAPABILITY_COPY: Readonly<Record<string, { what: string; why: string }>> =
   WRITE_VAULT: { what: "Store vault secrets", why: "Required by a pipeline step it launches." },
 };
 
+/**
+ * The autonomous (loop) step's plain-language face. The loop pipeline is the
+ * one target where Vesper authors every prompt itself, so the inspector trades
+ * the generic raw-param form for explained fields plus the cost projection the
+ * old standalone Loop section carried (author + execute + critic per round).
+ */
+const LOOP_TARGET = "loop";
+const LOOP_CALLS_PER_ROUND = 3;
+const LOOP_DEFAULT_ROUNDS = 8;
+const LOOP_MAX_ROUNDS = 50;
+const LOOP_PARAM_COPY: Readonly<Record<string, string>> = {
+  successCriteria: "Done when (optional)",
+  maxIterations: `Stop after how many rounds (default ${LOOP_DEFAULT_ROUNDS})`,
+};
+
 interface TargetInfo {
   readonly handlerId: string;
   readonly summary: string;
@@ -112,8 +156,19 @@ interface TargetInfo {
 }
 
 interface ModelsInfo {
-  readonly catalogIds: readonly string[];
+  readonly catalog: Readonly<
+    Record<string, { readonly cli: string; readonly flag?: string; readonly tier?: string }>
+  >;
   readonly clis: readonly string[];
+}
+
+/** One live-directory row (`GET /api/models/directory`). */
+interface DirectoryRow {
+  readonly flag: string;
+  readonly provider: string;
+  readonly cli: string;
+  readonly name: string;
+  readonly contextLength?: number;
 }
 
 interface StepState {
@@ -129,10 +184,6 @@ interface StepState {
   params: Record<string, string>;
 }
 
-interface StageState {
-  tasks: StepState[];
-}
-
 interface EditorState {
   id: string;
   isNew: boolean;
@@ -142,28 +193,70 @@ interface EditorState {
   orchestratorModel: string;
   orchestratorInstructions: string;
   memory: boolean;
-  stages: StageState[];
+  /** The DAG the canvas edits; levels become stages on serialize. */
+  steps: StepState[];
+  edges: FlowEdge[];
+  positions: Record<string, { x: number; y: number }>;
 }
 
 let stepCounter = 0;
-function freshStep(targets: readonly TargetInfo[]): StepState {
-  stepCounter += 1;
-  return {
-    kind: "prompt",
-    id: `step-${stepCounter}`,
-    title: "New step",
-    prompt: "",
-    skills: [],
-    command: "",
-    cli: "",
-    model: "",
-    target: targets[0]?.handlerId ?? "",
-    params: {},
-  };
+function freshStepId(taken: ReadonlySet<string>): string {
+  for (;;) {
+    stepCounter += 1;
+    const id = `step-${stepCounter}`;
+    if (!taken.has(id)) return id;
+  }
 }
 
-/** Serialize the editor state into a PipelineDoc the daemon validates. */
+/** Serialize the editor's DAG into a PipelineDoc (levels -> stages, edges -> after). */
 export function stateToDoc(state: EditorState): Record<string, unknown> {
+  const levels = levelGraph(
+    state.steps.map((s) => s.id),
+    state.edges,
+  );
+  const incoming = new Map<string, string[]>();
+  for (const edge of state.edges) {
+    incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge.from]);
+  }
+  const depth = levels === null ? 0 : Math.max(0, ...levels.values());
+  const stages: Record<string, unknown>[] = [];
+  for (let d = 0; d <= depth; d++) {
+    const tasks = state.steps
+      .filter((s) => (levels?.get(s.id) ?? 0) === d)
+      .map((step) => {
+        const after = [...(incoming.get(step.id) ?? [])].sort();
+        const base =
+          step.kind === "prompt"
+            ? {
+                kind: "prompt",
+                id: step.id,
+                title: step.title,
+                prompt: step.prompt,
+                ...(step.skills.length > 0 ? { skills: step.skills } : {}),
+                ...(step.command.trim().length > 0 ? { command: step.command.trim() } : {}),
+                ...(step.cli.length > 0 ? { cli: step.cli } : {}),
+                ...(step.model.length > 0 ? { model: step.model } : {}),
+              }
+            : {
+                kind: "pipeline",
+                id: step.id,
+                title: step.title,
+                target: step.target,
+                prompt: step.prompt,
+                ...(Object.keys(step.params).length > 0 ? { params: step.params } : {}),
+                ...(step.model.length > 0 ? { model: step.model } : {}),
+              };
+        return after.length > 0 ? { ...base, after } : base;
+      });
+    if (tasks.length > 0) stages.push({ tasks });
+  }
+
+  const layout: Record<string, { x: number; y: number }> = {};
+  for (const step of state.steps) {
+    const at = state.positions[step.id];
+    if (at !== undefined) layout[step.id] = { x: Math.round(at.x), y: Math.round(at.y) };
+  }
+
   return {
     v: 1,
     name: state.name,
@@ -176,68 +269,74 @@ export function stateToDoc(state: EditorState): Record<string, unknown> {
         : {}),
     },
     sharing: { mode: "piped", memory: state.memory },
-    stages: state.stages.map((stage) => ({
-      tasks: stage.tasks.map((step) =>
-        step.kind === "prompt"
-          ? {
-              kind: "prompt",
-              id: step.id,
-              title: step.title,
-              prompt: step.prompt,
-              ...(step.skills.length > 0 ? { skills: step.skills } : {}),
-              ...(step.command.trim().length > 0 ? { command: step.command.trim() } : {}),
-              ...(step.cli.length > 0 ? { cli: step.cli } : {}),
-              ...(step.model.length > 0 ? { model: step.model } : {}),
-            }
-          : {
-              kind: "pipeline",
-              id: step.id,
-              title: step.title,
-              target: step.target,
-              prompt: step.prompt,
-              ...(Object.keys(step.params).length > 0 ? { params: step.params } : {}),
-              ...(step.model.length > 0 ? { model: step.model } : {}),
-            },
-      ),
-    })),
+    stages,
+    ...(Object.keys(layout).length > 0 ? { layout } : {}),
   };
 }
 
-/** Hydrate editor state from a saved doc (tolerant — the daemon already validated it). */
+/** Auto-layout spacing for docs saved before the canvas existed (stage columns). */
+const COLUMN_W = 320;
+const ROW_H = 160;
+const MARGIN = 40;
+
+/** Hydrate editor state from a saved doc (tolerant — the daemon validated it). */
 function docToState(id: string, doc: Record<string, unknown>): EditorState {
   const asObj = (v: unknown): Record<string, unknown> =>
     typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
   const orchestrator = asObj(doc.orchestrator);
   const sharing = asObj(doc.sharing);
-  const stages: StageState[] = [];
-  if (Array.isArray(doc.stages)) {
-    for (const rawStage of doc.stages) {
-      const stage = asObj(rawStage);
-      const tasks: StepState[] = [];
-      if (Array.isArray(stage.tasks)) {
-        for (const rawTask of stage.tasks) {
-          const t = asObj(rawTask);
-          tasks.push({
-            kind: t.kind === "pipeline" ? "pipeline" : "prompt",
-            id: typeof t.id === "string" ? t.id : `step-${++stepCounter}`,
-            title: typeof t.title === "string" ? t.title : "Step",
-            prompt: typeof t.prompt === "string" ? t.prompt : "",
-            skills: Array.isArray(t.skills) ? t.skills.filter((s) => typeof s === "string") : [],
-            command: typeof t.command === "string" ? t.command : "",
-            cli: typeof t.cli === "string" ? t.cli : "",
-            model: typeof t.model === "string" ? t.model : "",
-            target: typeof t.target === "string" ? t.target : "",
-            params: Object.fromEntries(
-              Object.entries(asObj(t.params)).filter(
-                (entry): entry is [string, string] => typeof entry[1] === "string",
-              ),
-            ),
-          });
+  const layout = asObj(doc.layout);
+
+  const steps: StepState[] = [];
+  const edges: FlowEdge[] = [];
+  const positions: Record<string, { x: number; y: number }> = {};
+  const stages = Array.isArray(doc.stages) ? doc.stages : [];
+
+  stages.forEach((rawStage, stageIndex) => {
+    const stage = asObj(rawStage);
+    if (!Array.isArray(stage.tasks)) return;
+    stage.tasks.forEach((rawTask, slot) => {
+      const t = asObj(rawTask);
+      const stepId = typeof t.id === "string" ? t.id : `step-${++stepCounter}`;
+      steps.push({
+        kind: t.kind === "pipeline" ? "pipeline" : "prompt",
+        id: stepId,
+        title: typeof t.title === "string" ? t.title : "Step",
+        prompt: typeof t.prompt === "string" ? t.prompt : "",
+        skills: Array.isArray(t.skills) ? t.skills.filter((s) => typeof s === "string") : [],
+        command: typeof t.command === "string" ? t.command : "",
+        cli: typeof t.cli === "string" ? t.cli : "",
+        model: typeof t.model === "string" ? t.model : "",
+        target: typeof t.target === "string" ? t.target : "",
+        params: Object.fromEntries(
+          Object.entries(asObj(t.params)).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string",
+          ),
+        ),
+      });
+      const saved = asObj(layout[stepId]);
+      positions[stepId] =
+        typeof saved.x === "number" && typeof saved.y === "number"
+          ? { x: saved.x, y: saved.y }
+          : { x: MARGIN + stageIndex * COLUMN_W, y: MARGIN + slot * ROW_H };
+      if (Array.isArray(t.after)) {
+        for (const from of t.after) {
+          if (typeof from === "string") edges.push({ from, to: stepId });
+        }
+      } else if (stageIndex > 0) {
+        // Implicit piping: no explicit deps means "after the whole previous
+        // stage" (the interpreter's actual behavior).
+        const prevStage = asObj(stages[stageIndex - 1]);
+        if (Array.isArray(prevStage.tasks)) {
+          for (const prev of prevStage.tasks) {
+            const prevId = asObj(prev).id;
+            if (typeof prevId === "string") edges.push({ from: prevId, to: stepId });
+          }
         }
       }
-      stages.push({ tasks });
-    }
-  }
+    });
+  });
+
   return {
     id,
     isNew: false,
@@ -248,7 +347,9 @@ function docToState(id: string, doc: Record<string, unknown>): EditorState {
     orchestratorInstructions:
       typeof orchestrator.instructions === "string" ? orchestrator.instructions : "",
     memory: sharing.memory === true,
-    stages,
+    steps,
+    edges,
+    positions,
   };
 }
 
@@ -289,8 +390,7 @@ function textInput(
   el.type = "text";
   el.value = value;
   el.placeholder = placeholder;
-  // The placeholder doubles as the accessible name (every call site phrases it
-  // as a label, not an example value).
+  // The placeholder doubles as the accessible name (phrased as a label).
   el.setAttribute("aria-label", placeholder);
   el.addEventListener("input", () => onInput(el.value));
   return el;
@@ -356,7 +456,6 @@ function approvalModal(
       }
     };
     back.addEventListener("keydown", onKeydown);
-    // Clicking the dimmed backdrop (not the dialog) cancels.
     back.addEventListener("click", (e) => {
       if (e.target === back) close(null);
     });
@@ -394,6 +493,8 @@ function capabilityCards(capabilities: readonly string[]): HTMLElement {
 export interface PipelineEditorOptions {
   /** Existing pipeline id, or null for a new one. */
   readonly id: string | null;
+  /** Start a new pipeline from a preset instead of a blank prompt step. */
+  readonly preset?: "autonomous";
   /** Called when the editor closes (back/save/delete). */
   readonly onClose: () => void;
 }
@@ -408,21 +509,61 @@ export async function openPipelineEditor(
   host.replaceChildren();
 
   // ── data ──────────────────────────────────────────────────────────────
-  const [targets, models, skillNames] = await Promise.all([
+  const [targets, models, skillNames, directory] = await Promise.all([
     ctx.api.getJson<TargetInfo[]>("/api/pipelines/custom/targets").catch(() => []),
     ctx.api
-      .getJson<{ catalog: Record<string, { cli: string }> }>("/api/models")
+      .getJson<{ catalog: Record<string, { cli: string; flag?: string; tier?: string }> }>(
+        "/api/models",
+      )
       .then((body) => {
-        const catalogIds = Object.keys(body.catalog);
         const clis = [...new Set(Object.values(body.catalog).map((e) => e.cli))];
-        return { catalogIds, clis } satisfies ModelsInfo;
+        return { catalog: body.catalog, clis } satisfies ModelsInfo;
       })
-      .catch(() => ({ catalogIds: [], clis: [] }) satisfies ModelsInfo),
+      .catch(() => ({ catalog: {}, clis: [] }) satisfies ModelsInfo),
     ctx.api
       .getJson<Array<{ name: string }>>("/api/skills")
       .then((rows) => rows.map((r) => r.name))
       .catch(() => [] as string[]),
+    ctx.api
+      .getJson<{ available: boolean; models: DirectoryRow[] }>("/api/models/directory")
+      .then((body) => (body.available ? body.models : []))
+      .catch(() => [] as DirectoryRow[]),
   ]);
+
+  // Picker groups: the curated catalog first, then the live directory per
+  // provider (rows whose flag the catalog already covers are deduped away).
+  const catalogFlags = new Set(Object.values(models.catalog).map((e) => e.flag ?? ""));
+  const PROVIDER_TITLES: Readonly<Record<string, string>> = {
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+    google: "Google",
+  };
+  const modelGroups: ModelPickerGroup[] = [
+    {
+      title: "Vesper catalog",
+      entries: Object.entries(models.catalog).map(([id, entry]) => ({
+        value: id,
+        label: id,
+        ...(entry.tier !== undefined ? { meta: entry.tier } : {}),
+        cli: entry.cli,
+      })),
+    },
+    ...Object.entries(PROVIDER_TITLES)
+      .map(([provider, title]) => ({
+        title,
+        entries: directory
+          .filter((m) => m.provider === provider && !catalogFlags.has(m.flag))
+          .map((m) => ({
+            value: m.flag,
+            label: m.name,
+            ...(contextMeta(m.contextLength) !== undefined
+              ? { meta: contextMeta(m.contextLength) as string }
+              : {}),
+            cli: m.cli,
+          })),
+      }))
+      .filter((group) => group.entries.length > 0),
+  ].filter((group) => group.entries.length > 0);
 
   let state: EditorState;
   if (options.id !== null) {
@@ -437,25 +578,76 @@ export async function openPipelineEditor(
       return;
     }
   } else {
+    const id = freshStepId(new Set());
+    const autonomous = options.preset === "autonomous";
     state = {
       id: "",
       isNew: true,
-      name: "My pipeline",
+      name: autonomous ? "My autonomous pipeline" : "My pipeline",
       description: "",
       orchestratorEnabled: true,
       orchestratorModel: "",
       orchestratorInstructions: "",
       memory: false,
-      stages: [{ tasks: [freshStep(targets)] }],
+      steps: [
+        autonomous
+          ? {
+              kind: "pipeline",
+              id,
+              title: "Autonomous step",
+              prompt: "",
+              skills: [],
+              command: "",
+              cli: "",
+              model: "",
+              target: LOOP_TARGET,
+              params: {},
+            }
+          : {
+              kind: "prompt",
+              id,
+              title: "New step",
+              prompt: "",
+              skills: [],
+              command: "",
+              cli: "",
+              model: "",
+              target: "",
+              params: {},
+            },
+      ],
+      edges: [],
+      positions: { [id]: { x: 80, y: 80 } },
     };
   }
 
   // ── live validation (the capability summarizer) ───────────────────────
   const capsHost = h("div", { class: "pe-caps" });
-  const errorsHost = h("div", { class: "pe-errors" });
+  // Issues live beside the canvas (not inside the permissions panel) and gate
+  // Save, so nobody pays the approval ceremony for a doc the daemon will reject.
+  const errorsHost = h("div", { class: "pe-errors", role: "alert" });
+  let saveButton: HTMLButtonElement | null = null;
   let lastCapabilities: readonly string[] = [];
   let validateTimer: number | null = null;
   let dirty = false;
+  const renderErrors = (errors: readonly string[]): void => {
+    errorsHost.replaceChildren();
+    errorsHost.classList.toggle("has-errors", errors.length > 0);
+    for (const message of errors) {
+      const stepRef = state.steps.find((s) => message.includes(s.id));
+      if (stepRef === undefined) {
+        errorsHost.append(h("span", { class: "pe-error" }, message));
+        continue;
+      }
+      const jump = h("button", { class: "pe-error", type: "button" }, message);
+      jump.addEventListener("click", () => renderInspector(stepRef.id));
+      errorsHost.append(jump);
+    }
+    if (saveButton !== null) {
+      saveButton.disabled = errors.length > 0;
+      saveButton.title = errors.length > 0 ? "Fix the issues listed by the canvas first" : "";
+    }
+  };
   const revalidate = (): void => {
     dirty = true;
     if (validateTimer !== null) window.clearTimeout(validateTimer);
@@ -474,7 +666,7 @@ export async function openPipelineEditor(
               h("div", { class: "pe-cap" }, h("span", {}, copy?.what ?? cap), h("code", {}, cap)),
             );
           }
-          errorsHost.textContent = outcome.ok ? "" : outcome.errors.join("\n");
+          renderErrors(outcome.ok ? [] : outcome.errors);
         })
         .catch(() => {});
     }, 350);
@@ -483,96 +675,164 @@ export async function openPipelineEditor(
     if (validateTimer !== null) window.clearTimeout(validateTimer);
   });
 
-  // ── step card ─────────────────────────────────────────────────────────
-  const modelOptions = [
-    { value: "", label: "model: default" },
-    ...models.catalogIds.map((id) => ({ value: id, label: `model: ${id}` })),
-  ];
   const cliOptions = [
     { value: "", label: "cli: default" },
     ...models.clis.map((c) => ({ value: c, label: `cli: ${c}` })),
   ];
 
-  function stepCard(step: StepState, stage: StageState): HTMLElement {
-    const card = h("div", { class: "pe-card" });
+  const nodeView = (step: StepState): FlowNodeView => ({
+    id: step.id,
+    title: step.title,
+    kind: step.kind,
+    ...(step.kind === "pipeline" && step.target === LOOP_TARGET ? { kindLabel: "autonomous" } : {}),
+    badge:
+      step.kind === "pipeline"
+        ? step.target === LOOP_TARGET
+          ? `writes its own prompts${step.model.length > 0 ? ` · ${step.model}` : ""}`
+          : `runs ${step.target}${step.model.length > 0 ? ` · ${step.model}` : ""}`
+        : [step.cli, step.model].filter((v) => v.length > 0).join(" · ") || "default routing",
+  });
+
+  // ── inspector (the ONLY place a step's full form appears) ─────────────
+  const inspector = h("div", { class: "pe-inspector" });
+  let canvas: FlowCanvasHandle | null = null;
+
+  function renderInspector(stepId: string | null): void {
+    inspector.replaceChildren();
+    const step = state.steps.find((s) => s.id === stepId);
+    if (step === undefined) {
+      inspector.append(
+        h(
+          "p",
+          { class: "pe-empty" },
+          "Select a step on the canvas to edit it — or drag a new one in from the left.",
+        ),
+      );
+      return;
+    }
+
+    const title = textInput(step.title, "step title", (v) => {
+      step.title = v;
+      canvas?.updateNode(nodeView(step));
+      revalidate();
+    });
 
     const remove = h(
       "button",
-      { class: "btn", type: "button", title: "Remove step", "aria-label": "Remove step" },
-      "✕",
+      { class: "btn", type: "button", "aria-label": `Remove step ${step.title}` },
+      "Remove step",
     );
     remove.addEventListener("click", () => {
-      stage.tasks = stage.tasks.filter((t) => t !== step);
-      if (stage.tasks.length === 0) state.stages = state.stages.filter((s) => s !== stage);
-      renderRail();
+      state.steps = state.steps.filter((s) => s !== step);
+      state.edges = state.edges.filter((e) => e.from !== step.id && e.to !== step.id);
+      delete state.positions[step.id];
+      mountCanvas(); // rebuild the canvas without the node
+      renderInspector(null);
       revalidate();
     });
-    const kindSelect = select(
-      "step kind",
-      step.kind,
-      [
-        { value: "prompt", label: "prompt step" },
-        { value: "pipeline", label: "pipeline step" },
-      ],
-      (value) => {
-        step.kind = value === "pipeline" ? "pipeline" : "prompt";
-        renderRail();
-        revalidate();
-      },
-    );
-    card.append(
-      h(
-        "div",
-        { class: "pe-row" },
-        textInput(step.title, "step title", (v) => {
-          step.title = v;
-          revalidate();
-        }),
-        kindSelect,
-        remove,
-      ),
-    );
+
+    inspector.append(h("div", { class: "pe-row" }, title, remove));
 
     if (step.kind === "pipeline") {
       const target = targets.find((t) => t.handlerId === step.target) ?? targets[0];
       if (step.target.length === 0 && target !== undefined) step.target = target.handlerId;
-      card.append(
+      const isLoop = step.target === LOOP_TARGET;
+      inspector.append(
         select(
           "pipeline to run",
           step.target,
-          targets.map((t) => ({ value: t.handlerId, label: `runs: ${t.handlerId}` })),
+          targets.map((t) => ({
+            value: t.handlerId,
+            label:
+              t.handlerId === LOOP_TARGET
+                ? "autonomous: Vesper writes the prompts"
+                : `runs: ${t.handlerId}`,
+          })),
           (value) => {
             step.target = value;
             step.params = {};
-            renderRail();
+            if (value === LOOP_TARGET && step.title === `Run ${LOOP_TARGET}`) {
+              step.title = "Autonomous step";
+            }
+            canvas?.updateNode(nodeView(step));
+            renderInspector(step.id);
             revalidate();
           },
         ),
       );
+      if (isLoop) {
+        inspector.append(
+          h(
+            "p",
+            { class: "pe-loop-note" },
+            "Vesper writes every prompt itself: each round it authors the next prompt, " +
+              "runs it, and a critic checks the progress. It stops when the goal is met, " +
+              "when it stalls, or at the round cap — and it can only think " +
+              "(no files, network, or messages).",
+          ),
+        );
+      }
+      const cost = isLoop ? h("span", { class: "pe-loop-cost", "aria-live": "polite" }, "") : null;
+      const updateCost = (): void => {
+        if (cost === null) return;
+        const raw = Number(step.params.maxIterations);
+        const rounds =
+          Number.isInteger(raw) && raw > 0 ? Math.min(LOOP_MAX_ROUNDS, raw) : LOOP_DEFAULT_ROUNDS;
+        cost.textContent = `up to ~${rounds * LOOP_CALLS_PER_ROUND} calls to your AI helper — your own quota`;
+      };
       for (const key of target?.paramKeys ?? []) {
-        card.append(
+        const label = isLoop ? (LOOP_PARAM_COPY[key] ?? key) : key;
+        inspector.append(
           h(
             "div",
             { class: "pe-row" },
-            h("label", {}, key),
-            textInput(step.params[key] ?? "", `optional ${key}`, (v) => {
+            h("label", {}, label),
+            textInput(step.params[key] ?? "", isLoop ? label : `optional ${key}`, (v) => {
               if (v.length > 0) step.params[key] = v;
               else delete step.params[key];
+              if (key === "maxIterations") updateCost();
               revalidate();
             }),
           ),
         );
       }
+      if (cost !== null) {
+        updateCost();
+        inspector.append(cost);
+      }
       if (target?.acceptsModel === true) {
-        card.append(
-          select("model", step.model, modelOptions, (v) => {
-            step.model = v;
-            revalidate();
-          }),
+        inspector.append(
+          createModelPicker({
+            label: "model",
+            value: step.model,
+            defaultLabel: "model: default",
+            groups: modelGroups,
+            onChange: (entry) => {
+              step.model = entry.value;
+              canvas?.updateNode(nodeView(step));
+              revalidate();
+            },
+          }).el,
         );
       }
     } else {
-      // Skills chips (toggle), command prefix, cli + model routing.
+      // Skills, command prefix, and cli/model routing are advanced options the
+      // first prompt step never needs — one disclosure with a live summary
+      // keeps the inspector to title + prompt by default.
+      const advanced = h("details", { class: "pe-advanced" }) as HTMLDetailsElement;
+      const advancedSummary = h("summary", {}, "");
+      const advancedBody = h("div", { class: "pe-body" });
+      const summarize = (): void => {
+        const routing =
+          [step.cli, step.model].filter((v) => v.length > 0).join(" · ") || "default routing";
+        const extras = [
+          step.skills.length > 0
+            ? `${step.skills.length} skill${step.skills.length === 1 ? "" : "s"}`
+            : null,
+          step.command.trim().length > 0 ? `command ${step.command.trim()}` : null,
+        ].filter((v): v is string => v !== null);
+        advancedSummary.textContent = `Advanced — ${[routing, ...extras].join(" · ")}`;
+      };
       if (skillNames.length > 0) {
         const chips = h("div", { class: "pe-skills" });
         for (const name of skillNames) {
@@ -591,18 +851,20 @@ export async function openPipelineEditor(
               : [...step.skills, name];
             chip.classList.toggle("on");
             chip.setAttribute("aria-pressed", chip.classList.contains("on") ? "true" : "false");
+            summarize();
             revalidate();
           });
           chips.append(chip);
         }
-        card.append(h("div", { class: "pe-row" }, h("label", {}, "skills"), chips));
+        advancedBody.append(h("div", { class: "pe-row" }, h("label", {}, "skills"), chips));
       }
-      card.append(
+      advancedBody.append(
         h(
           "div",
           { class: "pe-row" },
           textInput(step.command, "command prefix (e.g. /spec) — optional", (v) => {
             step.command = v;
+            summarize();
             revalidate();
           }),
         ),
@@ -611,40 +873,60 @@ export async function openPipelineEditor(
           { class: "pe-row" },
           select("cli", step.cli, cliOptions, (v) => {
             step.cli = v;
+            canvas?.updateNode(nodeView(step));
+            summarize();
             revalidate();
           }),
-          select("model", step.model, modelOptions, (v) => {
-            step.model = v;
-            revalidate();
-          }),
+          createModelPicker({
+            label: "model",
+            value: step.model,
+            defaultLabel: "model: default",
+            groups: modelGroups,
+            onChange: (entry) => {
+              step.model = entry.value;
+              canvas?.updateNode(nodeView(step));
+              summarize();
+              revalidate();
+            },
+          }).el,
         ),
       );
+      summarize();
+      advanced.append(advancedSummary, advancedBody);
+      inspector.append(advanced);
     }
 
     // Prompt editor with Write / Preview tabs (markdown).
     const textarea = document.createElement("textarea");
     textarea.value = step.prompt;
+    textarea.setAttribute("aria-label", "step prompt (markdown)");
     textarea.placeholder =
       step.kind === "prompt"
-        ? "The prompt (markdown). Reference earlier results with {{stages.1.<id>.result}}"
-        : "The prompt delivered to the pipeline you picked";
+        ? "The prompt (markdown). Reference an incoming step with {{steps.<id>.result}}"
+        : step.target === LOOP_TARGET
+          ? "What should it work toward? e.g. Draft a launch plan for…"
+          : "The prompt delivered to the pipeline this step runs";
     textarea.addEventListener("input", () => {
       step.prompt = textarea.value;
       revalidate();
     });
     const preview = h("div", { class: "pe-preview" });
     preview.style.display = "none";
-    const writeTab = h("button", { class: "on", type: "button" }, "Write");
-    const previewTab = h("button", { type: "button" }, "Preview");
+    const writeTab = h("button", { class: "on", type: "button", "aria-pressed": "true" }, "Write");
+    const previewTab = h("button", { type: "button", "aria-pressed": "false" }, "Preview");
     writeTab.addEventListener("click", () => {
       writeTab.classList.add("on");
+      writeTab.setAttribute("aria-pressed", "true");
       previewTab.classList.remove("on");
+      previewTab.setAttribute("aria-pressed", "false");
       preview.style.display = "none";
       textarea.style.display = "";
     });
     previewTab.addEventListener("click", () => {
       previewTab.classList.add("on");
+      previewTab.setAttribute("aria-pressed", "true");
       writeTab.classList.remove("on");
+      writeTab.setAttribute("aria-pressed", "false");
       preview.innerHTML = renderMarkdown(step.prompt);
       preview.style.display = "";
       textarea.style.display = "none";
@@ -684,7 +966,8 @@ export async function openPipelineEditor(
             }
             if (suggestion.cli !== undefined) step.cli = suggestion.cli;
             if (suggestion.model !== undefined) step.model = suggestion.model;
-            renderRail();
+            canvas?.updateNode(nodeView(step));
+            renderInspector(step.id);
             revalidate();
           });
           suggestHost.replaceChildren(
@@ -715,7 +998,7 @@ export async function openPipelineEditor(
         });
     });
 
-    card.append(
+    inspector.append(
       h(
         "div",
         { class: "pe-row" },
@@ -726,64 +1009,158 @@ export async function openPipelineEditor(
       preview,
       suggestHost,
     );
-    return card;
   }
 
-  // ── the stage rail ────────────────────────────────────────────────────
-  const rail = h("div", { class: "pe-rail" });
-  function renderRail(): void {
-    rail.replaceChildren();
-    state.stages.forEach((stage, index) => {
-      const cards = h("div", { class: "pe-cards" });
-      for (const step of stage.tasks) cards.append(stepCard(step, stage));
+  // ── the canvas ────────────────────────────────────────────────────────
+  const canvasMount = h("div", {});
 
-      const addStep = h("button", { class: "btn", type: "button" }, "+ parallel step");
-      addStep.addEventListener("click", () => {
-        stage.tasks.push(freshStep(targets));
-        renderRail();
+  function mountCanvas(): void {
+    canvas?.destroy();
+    canvasMount.replaceChildren();
+    canvas = createFlowCanvas(canvasMount, {
+      nodes: state.steps.map(nodeView),
+      edges: state.edges,
+      positions: state.positions,
+      palette: [
+        { key: "prompt", label: "Prompt step", caption: "You write the prompt." },
+        ...targets
+          .filter((t) => t.handlerId === LOOP_TARGET)
+          .map(() => ({
+            key: `pipeline:${LOOP_TARGET}`,
+            label: "Autonomous step",
+            caption: "Vesper writes every prompt itself and stops when the goal is met.",
+            featured: true,
+          })),
+        ...targets
+          .filter((t) => t.handlerId !== LOOP_TARGET)
+          .map((t) => ({ key: `pipeline:${t.handlerId}`, label: `Run ${t.handlerId}` })),
+      ],
+      onSelect: (stepId) => renderInspector(stepId),
+      onAdd: (key, at) => {
+        const id = freshStepId(new Set(state.steps.map((s) => s.id)));
+        const isPipeline = key.startsWith("pipeline:");
+        const targetId = isPipeline ? key.slice("pipeline:".length) : "";
+        const step: StepState = {
+          kind: isPipeline ? "pipeline" : "prompt",
+          id,
+          title: isPipeline
+            ? targetId === LOOP_TARGET
+              ? "Autonomous step"
+              : `Run ${targetId}`
+            : "New step",
+          prompt: "",
+          skills: [],
+          command: "",
+          cli: "",
+          model: "",
+          target: targetId,
+          params: {},
+        };
+        state.steps.push(step);
+        state.positions[id] = at;
+        canvas?.addNode(nodeView(step), at);
+        renderInspector(id);
         revalidate();
-      });
-      const removeStage = h("button", { class: "btn", type: "button" }, "remove stage");
-      removeStage.addEventListener("click", () => {
-        state.stages = state.stages.filter((s) => s !== stage);
-        renderRail();
+      },
+      onEdgesChange: (edges) => {
+        state.edges = [...edges];
         revalidate();
-      });
-      rail.append(
-        h(
-          "div",
-          { class: "pe-stage" },
-          h(
-            "div",
-            { class: "pe-stage-head" },
-            h("span", { class: "t" }, `Stage ${index + 1}`),
-            h("span", { class: "hint" }, "steps in a stage run at the same time"),
-            addStep,
-            state.stages.length > 1 ? removeStage : null,
-          ),
-          cards,
-        ),
-      );
+      },
+      onMove: (stepId, at) => {
+        state.positions[stepId] = at;
+        revalidate();
+      },
+      onRemove: (stepId) => {
+        state.steps = state.steps.filter((s) => s.id !== stepId);
+        state.edges = state.edges.filter((e) => e.from !== stepId && e.to !== stepId);
+        delete state.positions[stepId];
+        renderInspector(null);
+        revalidate();
+      },
+      toast: (message) => ctx.toast(message),
     });
-    const addStage = h("button", { class: "btn", type: "button" }, "+ stage (runs after)");
-    addStage.addEventListener("click", () => {
-      state.stages.push({ tasks: [freshStep(targets)] });
-      renderRail();
-      revalidate();
-    });
-    rail.append(addStage);
   }
+
+  // ── the Markdown view (the whole pipeline as ONE document) ────────────
+  const mdArea = document.createElement("textarea");
+  mdArea.className = "pe-md";
+  mdArea.setAttribute("aria-label", "pipeline as markdown");
+  mdArea.style.display = "none";
+  mdArea.addEventListener("input", () => {
+    dirty = true;
+  });
+  const canvasTab = h("button", { type: "button", class: "on", "aria-pressed": "true" }, "Canvas");
+  const mdTab = h("button", { type: "button", "aria-pressed": "false" }, "Markdown");
+  const setViewTab = (md: boolean): void => {
+    canvasTab.classList.toggle("on", !md);
+    canvasTab.setAttribute("aria-pressed", md ? "false" : "true");
+    mdTab.classList.toggle("on", md);
+    mdTab.setAttribute("aria-pressed", md ? "true" : "false");
+  };
+  mdTab.addEventListener("click", () => {
+    void ctx.api
+      .postJson<{ markdown?: string; error?: string }>("/api/pipelines/custom/markdown/serialize", {
+        doc: stateToDoc(state),
+      })
+      .then((body) => {
+        if (body.markdown === undefined) {
+          ctx.toast(body.error ?? "fix the validation errors first");
+          return;
+        }
+        mdArea.value = body.markdown;
+        canvasMount.style.display = "none";
+        inspector.style.display = "none";
+        mdArea.style.display = "";
+        setViewTab(true);
+      })
+      .catch((err: unknown) => ctx.toast(err instanceof Error ? err.message : "serialize failed"));
+  });
+  canvasTab.addEventListener("click", () => {
+    if (mdArea.style.display === "none") return;
+    void ctx.api
+      .postJson<{ ok: boolean; doc?: Record<string, unknown>; errors?: string[] }>(
+        "/api/pipelines/custom/markdown",
+        { source: mdArea.value },
+      )
+      .then((body) => {
+        if (!body.ok || body.doc === undefined) {
+          ctx.toast(body.errors?.join("; ") ?? "the markdown is not valid");
+          return;
+        }
+        const hydrated = docToState(state.id, body.doc);
+        state.name = hydrated.name;
+        state.description = hydrated.description;
+        state.orchestratorEnabled = hydrated.orchestratorEnabled;
+        state.orchestratorModel = hydrated.orchestratorModel;
+        state.orchestratorInstructions = hydrated.orchestratorInstructions;
+        state.memory = hydrated.memory;
+        state.steps = hydrated.steps;
+        state.edges = hydrated.edges;
+        state.positions = hydrated.positions;
+        nameInput.value = state.name;
+        descriptionInput.value = state.description;
+        mountCanvas();
+        renderInspector(null);
+        mdArea.style.display = "none";
+        canvasMount.style.display = "";
+        inspector.style.display = "";
+        setViewTab(false);
+        revalidate();
+      })
+      .catch((err: unknown) => ctx.toast(err instanceof Error ? err.message : "parse failed"));
+  });
 
   // ── sidebar: how it runs + permissions ────────────────────────────────
-  const orchestratorModelSelect = select(
-    "orchestrator model",
-    state.orchestratorModel,
-    [{ value: "", label: "model: best available (benchmarks)" }, ...modelOptions.slice(1)],
-    (v) => {
-      state.orchestratorModel = v;
+  const orchestratorModelPicker = createModelPicker({
+    label: "orchestrator model",
+    value: state.orchestratorModel,
+    defaultLabel: "best available",
+    groups: modelGroups,
+    onChange: (entry) => {
+      state.orchestratorModel = entry.value;
       revalidate();
     },
-  );
+  });
   const orchestratorToggle = h("input", { type: "checkbox" }) as HTMLInputElement;
   orchestratorToggle.checked = state.orchestratorEnabled;
   orchestratorToggle.addEventListener("change", () => {
@@ -798,6 +1175,7 @@ export async function openPipelineEditor(
   });
   const instructions = document.createElement("textarea");
   instructions.value = state.orchestratorInstructions;
+  instructions.setAttribute("aria-label", "standing guidance for the orchestrator");
   instructions.placeholder = "standing guidance for the orchestrator (optional)";
   instructions.addEventListener("input", () => {
     state.orchestratorInstructions = instructions.value;
@@ -814,7 +1192,7 @@ export async function openPipelineEditor(
       h(
         "p",
         { class: "muted" },
-        "Stages run in order; steps inside a stage run at the same time. Each stage sees the previous stage's results.",
+        "Connected steps run in order — an arrow means the next step receives the result. Unconnected steps run at the same time.",
       ),
       h(
         "label",
@@ -823,16 +1201,20 @@ export async function openPipelineEditor(
         h(
           "span",
           { class: "pe-mini" },
-          "Orchestrator: Vesper rewrites each stage's prompts from the results so far",
+          "Orchestrator: Vesper rewrites downstream prompts from the results so far",
         ),
       ),
-      orchestratorModelSelect,
-      instructions,
+      h(
+        "details",
+        { class: "pe-advanced" },
+        h("summary", {}, "Orchestrator settings"),
+        h("div", { class: "pe-body" }, orchestratorModelPicker.el, instructions),
+      ),
       h(
         "label",
         { class: "pe-row", style: "margin-top:8px" },
         memoryToggle,
-        h("span", { class: "pe-mini" }, "Ground the first stage in your semantic memory"),
+        h("span", { class: "pe-mini" }, "Ground the first steps in your semantic memory"),
       ),
     ),
     h(
@@ -845,7 +1227,6 @@ export async function openPipelineEditor(
         "Derived from the steps — you cannot grant more than the pipeline uses.",
       ),
       capsHost,
-      errorsHost,
     ),
   );
 
@@ -873,6 +1254,7 @@ export async function openPipelineEditor(
   });
 
   const save = h("button", { class: "btn primary", type: "button" }, "Save pipeline");
+  saveButton = save as HTMLButtonElement;
   save.addEventListener("click", () => {
     if (state.isNew) state.id = slugify(state.name);
     if (state.id.length === 0) {
@@ -937,14 +1319,15 @@ export async function openPipelineEditor(
           panel.append(h("p", { class: "muted" }, `warning: ${warning}`));
         }
         for (const suggestion of proposal.steps) {
-          const step = state.stages.flatMap((s) => s.tasks).find((t) => t.id === suggestion.id);
+          const step = state.steps.find((t) => t.id === suggestion.id);
           if (step === undefined) continue;
           const apply = h("button", { class: "btn", type: "button" }, `Apply to "${step.title}"`);
           apply.addEventListener("click", () => {
             if (suggestion.prompt !== undefined) step.prompt = suggestion.prompt;
             if (suggestion.cli !== undefined) step.cli = suggestion.cli;
             if (suggestion.model !== undefined) step.model = suggestion.model;
-            renderRail();
+            canvas?.updateNode(nodeView(step));
+            renderInspector(step.id);
             revalidate();
             ctx.toast(`Applied to "${step.title}" — review and save`);
           });
@@ -968,12 +1351,18 @@ export async function openPipelineEditor(
           );
           applyOrch.addEventListener("click", () => {
             state.orchestratorModel = proposal.orchestratorModel ?? "";
-            orchestratorModelSelect.value = state.orchestratorModel;
+            orchestratorModelPicker.set(state.orchestratorModel);
             revalidate();
           });
           panel.append(applyOrch);
         }
         improveHost.replaceChildren(panel);
+        panel.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? "auto"
+            : "smooth",
+          block: "nearest",
+        });
       })
       .catch((err: unknown) => ctx.toast(err instanceof Error ? err.message : "improve failed"))
       .finally(() => {
@@ -1000,6 +1389,7 @@ export async function openPipelineEditor(
           .then((res) => {
             if (!res.ok) throw new Error(`delete failed (HTTP ${res.status})`);
             ctx.toast("Archived");
+            dirty = false;
             options.onClose();
           })
           .catch((err: unknown) => ctx.toast(err instanceof Error ? err.message : "delete failed"));
@@ -1013,22 +1403,46 @@ export async function openPipelineEditor(
     "Cross-share",
   );
 
-  host.append(
-    h("div", { class: "pe-top" }, back, nameInput, idLabel),
-    h("div", { class: "pe-top" }, descriptionInput),
-    h("div", { class: "pe-layout" }, rail, side),
+  const main = h(
+    "div",
+    { class: "pe-main" },
     h(
       "div",
-      { class: "pe-footer" },
-      save,
+      { class: "pe-view-tabs", role: "group", "aria-label": "editor view" },
+      canvasTab,
+      mdTab,
+    ),
+    errorsHost,
+    canvasMount,
+    mdArea,
+    inspector,
+  );
+  // Save lives in the top bar (the document-editor convention); the quiet row
+  // at the very bottom holds only the rare intents, away from the commit action.
+  host.append(
+    h(
+      "div",
+      { class: "pe-top" },
+      back,
+      nameInput,
+      idLabel,
+      h("span", { class: "pe-grow" }),
       improve,
+      save,
+    ),
+    h("div", { class: "pe-top" }, descriptionInput),
+    h("div", { class: "pe-layout" }, main, side),
+    improveHost,
+    h(
+      "div",
+      { class: "pe-quiet" },
       state.isNew ? null : del,
       crossShare,
       h("span", { class: "pe-coming" }, "coming soon"),
     ),
-    improveHost,
   );
-  renderRail();
+  mountCanvas();
+  renderInspector(state.steps[0]?.id ?? null);
   revalidate();
   dirty = false;
 }

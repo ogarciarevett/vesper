@@ -28,6 +28,8 @@ const STYLE = `
 .pl-params { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .pl-params input { font: inherit; font-size: 12.5px; background: var(--surface-2); color: var(--ink);
   border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; }
+.pl-prompt-entry summary { cursor: pointer; font-size: 12.5px; font-weight: 600; padding: 4px 0; }
+.pl-prompt-entry .pl-prompt { margin: 4px 0 8px; }
 `;
 
 interface CustomRow {
@@ -111,8 +113,18 @@ function customCard(ctx: SectionContext, row: CustomRow, onEdit: () => void): HT
   );
 }
 
-/** Card for one built-in pipeline: Run (params prefilled from the template) + template. */
-function builtinCard(ctx: SectionContext, p: PipelineConfig): HTMLElement {
+/** What a built-in accepts when run (from the orchestration contract, when it has one). */
+interface RunShape {
+  readonly promptParam?: string;
+  readonly paramKeys: readonly string[];
+}
+
+/** Card for one built-in pipeline: Run (params from contract + template) + template. */
+function builtinCard(
+  ctx: SectionContext,
+  p: PipelineConfig,
+  shape: RunShape | undefined,
+): HTMLElement {
   const slot = h("div", {});
   const result = h("div", {});
   let template: PipelineTemplate | null = null;
@@ -129,15 +141,28 @@ function builtinCard(ctx: SectionContext, p: PipelineConfig): HTMLElement {
         .getJson<PipelineTemplate>(`/api/pipelines/${encodeURIComponent(p.id)}/template`)
         .catch(() => null);
       const defaults = template?.defaultParams ?? {};
-      const keys = Object.keys(defaults);
       if (paramsHost.firstChild !== null) {
         paramsHost.replaceChildren();
+        return;
+      }
+      // The real inputs come from the pipeline's orchestration contract (its
+      // prompt param first), merged with any template defaults. A pipeline that
+      // declares none (e.g. benchmark-ingest) runs immediately — no empty form.
+      const rows = [
+        ...new Set([
+          ...(shape?.promptParam !== undefined ? [shape.promptParam] : []),
+          ...(shape?.paramKeys ?? []),
+          ...(p.id === "router" ? ["message"] : []),
+          ...Object.keys(defaults),
+        ]),
+      ];
+      if (rows.length === 0) {
+        runTask(ctx, p.id, {}, run, result);
         return;
       }
       // A tiny k=v form prefilled from the template; empty values are dropped.
       const inputs = new Map<string, HTMLInputElement>();
       const form = h("div", { class: "pl-params" });
-      const rows = keys.length > 0 ? keys : ["message"];
       for (const key of rows) {
         const input = h("input", {
           type: "text",
@@ -182,7 +207,39 @@ function builtinCard(ctx: SectionContext, p: PipelineConfig): HTMLElement {
           caps.append(h("span", { class: "muted" }, "no capabilities"));
         for (const cap of template.config.requiredCapabilities)
           caps.append(h("span", { class: "badge" }, cap));
-        slot.replaceChildren(h("div", {}, h("pre", { class: "pl-prompt" }, template.prompt), caps));
+        // Prefer the editable template row; otherwise show the built-in's REAL
+        // prompt catalog (read-only, {{...}} = dynamic parts). Only a pipeline
+        // with neither gets the honest empty note.
+        const prompts = template.prompts ?? [];
+        let promptBlock: HTMLElement;
+        if (template.prompt.trim().length > 0) {
+          promptBlock = h("pre", { class: "pl-prompt" }, template.prompt);
+        } else if (prompts.length > 0) {
+          promptBlock = h(
+            "div",
+            {},
+            h(
+              "p",
+              { class: "muted" },
+              "The real prompts this pipeline sends — read-only; {{...}} marks the parts filled in per run.",
+            ),
+            ...prompts.map((entry) =>
+              h(
+                "details",
+                { class: "pl-prompt-entry" },
+                h("summary", {}, entry.name),
+                h("pre", { class: "pl-prompt" }, entry.template),
+              ),
+            ),
+          );
+        } else {
+          promptBlock = h(
+            "p",
+            { class: "empty-note" },
+            "This pipeline's behavior is built into Vesper itself — there is no editable prompt template (yet). Your own pipelines are fully editable.",
+          );
+        }
+        slot.replaceChildren(h("div", {}, promptBlock, caps));
         viewBtn.textContent = "Hide template";
       } catch (err) {
         slot.replaceChildren(
@@ -231,7 +288,25 @@ export const pipelinesSection: SectionModule = {
       newBtn.addEventListener("click", () => {
         void openPipelineEditor(host, ctx, { id: null, onClose: () => void renderList() });
       });
-      host.append(h("div", { class: "pl-actions", style: "margin-bottom: 14px" }, newBtn));
+      const autonomousBtn = h(
+        "button",
+        {
+          class: "btn",
+          type: "button",
+          title: "Vesper writes every prompt itself and stops when the goal is met",
+        },
+        "Start autonomous — you set the goal",
+      );
+      autonomousBtn.addEventListener("click", () => {
+        void openPipelineEditor(host, ctx, {
+          id: null,
+          preset: "autonomous",
+          onClose: () => void renderList(),
+        });
+      });
+      host.append(
+        h("div", { class: "pl-actions", style: "margin-bottom: 14px" }, newBtn, autonomousBtn),
+      );
 
       const yours = h("div", {});
       const builtins = h("div", {});
@@ -278,9 +353,19 @@ export const pipelinesSection: SectionModule = {
       }
 
       try {
-        const pipelines = await ctx.api.getJson<PipelineConfig[]>("/api/pipelines");
+        const [pipelines, targets] = await Promise.all([
+          ctx.api.getJson<PipelineConfig[]>("/api/pipelines"),
+          ctx.api
+            .getJson<Array<{ handlerId: string; promptParam: string; paramKeys: string[] }>>(
+              "/api/pipelines/custom/targets",
+            )
+            .catch(() => []),
+        ]);
+        const shapes = new Map(
+          targets.map((t) => [t.handlerId, { promptParam: t.promptParam, paramKeys: t.paramKeys }]),
+        );
         for (const p of pipelines.filter((row) => !row.id.startsWith("custom:"))) {
-          builtins.append(builtinCard(ctx, p));
+          builtins.append(builtinCard(ctx, p, shapes.get(p.handlerId)));
         }
       } catch (err) {
         builtins.append(

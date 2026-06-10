@@ -7,6 +7,13 @@ import {
   type SectionContext,
   type SectionModule,
 } from "../shell/section.ts";
+import {
+  type SpeechRecognitionLike,
+  speakText,
+  speechRecognitionCtor,
+  stopSpeaking,
+  stripForSpeech,
+} from "../shell/speech.ts";
 import { ActivityRail } from "./activity-rail.ts";
 
 const CHAT_CSS = `
@@ -37,6 +44,14 @@ const CHAT_CSS = `
   .chat-send { flex: none; min-height: 48px; padding: 0 22px; border: none; border-radius: 14px; font: inherit; font-size: 15px; font-weight: 700; color: #fff; background: var(--accent); cursor: pointer; box-shadow: 0 8px 22px rgba(124, 92, 255, 0.3); }
   .chat-send:hover { background: var(--accent-2); }
   .chat-send:disabled { opacity: 0.5; cursor: default; }
+  .chat-voice-btn { flex: none; width: 48px; height: 48px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .chat-voice-btn svg { width: 20px; height: 20px; }
+  .chat-voice-btn:hover { border-color: var(--accent); }
+  .chat-voice-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .chat-voice-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--surface-strong); }
+  .chat-voice-btn.listening { color: #fff; background: var(--accent); border-color: var(--accent); animation: chat-mic-pulse 1.4s ease-in-out infinite; }
+  @keyframes chat-mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(124, 92, 255, 0.45); } 50% { box-shadow: 0 0 0 9px rgba(124, 92, 255, 0); } }
+  @media (prefers-reduced-motion: reduce) { .chat-voice-btn.listening { animation: none; box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.35); } }
   .chat-rail { width: 336px; flex: none; border-left: 1px solid var(--border); background: var(--sidebar-bg); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); padding: 18px 16px; }
   @media (max-width: 920px) { .chat-rail { display: none; } }
   .chat-suggest { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
@@ -48,6 +63,13 @@ const CHAT_CSS = `
 
 const MARK =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l1.8 6.4L20 12l-6.2 1.8L12 22l-1.8-8.2L4 12l6.2-3.6L12 2z" fill="currentColor"/></svg>';
+
+/** Speaker glyph for the "Voice replies" toggle (matches the shell's line-icon idiom). */
+const SPEAKER =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6.5 9H3v6h3.5L11 19V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a9 9 0 0 1 0 12"/></svg>';
+
+/** localStorage key for the per-browser "Voice replies" preference (default off). */
+const SPEAK_REPLIES_KEY = "vesper.chat.speakReplies";
 
 interface RenderedTurn {
   readonly role: ChatTurnRow["role"];
@@ -75,6 +97,17 @@ class ChatSection {
   #streamRow: HTMLElement | null = null;
   readonly #seen = new Map<string, RenderedTurn>();
 
+  // --- Voice (mic input + spoken replies) — lives IN the composer. -----------------------
+  /** "Voice replies" preference (persisted per browser; default off). */
+  #speakReplies = false;
+  /** True between send and the assistant's durable reply — only THAT reply is spoken. */
+  #awaitingReply = false;
+  /** The in-flight SpeechRecognition session, when listening. */
+  #recognition: SpeechRecognitionLike | null = null;
+  /** Composer text captured when listening starts; the transcript appends to it. */
+  #dictationBase = "";
+  #micBtn: HTMLButtonElement | null = null;
+
   constructor(ctx: SectionContext, host: HTMLElement) {
     injectStyle("chat-css", CHAT_CSS);
     this.#ctx = ctx;
@@ -98,7 +131,40 @@ class ChatSection {
 
     const form = document.createElement("form");
     form.className = "chat-composer";
-    form.append(this.#text, this.#send);
+    form.append(this.#text);
+    // Mic: rendered ONLY when the browser has speech recognition (feature-detected).
+    if (speechRecognitionCtor() !== null) {
+      const mic = document.createElement("button");
+      mic.type = "button";
+      mic.className = "chat-voice-btn";
+      mic.innerHTML = ICONS.voice ?? "";
+      mic.setAttribute("aria-label", "Speak a message");
+      mic.setAttribute("aria-pressed", "false");
+      mic.title = "Speak a message";
+      mic.addEventListener("click", () => {
+        if (this.#recognition !== null) this.#stopListening();
+        else this.#startListening();
+      });
+      this.#micBtn = mic;
+      form.append(mic);
+    }
+    // Voice replies: speak each finished assistant reply aloud (persisted per browser).
+    this.#speakReplies = localStorage.getItem(SPEAK_REPLIES_KEY) === "on";
+    const speakToggle = document.createElement("button");
+    speakToggle.type = "button";
+    speakToggle.className = "chat-voice-btn";
+    speakToggle.innerHTML = SPEAKER;
+    speakToggle.setAttribute("aria-label", "Voice replies");
+    speakToggle.setAttribute("aria-pressed", this.#speakReplies ? "true" : "false");
+    speakToggle.title = "Read replies aloud";
+    speakToggle.addEventListener("click", () => {
+      this.#speakReplies = !this.#speakReplies;
+      localStorage.setItem(SPEAK_REPLIES_KEY, this.#speakReplies ? "on" : "off");
+      speakToggle.setAttribute("aria-pressed", this.#speakReplies ? "true" : "false");
+      if (!this.#speakReplies) stopSpeaking();
+      ctx.toast(this.#speakReplies ? "Voice replies on" : "Voice replies off");
+    });
+    form.append(speakToggle, this.#send);
 
     const top = div("chat-top");
     top.innerHTML = `<span class="chat-mark">${MARK}</span><h1>Chat with Vesper</h1>`;
@@ -135,6 +201,9 @@ class ChatSection {
     ctx.onLive((msg) => this.#onLive(msg));
     ctx.onCleanup(() => {
       if (this.#sessionId !== null) ctx.wsSend({ type: "unsubscribe", sessionId: this.#sessionId });
+      this.#recognition?.abort();
+      this.#recognition = null;
+      stopSpeaking();
       this.#rail.destroy();
     });
 
@@ -145,6 +214,61 @@ class ChatSection {
   #autosize(): void {
     this.#text.style.height = "auto";
     this.#text.style.height = `${this.#text.scrollHeight}px`;
+  }
+
+  /**
+   * Start one dictation turn: interim transcript streams into the composer; the
+   * final transcript lands in the input and auto-sends through the normal path.
+   */
+  #startListening(): void {
+    const ctor = speechRecognitionCtor();
+    if (ctor === null || this.#recognition !== null) return;
+    stopSpeaking(); // barge-in: a reply never talks over the user.
+    const rec = new ctor();
+    this.#recognition = rec;
+    this.#dictationBase = this.#text.value.length > 0 ? `${this.#text.value.trimEnd()} ` : "";
+    rec.lang = navigator.language || "en-US";
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      let transcript = "";
+      let isFinal = false;
+      for (let i = 0; i < e.results.length; i++) {
+        const result = e.results[i];
+        transcript += result?.[0]?.transcript ?? "";
+        if (result?.isFinal === true) isFinal = true;
+      }
+      this.#text.value = this.#dictationBase + transcript;
+      this.#autosize();
+      if (isFinal) {
+        this.#stopListening();
+        void this.#submit();
+      }
+    };
+    rec.onerror = (e) => {
+      this.#ctx.toast(voiceErrorMessage(e.error));
+      this.#stopListening();
+    };
+    rec.onend = () => {
+      if (this.#recognition === rec) this.#stopListening();
+    };
+    this.#setListening(true);
+    rec.start();
+  }
+
+  #stopListening(): void {
+    const rec = this.#recognition;
+    this.#recognition = null;
+    rec?.stop();
+    this.#setListening(false);
+  }
+
+  #setListening(on: boolean): void {
+    if (this.#micBtn === null) return;
+    this.#micBtn.classList.toggle("listening", on);
+    this.#micBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    this.#micBtn.setAttribute("aria-label", on ? "Stop listening" : "Speak a message");
+    this.#micBtn.title = on ? "Stop listening" : "Speak a message";
   }
 
   /** Start a fresh thread: the empty state (and its pipeline launcher) comes back. */
@@ -269,6 +393,8 @@ class ChatSection {
   async #submit(): Promise<void> {
     const message = this.#text.value.trim();
     if (message.length === 0 || this.#sending) return;
+    stopSpeaking(); // a new message always silences the previous spoken reply.
+    this.#awaitingReply = true;
     this.#sending = true;
     this.#send.disabled = true;
     this.#text.value = "";
@@ -299,6 +425,7 @@ class ChatSection {
     } catch (err) {
       thinking.remove();
       this.#clearStream();
+      this.#awaitingReply = false;
       this.#ctx.toast(err instanceof Error ? err.message : "could not send");
     } finally {
       this.#sending = false;
@@ -372,6 +499,13 @@ class ChatSection {
     this.#thread.append(row);
     this.#seen.set(turn.id, { role: turn.role });
     this.#scrollToEnd();
+
+    // Speak ONLY the finished reply to the message just sent — never partial
+    // deltas (the durable turn carries the full text) and never backfilled history.
+    if (turn.role === "assistant" && this.#awaitingReply) {
+      this.#awaitingReply = false;
+      if (this.#speakReplies) void speakText(stripForSpeech(turn.text));
+    }
   }
 
   #dropOptimistic(): void {
@@ -392,6 +526,23 @@ function div(className: string): HTMLElement {
   const el = document.createElement("div");
   el.className = className;
   return el;
+}
+
+/** Plain-language messages for the browser's speech-recognition error codes. */
+function voiceErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case "no-speech":
+      return "No speech heard — tap the mic and try again.";
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone access was blocked. Allow it in your browser settings.";
+    case "audio-capture":
+      return "No microphone was found on this computer.";
+    case "network":
+      return "Voice input needs a network connection in this browser.";
+    default:
+      return "Voice input stopped — tap the mic to try again.";
+  }
 }
 
 export const chatSection: SectionModule = {

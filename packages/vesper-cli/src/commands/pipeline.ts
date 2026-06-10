@@ -10,6 +10,8 @@
  */
 
 import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Command, CommandGroup } from "../dispatch.ts";
 import { uiPort } from "../paths.ts";
@@ -149,9 +151,50 @@ const listCommand: Command = {
   },
 };
 
+/** The slice of `GET /api/pipelines/:id/template` the built-in `show` prints. */
+interface BuiltinTemplateish {
+  readonly handlerId: string;
+  readonly prompt: string;
+  readonly prompts?: readonly { name: string; template: string }[];
+  readonly config: { readonly requiredCapabilities: readonly string[] };
+}
+
+/** Print a built-in pipeline: capabilities + its read-only prompt catalog. */
+async function showBuiltin(base: string, id: string): Promise<number> {
+  const res = await fetch(`${base}/api/pipelines/${encodeURIComponent(id)}/template`);
+  if (!res.ok) {
+    errorLine(`unknown pipeline "${id}" (vesper pipeline list)`);
+    return 1;
+  }
+  const template = (await res.json()) as BuiltinTemplateish;
+  line(`${id}  ${dim(`(built-in, handler ${template.handlerId})`)}`);
+  line("");
+  line("what it can touch:");
+  printCapabilities(template.config.requiredCapabilities);
+  if (template.prompt.trim().length > 0) {
+    line("");
+    line("template prompt (editable, vesper ui):");
+    for (const promptLine of template.prompt.split("\n")) line(`  ${promptLine}`);
+  }
+  const prompts = template.prompts ?? [];
+  if (prompts.length > 0) {
+    line("");
+    line(dim("the real prompts this pipeline sends ({{...}} = filled in per run):"));
+    for (const entry of prompts) {
+      line("");
+      line(`prompt: ${entry.name}`);
+      for (const promptLine of entry.template.split("\n")) line(dim(`  ${promptLine}`));
+    }
+  } else if (template.prompt.trim().length === 0) {
+    line("");
+    line(dim("(this pipeline's behavior is built into Vesper — no prompt catalog)"));
+  }
+  return 0;
+}
+
 const showCommand: Command = {
   name: "show",
-  summary: "Show one of your pipelines: doc, stages, and what it can touch.",
+  summary: "Show a pipeline: doc + capabilities (yours) or its real prompts (built-in).",
   usage: "vesper pipeline show <id>",
   async run({ positionals }) {
     const id = positionals[0];
@@ -163,8 +206,8 @@ const showCommand: Command = {
     if (base === null) return 1;
     const res = await fetch(`${base}/api/pipelines/custom/${encodeURIComponent(id)}`);
     if (!res.ok) {
-      errorLine(`unknown pipeline "${id}" (vesper pipeline list)`);
-      return 1;
+      // Not one of yours — built-ins expose a read-only prompt catalog instead.
+      return showBuiltin(base, id);
     }
     const detail = (await res.json()) as DocDetailish;
     line(`${detail.name}  ${dim(`(${detail.id}, rev ${detail.revision})`)}`);
@@ -179,47 +222,25 @@ const showCommand: Command = {
 
 const saveCommand: Command = {
   name: "save",
-  summary: "Validate and save a pipeline document (JSON file).",
-  usage: "vesper pipeline save <file.json> [--id <id>] [--validate]",
+  summary: "Validate and save a pipeline document (.md or .json file).",
+  usage: "vesper pipeline save <file.md|file.json> [--id <id>] [--validate]",
   async run({ positionals, flags }) {
     const file = positionals[0];
     if (file === undefined) {
-      errorLine("usage: vesper pipeline save <file.json> [--id <id>] [--validate]");
+      errorLine("usage: vesper pipeline save <file.md|file.json> [--id <id>] [--validate]");
       return 1;
     }
-    let doc: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        errorLine("the file must contain a JSON object (the pipeline document)");
-        return 1;
-      }
-      doc = parsed as Record<string, unknown>;
-    } catch (err) {
-      errorLine(err instanceof Error ? err.message : String(err));
-      return 1;
-    }
-
     const base = await daemonBase();
     if (base === null) return 1;
 
-    // Always dry-run first so the operator sees errors + derived capabilities
-    // BEFORE any approval ceremony.
-    const validateRes = await fetch(`${base}/api/pipelines/custom/validate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ doc }),
-    });
-    const validation = (await validateRes.json()) as SaveOutcomeish & { error?: string };
-    if (!validateRes.ok) {
-      errorLine(validation.error ?? `validation failed (HTTP ${validateRes.status})`);
-      return 1;
-    }
-    if (!validation.ok) {
+    const loaded = await loadDocFile(base, file);
+    if (!loaded.ok) {
       errorLine("the document is not valid:");
-      printErrors(validation.errors);
+      printErrors(loaded.errors);
       return 1;
     }
+    const doc = loaded.doc;
+    const validation = loaded;
     line(green("document is valid"));
     line("");
     line("this pipeline will be allowed to:");
@@ -401,12 +422,12 @@ const rmCommand: Command = {
 
 const exportCommand: Command = {
   name: "export",
-  summary: "Write a pipeline's document to a JSON file (or stdout).",
-  usage: "vesper pipeline export <id> [file]",
-  async run({ positionals }) {
+  summary: "Write a pipeline's document to markdown (or JSON with --json).",
+  usage: "vesper pipeline export <id> [file] [--json]",
+  async run({ positionals, flags }) {
     const id = positionals[0];
     if (id === undefined) {
-      errorLine("usage: vesper pipeline export <id> [file]");
+      errorLine("usage: vesper pipeline export <id> [file] [--json]");
       return 1;
     }
     const base = await daemonBase();
@@ -417,15 +438,222 @@ const exportCommand: Command = {
       return 1;
     }
     const detail = (await res.json()) as DocDetailish;
-    const json = JSON.stringify(detail.doc, null, 2);
+    let output: string;
+    if (flags.json === true) {
+      output = `${JSON.stringify(detail.doc, null, 2)}\n`;
+    } else {
+      const md = await fetch(`${base}/api/pipelines/custom/markdown/serialize`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ doc: detail.doc }),
+      });
+      const body = (await md.json()) as { markdown?: string; error?: string };
+      if (!md.ok || body.markdown === undefined) {
+        errorLine(body.error ?? "could not serialize to markdown");
+        return 1;
+      }
+      output = body.markdown;
+    }
     const file = positionals[1];
     if (file === undefined) {
-      line(json);
+      line(output.trimEnd());
     } else {
-      await writeFile(file, `${json}\n`, "utf8");
+      await writeFile(file, output, "utf8");
       line(green(`wrote ${file}`));
     }
     return 0;
+  },
+};
+
+/** Load a pipeline doc from a .md or .json file, validated through the daemon. */
+async function loadDocFile(
+  base: string,
+  file: string,
+): Promise<
+  | { ok: true; doc: Record<string, unknown>; capabilities: readonly string[]; errors: [] }
+  | { ok: false; errors: readonly string[] }
+> {
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch (err) {
+    return { ok: false, errors: [err instanceof Error ? err.message : String(err)] };
+  }
+  if (file.endsWith(".md")) {
+    const res = await fetch(`${base}/api/pipelines/custom/markdown`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: raw }),
+    });
+    const body = (await res.json()) as SaveOutcomeish & {
+      doc?: Record<string, unknown>;
+      error?: string;
+    };
+    if (!res.ok) return { ok: false, errors: [body.error ?? `HTTP ${res.status}`] };
+    if (!body.ok || body.doc === undefined) return { ok: false, errors: body.errors };
+    return { ok: true, doc: body.doc, capabilities: body.capabilities, errors: [] };
+  }
+  let doc: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { ok: false, errors: ["the file must contain a JSON object (the pipeline document)"] };
+    }
+    doc = parsed as Record<string, unknown>;
+  } catch (err) {
+    return { ok: false, errors: [err instanceof Error ? err.message : String(err)] };
+  }
+  const res = await fetch(`${base}/api/pipelines/custom/validate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ doc }),
+  });
+  const body = (await res.json()) as SaveOutcomeish & { error?: string };
+  if (!res.ok) return { ok: false, errors: [body.error ?? `HTTP ${res.status}`] };
+  if (!body.ok) return { ok: false, errors: body.errors };
+  return { ok: true, doc, capabilities: body.capabilities, errors: [] };
+}
+
+/** A commented starter document for `vesper pipeline new`. */
+const STARTER_MD = `---
+name: My pipeline
+description: what this pipeline is for
+orchestrator: on
+memory: off
+---
+
+# Stage 1
+
+## draft — Draft something
+
+Write the first version of the thing.
+
+# Stage 2
+
+## review — Review it
+- after: draft
+
+Review and improve:
+
+{{steps.draft.result}}
+`;
+
+const newCommand: Command = {
+  name: "new",
+  summary: "Write a starter pipeline markdown file you can edit and save.",
+  usage: "vesper pipeline new [file.md]",
+  async run({ positionals }) {
+    const file = positionals[0] ?? "pipeline.md";
+    await writeFile(file, STARTER_MD, "utf8");
+    line(green(`wrote ${file}`));
+    line(dim(`edit it, then: vesper pipeline save ${file}`));
+    return 0;
+  },
+};
+
+const editCommand: Command = {
+  name: "edit",
+  summary: "Edit a pipeline as markdown in $EDITOR, validate, and save it back.",
+  usage: "vesper pipeline edit <id>",
+  async run({ positionals }) {
+    const id = positionals[0];
+    if (id === undefined) {
+      errorLine("usage: vesper pipeline edit <id>");
+      return 1;
+    }
+    if (process.stdin.isTTY !== true) {
+      errorLine("edit needs an interactive terminal ($EDITOR)");
+      return 1;
+    }
+    const base = await daemonBase();
+    if (base === null) return 1;
+    const res = await fetch(`${base}/api/pipelines/custom/${encodeURIComponent(id)}`);
+    if (!res.ok) {
+      errorLine(`unknown pipeline "${id}" (vesper pipeline list)`);
+      return 1;
+    }
+    const detail = (await res.json()) as DocDetailish;
+    const md = await fetch(`${base}/api/pipelines/custom/markdown/serialize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ doc: detail.doc }),
+    });
+    const mdBody = (await md.json()) as { markdown?: string; error?: string };
+    if (!md.ok || mdBody.markdown === undefined) {
+      errorLine(mdBody.error ?? "could not serialize to markdown");
+      return 1;
+    }
+    const tmp = join(tmpdir(), `vesper-pipeline-${id}.md`);
+    await writeFile(tmp, mdBody.markdown, "utf8");
+
+    const editor = process.env.EDITOR ?? process.env.VISUAL ?? "vi";
+    const child = Bun.spawn([editor, tmp], {
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await child.exited;
+    if (exitCode !== 0) {
+      errorLine(`${editor} exited with code ${exitCode} — nothing saved`);
+      return 1;
+    }
+
+    const loaded = await loadDocFile(base, tmp);
+    if (!loaded.ok) {
+      errorLine("the edited document is not valid (your edit is kept at " + tmp + "):");
+      printErrors(loaded.errors);
+      return 1;
+    }
+    line(green("document is valid"));
+    line("this pipeline will be allowed to:");
+    printCapabilities(loaded.capabilities);
+    const answer = await ask(`save "${id}"? [y/N] `);
+    if (answer.toLowerCase() !== "y" && answer.toLowerCase() !== "yes") {
+      line(dim(`aborted — your edit is kept at ${tmp}`));
+      return 0;
+    }
+    const code = await collectApproval(base);
+    if (code === null) return 1;
+    const put = await fetch(`${base}/api/pipelines/custom/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": code },
+      body: JSON.stringify({ doc: loaded.doc }),
+    });
+    const outcome = (await put.json()) as SaveOutcomeish & { error?: string };
+    if (!put.ok || !outcome.ok) {
+      errorLine(outcome.error ?? "save failed:");
+      printErrors(outcome.errors ?? []);
+      return 1;
+    }
+    line(green("saved"));
+    return 0;
+  },
+};
+
+const syncCommand: Command = {
+  name: "sync",
+  summary: "Re-sweep ~/.vesper/pipelines/*.md (every file there IS a pipeline).",
+  usage: "vesper pipeline sync",
+  async run() {
+    const base = await daemonBase();
+    if (base === null) return 1;
+    const res = await fetch(`${base}/api/pipelines/custom/sync`, { method: "POST" });
+    const body = (await res.json()) as {
+      loaded?: string[];
+      unchanged?: string[];
+      errors?: { file: string; errors: string[] }[];
+      error?: string;
+    };
+    if (!res.ok) {
+      errorLine(body.error ?? `sync failed (HTTP ${res.status})`);
+      return 1;
+    }
+    line(`loaded: ${body.loaded?.join(", ") || "(none)"}`);
+    line(dim(`unchanged: ${body.unchanged?.join(", ") || "(none)"}`));
+    for (const failure of body.errors ?? []) {
+      errorLine(`${failure.file}: ${failure.errors.join("; ")}`);
+    }
+    return (body.errors?.length ?? 0) > 0 ? 1 : 0;
   },
 };
 
@@ -436,7 +664,10 @@ export const pipelineGroup: CommandGroup = {
   subcommands: [
     listCommand,
     showCommand,
+    newCommand,
+    editCommand,
     saveCommand,
+    syncCommand,
     runCommand,
     improveCommand,
     rmCommand,

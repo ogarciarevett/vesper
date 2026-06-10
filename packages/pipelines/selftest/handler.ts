@@ -25,8 +25,9 @@ const SUMMARY_MAX_LENGTH = 500;
 /**
  * Default self-test prompt used when no `prompt` param is supplied. Asks the CLI
  * to confirm it received the Vesper self-test pipeline and to name itself.
+ * Exported so the read-only prompt catalog can show the genuine probe text.
  */
-const DEFAULT_PROMPT =
+export const SELFTEST_PROBE_PROMPT =
   "You are being invoked by the Vesper self-test pipeline as a runtime self-test — " +
   "reply in one sentence confirming you received this and stating which CLI you are.";
 
@@ -39,7 +40,7 @@ function resolvePrompt(params: Readonly<Record<string, unknown>>): string {
   if (typeof raw === "string" && raw.trim().length > 0) {
     return raw;
   }
-  return DEFAULT_PROMPT;
+  return SELFTEST_PROBE_PROMPT;
 }
 
 /**

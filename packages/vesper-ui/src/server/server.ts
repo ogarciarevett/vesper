@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type {
   ApprovalTokenStore,
   ChannelState,
+  DirectoryModel,
   ModelCatalogEntry,
   PairingSession,
   RagHit,
@@ -130,6 +131,12 @@ export interface CustomPipelinesSurface {
   save(id: string, doc: Record<string, unknown>): SaveCustomPipelineOutcome;
   archive(id: string): boolean;
   improve(id: string, scope?: string): Promise<CustomPipelineImproveProposal | null>;
+  /** Markdown form (specs/markdown-pipelines.md): parse a .md source to a raw doc. */
+  parseMarkdown(source: string): SaveCustomPipelineOutcome & {
+    readonly doc?: Record<string, unknown>;
+  };
+  /** Serialize a doc to its markdown form (null when the doc is invalid). */
+  serializeMarkdown(doc: Record<string, unknown>): string | null;
 }
 
 /** Dependencies for {@link startUiServer}. */
@@ -222,6 +229,37 @@ export interface UiServerDeps {
     readonly catalog: Readonly<Record<string, ModelCatalogEntry>>;
   };
   /**
+   * Live model directory for `GET /api/models/directory` (the picker's
+   * provider-grouped list). The daemon wires a cached OpenRouter fetch
+   * (allowlisted, no API key); the route NEVER throws — a failed fetch serves
+   * `{ available: false, models: [] }` so the picker degrades to the catalog.
+   */
+  readonly modelDirectory?: {
+    list(): Promise<readonly DirectoryModel[]>;
+  };
+  /**
+   * The model the orchestrator's own brain calls will use (router template pin
+   * > benchmark frontier pick > configured default). Surfaced on `/api/status`
+   * for the titlebar pill; absent/undefined hides the pill.
+   */
+  readonly orchestratorModel?: () => string | undefined;
+  /**
+   * Voice surface for the in-chat voice (specs/voice-conversation.md, cloud TTS
+   * slice). `tts` returns null when cloud TTS is not configured — the client
+   * then falls back to the browser's local voice. `setConfig` persists the
+   * provider/voice id to config and the API key to the OS keychain; the key is
+   * never echoed back (`keyConfigured` only). Routes degrade when absent.
+   */
+  readonly voice?: {
+    tts(text: string): Promise<{ audio: Uint8Array; mime: string } | null>;
+    getConfig(): Promise<{ tts: string; voiceId: string; keyConfigured: boolean }>;
+    setConfig(input: {
+      tts?: string;
+      voiceId?: string;
+      apiKey?: string;
+    }): Promise<{ keyConfigured: boolean }>;
+  };
+  /**
    * Semantic-memory (RAG) surface. `status` returns the live {@link RagStatus} (never
    * throws — degrades to unavailable when no embedder is configured); `search` runs the
    * `ragSearch` seam and may throw `StorageError("rag_unavailable")` when disabled (the
@@ -246,6 +284,25 @@ export interface UiServerDeps {
    * approval code (same flow as template edits).
    */
   readonly customPipelines?: CustomPipelinesSurface;
+  /**
+   * Re-sweep the markdown pipelines drop folder (`~/.vesper/pipelines/*.md`) and
+   * upsert changed files. Backs `POST /api/pipelines/custom/sync` (and through it
+   * `vesper pipeline sync`). Absent -> that route is 503.
+   */
+  readonly syncPipelinesFolder?: () => Promise<{
+    readonly loaded: readonly string[];
+    readonly unchanged: readonly string[];
+    readonly errors: readonly { readonly file: string; readonly errors: readonly string[] }[];
+  }>;
+  /**
+   * Read-only prompt catalog of a BUILT-IN pipeline (the genuine prompt templates
+   * its handler sends, with `{{...}}` markers for the dynamic parts). The daemon
+   * wires this to `@vesper/pipelines`' `pipelinePrompts`; absent -> the template
+   * route reports an empty catalog. Display-only — never an editable surface.
+   */
+  readonly getBuiltinPrompts?: (
+    handlerId: string,
+  ) => readonly { readonly name: string; readonly template: string }[];
   readonly softwareEngineer?: {
     loadDiff(
       runId: string,
@@ -549,6 +606,7 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // GET /api/status — the Runtime panel + titlebar status pills.
       if (req.method === "GET" && pathname === "/api/status") {
         const clis = deps.detectClis ? await deps.detectClis() : [];
+        const orchestratorModel = deps.orchestratorModel?.();
         return json({
           version: deps.version ?? "0.1.0",
           uptimeMs: Date.now() - startedAt,
@@ -559,7 +617,49 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           sessions: store.listSessions().length,
           uiPort: server.port,
           theme: themeId.length > 0 ? themeId : "dark",
+          ...(orchestratorModel !== undefined ? { orchestratorModel } : {}),
         });
+      }
+
+      // GET /api/voice/config — the voice provider settings (never the key itself).
+      if (req.method === "GET" && pathname === "/api/voice/config") {
+        if (deps.voice === undefined) {
+          return json({ tts: "local", voiceId: "", keyConfigured: false });
+        }
+        return json(await deps.voice.getConfig());
+      }
+
+      // POST /api/voice/config — persist voice provider settings entered in the UI.
+      // Local-origin only (guarded above, the channel-token pattern): the API key
+      // goes body -> keychain and is never echoed, logged, or audited.
+      if (req.method === "POST" && pathname === "/api/voice/config") {
+        if (deps.voice === undefined) return json({ error: "voice settings unavailable" }, 503);
+        const body = await readJsonBody(req);
+        const outcome = await deps.voice.setConfig({
+          ...(typeof body?.tts === "string" ? { tts: body.tts } : {}),
+          ...(typeof body?.voiceId === "string" ? { voiceId: body.voiceId } : {}),
+          ...(typeof body?.apiKey === "string" ? { apiKey: body.apiKey } : {}),
+        });
+        return json({ ok: true, keyConfigured: outcome.keyConfigured });
+      }
+
+      // POST /api/voice/tts — synthesize one reply with the configured cloud voice.
+      // Not configured / failed -> { available: false } and the chat falls back to
+      // the browser's local voice; never an error page mid-conversation.
+      if (req.method === "POST" && pathname === "/api/voice/tts") {
+        const body = await readJsonBody(req);
+        const text = typeof body?.text === "string" ? body.text.trim() : "";
+        if (text.length === 0) return json({ error: "text is required" }, 400);
+        if (deps.voice === undefined) return json({ available: false });
+        try {
+          const spoken = await deps.voice.tts(text);
+          if (spoken === null) return json({ available: false });
+          return new Response(spoken.audio.slice().buffer as ArrayBuffer, {
+            headers: { "content-type": spoken.mime },
+          });
+        } catch {
+          return json({ available: false });
+        }
       }
 
       // GET /api/presence — agents running on this machine (Diagnostics; relocated
@@ -579,6 +679,18 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
       // Empty list when no provider is wired (e.g. a daemon launched outside the repo).
       if (req.method === "GET" && pathname === "/api/skills") {
         return json(deps.skills === undefined ? [] : await deps.skills.list());
+      }
+
+      // GET /api/models/directory — the live provider-grouped model list (the
+      // picker's data). Fail-soft by contract: no provider wired or a failed
+      // fetch serves { available: false } and the picker degrades to the catalog.
+      if (req.method === "GET" && pathname === "/api/models/directory") {
+        if (deps.modelDirectory === undefined) return json({ available: false, models: [] });
+        try {
+          return json({ available: true, models: await deps.modelDirectory.list() });
+        } catch {
+          return json({ available: false, models: [] });
+        }
       }
 
       // GET /api/models — the benchmark snapshot + the invocable model catalog
@@ -1048,6 +1160,43 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
         return json(deps.customPipelines?.targets() ?? []);
       }
 
+      // POST /api/pipelines/custom/sync — re-sweep the markdown drop folder.
+      if (req.method === "POST" && pathname === "/api/pipelines/custom/sync") {
+        if (deps.syncPipelinesFolder === undefined) {
+          return json({ error: "the pipelines folder is not configured" }, 503);
+        }
+        return json(await deps.syncPipelinesFolder());
+      }
+
+      // POST /api/pipelines/custom/markdown — parse a markdown pipeline document
+      // to its raw doc (+ validation outcome). Read-only; the editor's Markdown
+      // tab and `vesper pipeline save <file.md>` share this converter.
+      if (req.method === "POST" && pathname === "/api/pipelines/custom/markdown") {
+        if (deps.customPipelines === undefined) {
+          return json({ error: "custom pipelines are not configured" }, 503);
+        }
+        const body = await readJsonBody(req);
+        if (body === null || typeof body.source !== "string") {
+          return json({ error: "body must be { source }" }, 400);
+        }
+        return json(deps.customPipelines.parseMarkdown(body.source));
+      }
+
+      // POST /api/pipelines/custom/markdown/serialize — doc -> markdown form.
+      if (req.method === "POST" && pathname === "/api/pipelines/custom/markdown/serialize") {
+        if (deps.customPipelines === undefined) {
+          return json({ error: "custom pipelines are not configured" }, 503);
+        }
+        const body = await readJsonBody(req);
+        if (body === null || !isRecord(body.doc)) {
+          return json({ error: "body must be { doc }" }, 400);
+        }
+        const markdown = deps.customPipelines.serializeMarkdown(body.doc);
+        return markdown === null
+          ? json({ error: "the document is not valid" }, 422)
+          : json({ markdown });
+      }
+
       // POST /api/pipelines/custom/validate — fail-closed dry-run of a doc (no
       // persistence, no approval): the editor's live check + `save --validate`.
       if (req.method === "POST" && pathname === "/api/pipelines/custom/validate") {
@@ -1136,6 +1285,9 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           handlerId: task.handler_id,
           prompt: template?.prompt ?? "",
           defaultParams: template?.defaultParams ?? {},
+          // The built-in's read-only prompt catalog (real handler prompts with
+          // {{...}} placeholders); [] when the daemon wired no provider.
+          prompts: deps.getBuiltinPrompts?.(task.handler_id) ?? [],
           config: toPipelineConfig(task),
         });
       }

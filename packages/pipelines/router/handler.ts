@@ -103,7 +103,7 @@ const EMPTY_SNAPSHOT: RuntimeContextSnapshot = { pipelines: [], recentRuns: [], 
  * runtime snapshot (so "what pipelines are available?" is answered from ground
  * truth). The user message is fenced; the reply is plain conversational text.
  */
-function buildAnswerPrompt(message: string, snapshot: RuntimeContextSnapshot): string {
+export function buildAnswerPrompt(message: string, snapshot: RuntimeContextSnapshot): string {
   const pipelines =
     snapshot.pipelines.length > 0
       ? snapshot.pipelines.map((p) => `- ${p.id}: ${p.summary}`).join("\n")
@@ -125,10 +125,12 @@ function buildAnswerPrompt(message: string, snapshot: RuntimeContextSnapshot): s
       : "(none)";
 
   return [
-    "You are Vesper, a local-first personal automation runtime, talking to your owner.",
-    "Answer their message conversationally and concretely FROM the runtime state below —",
-    "this is ground truth; do not invent pipelines or runs that are not listed.",
-    "Be brief and useful. Plain text only (no markdown headers).",
+    "You are Vesper, your owner's personal assistant — a person they talk to, not a dashboard.",
+    "Speak warmly and naturally, person to person, and MATCH their register and length:",
+    "a greeting gets a short, human greeting back (one or two sentences at most) — never a",
+    "status report they did not ask for. When they DO ask about pipelines, runs, or schedules,",
+    "answer concretely FROM the runtime state below — it is ground truth; never invent",
+    "pipelines or runs that are not listed. Plain text only (no markdown headers).",
     "",
     "Registered pipelines:",
     pipelines,
@@ -157,7 +159,7 @@ function readMessage(params: RunParams): string {
  * allowlist (or the literal `none`). The allowlist is interpolated so the model knows
  * the closed set; the user's message is fenced so it cannot rewrite the instruction.
  */
-function buildClassifyPrompt(message: string, labels: readonly string[]): string {
+export function buildClassifyPrompt(message: string, labels: readonly string[]): string {
   return [
     "You are a strict intent classifier for a local automation runtime.",
     `Choose EXACTLY ONE label from this closed set: ${labels.join(", ")}, run, answer, none.`,

@@ -27,7 +27,9 @@ import {
   isValidCustomPipelineId,
   parseImproveProposal,
   parsePipelineDoc,
+  parsePipelineMarkdown,
   registerCustomPipeline,
+  serializePipelineMarkdown,
   unregisterCustomPipeline,
 } from "@vesper/pipelines";
 import type {
@@ -152,6 +154,25 @@ export function makeCustomPipelinesSurface(
         });
       }
       return archived;
+    },
+
+    parseMarkdown(source: string) {
+      const parsed = parsePipelineMarkdown(source);
+      if (!parsed.ok) return { ok: false, capabilities: [], errors: parsed.errors };
+      const validated = parsePipelineDoc(parsed.doc, deps.contracts);
+      if (!validated.ok) return { ok: false, capabilities: [], errors: validated.errors };
+      return {
+        ok: true,
+        capabilities: deriveCapabilities(validated.doc, deps.contracts),
+        errors: [],
+        doc: parsed.doc,
+      };
+    },
+
+    serializeMarkdown(doc: Record<string, unknown>): string | null {
+      const validated = parsePipelineDoc(doc, deps.contracts);
+      if (!validated.ok) return null;
+      return serializePipelineMarkdown(doc);
     },
 
     async improve(id: string, scope?: string): Promise<ImproveProposal | null> {

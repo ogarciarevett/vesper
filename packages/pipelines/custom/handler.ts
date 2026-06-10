@@ -15,7 +15,6 @@ import type { RunParams, TaskHandler } from "@vesper/core";
 import type { OrchestrationContract } from "../router/contracts.ts";
 import {
   interpolateResults,
-  type PipelineDoc,
   type PipelineDocStep,
   type PromptStep,
   parsePipelineDoc,
@@ -281,6 +280,8 @@ export function createCustomPipelineHandler(
       });
       for (const outcome of prior) {
         results.set(`${stageNumber}.${outcome.id}`, outcome.summary);
+        // Canvas-native id key, so prompts can say {{steps.<id>.result}}.
+        results.set(outcome.id, outcome.summary);
       }
       all.push(...prior);
     }
