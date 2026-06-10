@@ -68,6 +68,70 @@ export function setEmbeddedClientAssets(assets: ClientAssets): void {
   embeddedClientAssets = assets;
 }
 
+/** One user-authored pipeline at a glance (`GET /api/pipelines/custom`). */
+export interface CustomPipelineSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly revision: number;
+  readonly tsUpdated: number;
+  /** Derived from the doc — never user-picked. */
+  readonly capabilities: readonly string[];
+}
+
+/** One user-authored pipeline in full (`GET /api/pipelines/custom/:id`). */
+export interface CustomPipelineDetail extends CustomPipelineSummary {
+  /** The raw PipelineDoc as saved (the editor round-trips it). */
+  readonly doc: Record<string, unknown>;
+}
+
+/** Outcome of a save/validate: derived capabilities, or every validation error. */
+export interface SaveCustomPipelineOutcome {
+  readonly ok: boolean;
+  readonly capabilities: readonly string[];
+  readonly errors: readonly string[];
+}
+
+/** The "Improve with AI" proposal — NEVER auto-applied; the human accepts per field. */
+export interface CustomPipelineImproveProposal {
+  readonly steps: readonly {
+    readonly id: string;
+    readonly prompt?: string;
+    readonly cli?: string;
+    readonly model?: string;
+    readonly reason: string;
+  }[];
+  readonly orchestratorModel?: string;
+  readonly warnings: readonly string[];
+  readonly notes: string;
+}
+
+/**
+ * The custom-pipelines surface the daemon wires (validate/persist/register/improve
+ * in one place — see vesper-cli's makeCustomPipelinesSurface). The routes here and,
+ * through them, the `vesper pipeline` CLI both consume THIS, so UI/CLI parity is
+ * structural.
+ */
+/** One invocable pipeline target the editor may reference in a `pipeline` step. */
+export interface CustomPipelineTarget {
+  readonly handlerId: string;
+  readonly summary: string;
+  readonly paramKeys: readonly string[];
+  readonly promptParam: string;
+  readonly acceptsModel: boolean;
+}
+
+export interface CustomPipelinesSurface {
+  list(): CustomPipelineSummary[];
+  get(id: string): CustomPipelineDetail | null;
+  /** The orchestration-contract targets a doc's `pipeline` steps may name. */
+  targets(): readonly CustomPipelineTarget[];
+  /** Validate WITHOUT persisting (the editor's live check + `save --validate`). */
+  validate(doc: Record<string, unknown>): SaveCustomPipelineOutcome;
+  save(id: string, doc: Record<string, unknown>): SaveCustomPipelineOutcome;
+  archive(id: string): boolean;
+  improve(id: string, scope?: string): Promise<CustomPipelineImproveProposal | null>;
+}
+
 /** Dependencies for {@link startUiServer}. */
 export interface UiServerDeps {
   readonly scheduler: Scheduler;
@@ -175,6 +239,13 @@ export interface UiServerDeps {
    * coordinator and returns whether a waiter was actually unblocked. Absent -> the
    * `/diff` + `/decision` routes return 503 (the daemon wired no provider).
    */
+  /**
+   * User-authored pipelines (specs/pipeline-editor.md). Backs the
+   * `/api/pipelines/custom*` routes; absent -> those routes return 503 (the
+   * daemon wired no provider). Mutations additionally require the single-use
+   * approval code (same flow as template edits).
+   */
+  readonly customPipelines?: CustomPipelinesSurface;
   readonly softwareEngineer?: {
     loadDiff(
       runId: string,
@@ -963,6 +1034,89 @@ export async function startUiServer(deps: UiServerDeps): Promise<UiServerHandle>
           limit: 500,
         });
         return json(turns);
+      }
+
+      // ── Custom pipelines (specs/pipeline-editor.md) ──────────────────────
+      // GET /api/pipelines/custom — active user-authored pipelines at a glance.
+      if (req.method === "GET" && pathname === "/api/pipelines/custom") {
+        return json(deps.customPipelines?.list() ?? []);
+      }
+
+      // GET /api/pipelines/custom/targets — the contract targets the editor's
+      // `pipeline` steps may name (must match BEFORE the /:id matcher below).
+      if (req.method === "GET" && pathname === "/api/pipelines/custom/targets") {
+        return json(deps.customPipelines?.targets() ?? []);
+      }
+
+      // POST /api/pipelines/custom/validate — fail-closed dry-run of a doc (no
+      // persistence, no approval): the editor's live check + `save --validate`.
+      if (req.method === "POST" && pathname === "/api/pipelines/custom/validate") {
+        if (deps.customPipelines === undefined) {
+          return json({ error: "custom pipelines are not configured" }, 503);
+        }
+        const body = await readJsonBody(req);
+        if (body === null || !isRecord(body.doc)) {
+          return json({ error: "body must be { doc }" }, 400);
+        }
+        return json(deps.customPipelines.validate(body.doc));
+      }
+
+      // POST /api/pipelines/custom/:id/improve — "Improve with AI": Vesper audits the
+      // WHOLE doc (+ optional single-step scope) and returns a PROPOSAL. Read-only —
+      // nothing changes until the user accepts fields and saves (approval-gated).
+      const improveMatch = pathname.match(/^\/api\/pipelines\/custom\/([^/]+)\/improve$/);
+      if (req.method === "POST" && improveMatch) {
+        if (deps.customPipelines === undefined) {
+          return json({ error: "custom pipelines are not configured" }, 503);
+        }
+        const id = decodeURIComponent(improveMatch[1] ?? "");
+        const body = await readJsonBody(req);
+        const scope =
+          typeof body?.scope === "string" && body.scope.trim().length > 0
+            ? body.scope.trim()
+            : undefined;
+        try {
+          const proposal = await deps.customPipelines.improve(id, scope);
+          return proposal === null
+            ? json({ error: "no proposal (unknown pipeline or unparseable reply)" }, 422)
+            : json(proposal);
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+        }
+      }
+
+      // GET/PUT/DELETE /api/pipelines/custom/:id — read one doc; save (validate ->
+      // persist -> re-register, approval-gated); archive (NEVER a row delete —
+      // Hard rule 4 — approval-gated).
+      const customMatch = pathname.match(/^\/api\/pipelines\/custom\/([^/]+)$/);
+      if (customMatch) {
+        if (deps.customPipelines === undefined) {
+          return json({ error: "custom pipelines are not configured" }, 503);
+        }
+        const id = decodeURIComponent(customMatch[1] ?? "");
+        if (req.method === "GET") {
+          const detail = deps.customPipelines.get(id);
+          return detail === null
+            ? json({ error: `unknown custom pipeline "${id}"` }, 404)
+            : json(detail);
+        }
+        if (req.method === "PUT") {
+          const tokenError = requireApproval(req, deps.approvalTokens);
+          if (tokenError !== null) return tokenError;
+          const body = await readJsonBody(req);
+          if (body === null || !isRecord(body.doc)) {
+            return json({ error: "body must be { doc }" }, 400);
+          }
+          const outcome = deps.customPipelines.save(id, body.doc);
+          return json(outcome, outcome.ok ? 200 : 422);
+        }
+        if (req.method === "DELETE") {
+          const tokenError = requireApproval(req, deps.approvalTokens);
+          if (tokenError !== null) return tokenError;
+          return deps.customPipelines.archive(id)
+            ? json({ ok: true })
+            : json({ error: `unknown custom pipeline "${id}"` }, 404);
+        }
       }
 
       // ── Editable pipeline templates ──────────────────────────────────────

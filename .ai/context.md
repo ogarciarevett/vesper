@@ -498,8 +498,33 @@ Live-verified end-to-end: a combined wish produced a Vesper-authored 2-task plan
 sub-agent ran on codex gpt-5.5 picked from the benchmarks. Issue-capped record: spec +
 `cycle-log.md` + the commits (Rule 11).
 
+**Pipeline editor (user-authored pipelines) SHIPPED.** `specs/pipeline-editor.md`: pipelines are now
+USER DATA, not just code. Migration **013_custom_pipelines** + store CRUD (archive-only delete, Hard
+rule 4); the fail-closed **PipelineDoc v1** parser (`packages/pipelines/custom/` — stages sequential x
+tasks parallel; EXACTLY two step kinds: `prompt` [markdown + skills + command prefix + per-step
+cli/model] and `pipeline` [ORCHESTRATION_CONTRACTS targets only]; capabilities DERIVED, never
+user-picked); ONE shared interpreter registered per saved doc as `custom:<id>` (handler id = task id
+so per-task grants stay per-pipeline) — it inherits the entire shipped runtime (guardrails, grants,
+run rows, io events, run tree, replay) and adds NO second engine; an orchestrator-by-default block
+(the mastermind re-authors each stage's prompts from prior results, on the benchmark frontier pick
+unless pinned); `/api/pipelines/custom*` routes (validate / targets / improve; save + archive
+approval-gated); **`vesper pipeline list|show|save|run|improve|rm|export`** as the FIRST consumer
+(CLI-first per Omar — the UI is a thin client over the same routes); "Improve with AI" (whole-doc
+audit -> prompt rewrites + per-step cli+model routing from the benchmark snapshot + warnings;
+PROPOSAL only, never auto-applied); the Vesper World Pipelines section rebuilt into a staged-rail
+EDITOR (markdown Write/Preview via a hand-rolled dependency-free renderer, live plain-language
+"what this pipeline can touch" summarizer + save-time capability cards — the impeccable-derived
+permission UX, per-step AI suggestion, disabled "Cross-share (coming soon)" button) + a chat-home
+pipeline LAUNCHER (the missing start-here path: cards pre-fill the composer; the router orchestrates
+from there). Built-ins gained **orchestratorModel threading**: the router's own brain calls
+(classify/answer/plan/revise), the swe lead's SPEC/PLAN/REVIEW, and the loop's AUTHOR/CRITIC honor
+`orchestratorModel` (run param > router template default > benchmark frontier pick > config default)
+while workers keep cheap routing. Verified LIVE: save through the real approval flow, a 2-stage run
+with the orchestrator re-authoring stage 2 on the benchmark pick (gpt), and a genuinely useful
+improve audit. No new dependency. Issue-capped: record = spec + `cycle-log.md` + the commit (Rule 11).
+
 **Agent docs** — single-source `.ai/` drives Claude Code, opencode, Codex, Gemini, and Cursor via
-`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1350 tests / 0 fail**; Biome clean; no
+`bun run sync:ai` (`scripts/sync-ai-docs.ts`). Suite: **1410 tests / 0 fail**; Biome clean; no
 provider SDKs (the lone runtime dep is the isolated, opt-in Baileys in `@vesper/channel-whatsapp-web`).
 
 **Next:** the rest of the personal-agent **pipelines** (career, social, trading,
@@ -515,7 +540,11 @@ steps routed to `ctx.spawn`/connections) behind the approval coordinator; multi-
 cross-run learning into skill-train; scheduled (cron) loops; an in-UI abort. Orchestrator-home follow-ons:
 nested/dependency plan modes (the plan shape is mode-extensible); native stream formats for
 codex/gemini/opencode; a dedicated run view with the Codex-style Progress checklist; orchestration
-contracts for the future personal-agent pipelines. Update
+contracts for the future personal-agent pipelines. Pipeline-editor follow-ons (spec Out of Scope):
+cron triggers for custom pipelines (through the existing schedule surface); version-history
+browse/restore UI (rows are archived, not lost); new step kinds (fs/fetch/notify) each with its own
+capability story; cross-share (the cross-ai integration behind the reserved disabled button);
+branching/conditions. Update
 this section after each ship.
 
 > `cycle-log.md` (repo root) holds the IMPROVE-step reflections — one entry per completed cycle.

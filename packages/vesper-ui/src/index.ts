@@ -10,6 +10,12 @@ export {
 export {
   buildClientAssets,
   type ClientAssets,
+  type CustomPipelineDetail,
+  type CustomPipelineImproveProposal,
+  type CustomPipelineSummary,
+  type CustomPipelinesSurface,
+  type CustomPipelineTarget,
+  type SaveCustomPipelineOutcome,
   setEmbeddedClientAssets,
   startUiServer,
   type UiServerDeps,

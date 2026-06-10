@@ -13,7 +13,7 @@ import {
   type Store,
 } from "@vesper/core";
 import type { SweDiffView } from "../world/types.ts";
-import { startUiServer, type UiServerHandle } from "./server.ts";
+import { type CustomPipelinesSurface, startUiServer, type UiServerHandle } from "./server.ts";
 
 const fakeComplete: CompleteFn = async () => ({
   text: "pong",
@@ -1437,6 +1437,203 @@ describe("UI server — chat:delta streaming", () => {
       lStore.close();
       lDb.close();
       rmSync(lDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom pipelines routes (specs/pipeline-editor.md) — thin-route tests over a
+// stub CustomPipelinesSurface; the real surface is tested in vesper-cli.
+// ---------------------------------------------------------------------------
+
+describe("custom pipelines routes", () => {
+  let cDir: string;
+  let cDb: Database;
+  let cStore: Store;
+  let cHandle: UiServerHandle;
+  let cTokens: ApprovalTokenStore;
+  const calls: Array<{ method: string; args: unknown[] }> = [];
+
+  const stubSurface: CustomPipelinesSurface = {
+    targets: () => [
+      {
+        handlerId: "loop",
+        summary: "loop",
+        paramKeys: ["successCriteria"],
+        promptParam: "goal",
+        acceptsModel: true,
+      },
+    ],
+    list: () => [
+      { id: "brief", name: "Brief", revision: 1, tsUpdated: 1, capabilities: ["CLI_INVOKE"] },
+    ],
+    get: (id) =>
+      id === "brief"
+        ? {
+            id: "brief",
+            name: "Brief",
+            revision: 1,
+            tsUpdated: 1,
+            capabilities: ["CLI_INVOKE"],
+            doc: { v: 1 },
+          }
+        : null,
+    validate: (doc) => {
+      calls.push({ method: "validate", args: [doc] });
+      return { ok: true, capabilities: ["CLI_INVOKE"], errors: [] };
+    },
+    save: (id, doc) => {
+      calls.push({ method: "save", args: [id, doc] });
+      return id === "bad"
+        ? { ok: false, capabilities: [], errors: ["nope"] }
+        : { ok: true, capabilities: ["CLI_INVOKE"], errors: [] };
+    },
+    archive: (id) => {
+      calls.push({ method: "archive", args: [id] });
+      return id === "brief";
+    },
+    improve: async (id, scope) => {
+      calls.push({ method: "improve", args: [id, scope] });
+      return id === "brief"
+        ? { steps: [{ id: "a", model: "gpt", reason: "cheaper" }], warnings: [], notes: "fine" }
+        : null;
+    },
+  };
+
+  beforeEach(async () => {
+    calls.length = 0;
+    cDir = mkdtempSync(join(tmpdir(), "vesper-ui-custom-"));
+    const path = join(cDir, "vesper.db");
+    openStore(path).close();
+    cDb = new Database(path);
+    cStore = openStore(path);
+    cTokens = new ApprovalTokenStore();
+    const scheduler = new Scheduler({
+      db: cDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    cHandle = await startUiServer({
+      scheduler,
+      store: cStore,
+      port: 0,
+      approvalTokens: cTokens,
+      customPipelines: stubSurface,
+    });
+  });
+
+  afterEach(() => {
+    cHandle.stop();
+    cStore.close();
+    cDb.close();
+    rmSync(cDir, { recursive: true, force: true });
+  });
+
+  test("GET list + GET one + 404 for unknown", async () => {
+    const list = await fetch(`${cHandle.url}/api/pipelines/custom`);
+    expect(list.status).toBe(200);
+    const rows = (await list.json()) as Array<{ id: string }>;
+    expect(rows[0]?.id).toBe("brief");
+
+    const one = await fetch(`${cHandle.url}/api/pipelines/custom/brief`);
+    expect(one.status).toBe(200);
+    const detail = (await one.json()) as { doc: Record<string, unknown> };
+    expect(detail.doc).toEqual({ v: 1 });
+
+    const missing = await fetch(`${cHandle.url}/api/pipelines/custom/nope`);
+    expect(missing.status).toBe(404);
+  });
+
+  test("GET targets lists the contract targets (not shadowed by the :id matcher)", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/custom/targets`);
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{ handlerId: string }>;
+    expect(rows[0]?.handlerId).toBe("loop");
+  });
+
+  test("POST validate dry-runs without approval", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/custom/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ doc: { v: 1 } }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+    expect(calls.some((c) => c.method === "validate")).toBe(true);
+  });
+
+  test("PUT requires the approval code, then saves (422 on validation failure)", async () => {
+    const denied = await fetch(`${cHandle.url}/api/pipelines/custom/brief`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ doc: { v: 1 } }),
+    });
+    expect(denied.status).toBe(401);
+    expect(calls.some((c) => c.method === "save")).toBe(false);
+
+    const ok = await fetch(`${cHandle.url}/api/pipelines/custom/brief`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": cTokens.mint() },
+      body: JSON.stringify({ doc: { v: 1 } }),
+    });
+    expect(ok.status).toBe(200);
+    expect(calls.some((c) => c.method === "save")).toBe(true);
+
+    const invalid = await fetch(`${cHandle.url}/api/pipelines/custom/bad`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-vesper-approval": cTokens.mint() },
+      body: JSON.stringify({ doc: { v: 1 } }),
+    });
+    expect(invalid.status).toBe(422);
+  });
+
+  test("DELETE archives behind the approval code", async () => {
+    const denied = await fetch(`${cHandle.url}/api/pipelines/custom/brief`, {
+      method: "DELETE",
+    });
+    expect(denied.status).toBe(401);
+
+    const ok = await fetch(`${cHandle.url}/api/pipelines/custom/brief`, {
+      method: "DELETE",
+      headers: { "x-vesper-approval": cTokens.mint() },
+    });
+    expect(ok.status).toBe(200);
+    expect(calls.some((c) => c.method === "archive")).toBe(true);
+  });
+
+  test("POST improve returns the proposal (and 422 when none)", async () => {
+    const res = await fetch(`${cHandle.url}/api/pipelines/custom/brief/improve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "a" }),
+    });
+    expect(res.status).toBe(200);
+    const proposal = (await res.json()) as { steps: Array<{ id: string }> };
+    expect(proposal.steps[0]?.id).toBe("a");
+    expect(calls.find((c) => c.method === "improve")?.args).toEqual(["brief", "a"]);
+
+    const none = await fetch(`${cHandle.url}/api/pipelines/custom/nope/improve`, {
+      method: "POST",
+    });
+    expect(none.status).toBe(422);
+  });
+
+  test("routes fail closed (503) when the daemon wired no surface", async () => {
+    const scheduler = new Scheduler({
+      db: cDb,
+      registry: new HandlerRegistry(),
+      grants: CAPABILITIES,
+    });
+    const bare = await startUiServer({ scheduler, store: cStore, port: 0 });
+    try {
+      const res = await fetch(`${bare.url}/api/pipelines/custom/x`, { method: "PUT" });
+      expect(res.status).toBe(503);
+      const list = await fetch(`${bare.url}/api/pipelines/custom`);
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual([]);
+    } finally {
+      bare.stop();
     }
   });
 });

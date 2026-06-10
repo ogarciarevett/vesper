@@ -83,7 +83,7 @@ export async function createWorktree(
 
   try {
     await gitOrThrow(git, repo, ["worktree", "add", path, "-b", branch], {
-      timeoutMs: opts?.timeoutMs,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
   } catch (cause) {
     const msg = cause instanceof Error ? cause.message : `worktree add failed for run ${runId}`;
@@ -114,7 +114,7 @@ export async function removeWorktree(
 ): Promise<void> {
   try {
     await gitOrThrow(git, wt.repo, ["worktree", "remove", wt.path], {
-      timeoutMs: opts?.timeoutMs,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
   } catch (cause) {
     const msg =

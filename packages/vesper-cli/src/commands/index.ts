@@ -8,6 +8,7 @@ import { helloCommand } from "./hello.ts";
 import { initCommand } from "./init.ts";
 import { loopGroup } from "./loop.ts";
 import { modelsGroup } from "./models.ts";
+import { pipelineGroup } from "./pipeline.ts";
 import { ragGroup } from "./rag.ts";
 import { runsGroup } from "./runs.ts";
 import { scheduleGroup } from "./schedule.ts";
@@ -29,6 +30,7 @@ export const registry: readonly Registrable[] = [
   daemonGroup,
   uiCommand,
   scheduleGroup,
+  pipelineGroup,
   runsGroup,
   loopGroup,
   modelsGroup,

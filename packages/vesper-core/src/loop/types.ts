@@ -22,6 +22,12 @@ export interface LoopRoles {
   readonly authorCli?: string;
   readonly executeCli?: string;
   readonly criticCli?: string;
+  /**
+   * Model for the loop's MASTERMIND roles (AUTHOR + CRITIC) — the
+   * orchestrator-by-default pattern (specs/pipeline-editor.md): judgment runs on
+   * a frontier model while EXECUTE stays on the run/default routing.
+   */
+  readonly orchestratorModel?: string;
 }
 
 /** Hard bounds — a runaway self-prompting loop is the headline failure mode. */

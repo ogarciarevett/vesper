@@ -136,7 +136,7 @@ describe("benchmark-ingest", () => {
     });
     const { ctx } = makeCtx(["WRITE_STORAGE"]);
 
-    const err = await handler(ctx).catch((e: unknown) => e);
+    const err = await Promise.resolve(handler(ctx)).catch((e: unknown) => e);
     expect((err as CapabilityError).name).toBe("CapabilityError");
     expect(fetched).toBe(0);
   });

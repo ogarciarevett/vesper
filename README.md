@@ -26,6 +26,7 @@ one window — with a macOS menu-bar popover for a quick glance.
 <tr><td><b>Chat with Vesper &amp; watch it work</b></td><td>A native dark-glass desktop app: chat with Vesper and it picks the right pipeline, runs it, and streams every step in a live activity rail. A sectioned sidebar manages pipelines, channels, schedules, runtime, permissions, and more — plus a macOS menu-bar popover.</td></tr>
 <tr><td><b>Local-first &amp; private</b></td><td>SQLite storage + OS-keychain secrets, all on your machine. The UI binds to <code>127.0.0.1</code> only. No accounts, no cloud, no telemetry.</td></tr>
 <tr><td><b>Capability-sandboxed pipelines</b></td><td>Every agent declares what it may touch — invoke a CLI, read/write storage, touch files — and the host enforces it (deny-by-default) before any side effect.</td></tr>
+<tr><td><b>Build your own pipelines</b></td><td>A visual editor (and <code>vesper pipeline</code> CLI) composes pipelines out of markdown prompts, skills, and the built-ins: stages run in order, steps in a stage run in parallel, results pipe forward, and an orchestrator model re-authors each stage's prompts. Permissions are derived from the document and granted in plain language; an "Improve with AI" audit proposes prompt rewrites and per-step model routing from live benchmarks.</td></tr>
 <tr><td><b>Self-improving skills</b></td><td>The <code>skill-train</code> engine optimizes a skill's playbook against its own test set (SkillOpt-style: epochs, held-out validation, greedy accept) — using your CLI, never a provider key.</td></tr>
 <tr><td><b>A real scheduler</b></td><td>Cron, event, and manual triggers with run-count caps, backoff, and a dead-letter queue. Your agents can run on their own, unattended.</td></tr>
 </table>
@@ -163,6 +164,13 @@ this list never drifts. Run `vesper <command> --help` for details; see also [doc
 | `vesper schedule enable <id>` | Enable a scheduled task by id. |
 | `vesper schedule disable <id>` | Disable a scheduled task by id. |
 | `vesper runs list [--pipeline <name>] [--status <status>] [--limit <n>]` | List recorded pipeline runs (oldest first). |
+| `vesper pipeline list` | List your saved pipelines and the built-ins. |
+| `vesper pipeline show <id>` | Print one of your pipelines: document + what it can touch. |
+| `vesper pipeline save <file.json> [--id <id>] [--validate]` | Validate (and save, approval-gated) a pipeline document. |
+| `vesper pipeline run <id> [k=v ...] [--cli <name>]` | Run a pipeline now (yours or a built-in). |
+| `vesper pipeline improve <id> [--step <stepId>]` | Have Vesper audit the pipeline: prompt rewrites + model routing. |
+| `vesper pipeline rm <id>` | Archive one of your pipelines (recoverable; approval-gated). |
+| `vesper pipeline export <id> [file]` | Write a pipeline's document to JSON. |
 | `vesper skill train <name> [--cli <a>] [--optimizer-cli <a>] [--judge-cli <a>] [--epochs N] [--batchsize M] [--val-fraction F] [--dry-run] [--yes]` | Train a skill against its tasks.json via the skill-train pipeline. |
 | `vesper skill list [--skills-dir <dir>]` | List trainable skills (those with a tasks.json validation harness). |
 | `vesper skill diff <name> [--skills-dir <dir>]` | Diff the committed SKILL.md against the trained best candidate. |

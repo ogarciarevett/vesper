@@ -1,10 +1,9 @@
 # Vesper World — the visual UI
 
-A local view of your agents. Not a dashboard — a little living world where each pipeline is a
-character you can watch and run, and each live external agent (claude/codex/opencode/gemini/zeroclaw)
-visits carrying its own brand logo. The default look is **Cozy Cottage** (Hearth-Cottage): a warm
-fireside room with soft wool creatures. Built on the Bun/TypeScript/web stack (Canvas 2D), served by
-the daemon on `127.0.0.1`. No Rust/Tauri.
+A local, dark-glass companion app for the Vesper runtime: a chat home where you talk to Vesper
+and watch its work live, plus sections for pipelines, connections, schedules, skills, memory,
+voice, and diagnostics. Built on the Bun/TypeScript/web stack (vanilla DOM, no framework), served
+by the daemon on `127.0.0.1`. No Rust/Tauri.
 
 ## Run it
 
@@ -16,41 +15,44 @@ vesper ui             # opens a browser tab at http://127.0.0.1:4317
 `vesper ui` refuses if the daemon isn't running (it tells you to start it). Override the port with
 `VESPER_UI_PORT`.
 
-## What you see
+## The chat home
 
-- **One creature per pipeline**, generated deterministically from this machine (so it's *your*
-  world, the same every time). Busier agents are bigger; idle ones rest.
-- A **mood glow** from each agent's last run, plus a gentle, non-alarming "needs a look" state (a
-  soft `?` and a worded chip — never a red alarm).
-- **Click an agent** → a plain-language card with a portrait of who you tapped, what it last did, how
-  many times it has run, and a big **Run** button.
-- The world updates **live** as runs happen (manual or scheduled), over a WebSocket.
+Type a message — Vesper classifies it, answers from the live runtime state (streaming token by
+token), or orchestrates pipelines to do the work, authoring every sub-agent prompt itself. The
+activity rail on the right shows the run tree live: each completion's PROMPT/RESULT terminal
+blocks, provider model badges, and progress steps. The empty state offers a **pipeline launcher**:
+pick a pipeline card and the composer is pre-filled with a starter wish.
 
-## Themes (pluggable renderer)
+## Pipelines (the editor)
 
-How the world *looks* is a swappable plugin. Each theme draws the same underlying world; the brand
-logo of every agent is theme-agnostic, so whichever look you choose, you always see who's who.
+The Pipelines section lists **your saved pipelines** (Run / Edit / New) above the built-ins
+(Run + read-only template). The editor is a staged rail, deliberately not a node graph:
 
-- **Cozy Cottage** (`hearth`) — the warm fireside default.
-- **Neon City** (`cyberpunk`) — a dark, holographic control-room look (coming next).
+- **Stages run in order; the steps inside a stage run at the same time.** Each stage sees the
+  previous stage's results (`{{stages.<n>.<id>.result}}` piping).
+- Two step kinds only: a **prompt** (markdown, with optional skills, an optional command prefix,
+  and a per-step cli + model pick) and a **pipeline** (one of the orchestratable built-ins).
+- An **orchestrator** (on by default) re-authors each stage's prompts from the results so far,
+  running on the benchmark frontier pick unless pinned.
+- **Permissions are derived, never picked**: a live "what this pipeline can touch" panel updates
+  as you edit, and saving shows plain-language capability cards gated by the same single-use
+  approval code as template edits.
+- **Improve with AI** has Vesper read the whole document and propose prompt rewrites, per-step
+  cli+model routing (from the daily benchmark snapshot), and audit warnings — applied only when
+  you accept them. Each step card also has a scoped **AI suggestion** button.
+- **Cross-share** is present but disabled (coming soon).
 
-Pick a theme by `?theme=<id>` (remembered in the browser), by `vesper ui --theme <id>`, or as the
-machine default via `ui.theme` in `~/.vesper/config.json`. Unknown ids fall back to the default.
-`prefers-reduced-motion` is honored in every theme.
+Everything the editor does works headlessly first: `vesper pipeline
+list|show|save|run|improve|rm|export` drives the exact same daemon routes.
 
 ## How it maps to Vesper
 
-The scene is just a projection of the real runtime — pipelines are inhabitants, the `runs` table is
-their visible activity, schedules are their routines. Nothing is faked: it reads the same storage +
-scheduler the CLI does, and `Run` calls the same `Scheduler.run` as `vesper schedule run`.
-
-## Modules (extensibility)
-
-The UI has a small module seam (`UiModule`) so capabilities can plug into agents without changing
-the core — a planned **Voice** module will let an agent *speak* its result aloud on completion. The
-MVP ships the registry with zero modules enabled.
+Nothing is faked: the UI reads the same storage + scheduler the CLI does, Run calls the same
+`Scheduler.run` as `vesper schedule run`, and a saved pipeline becomes a real `custom:<id>` task
+with its own capability grant. Deleting archives the row — it is never destroyed.
 
 ## Privacy
 
-The server binds `127.0.0.1` only (single-user, local, no auth). Run summaries shown in the card
-honor `storage.redactRunSummaries`.
+The server binds `127.0.0.1` only (single-user, local, no auth). Privileged mutations (template
+edits, pipeline save/delete) additionally require a single-use approval code printed on the
+daemon's own terminal. Run summaries honor `storage.redactRunSummaries`.

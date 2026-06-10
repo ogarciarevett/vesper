@@ -18,6 +18,7 @@ function verdictReply(verdict: { done?: boolean; progress?: number; feedback?: s
 interface CompleteCall {
   readonly prompt: string;
   readonly cli: string | undefined;
+  readonly model: string | undefined;
 }
 
 interface FakeLoopCtx {
@@ -59,8 +60,8 @@ function makeCtx(criticReplies: readonly string[]): FakeLoopCtx {
     params: {},
     runId: "run-id",
     parentRunId: null,
-    async complete(prompt: string, opts?: { readonly cli?: string }) {
-      calls.push({ prompt, cli: opts?.cli });
+    async complete(prompt: string, opts?: { readonly cli?: string; readonly model?: string }) {
+      calls.push({ prompt, cli: opts?.cli, model: opts?.model });
       const role = (calls.length - 1) % 3;
       const iteration = Math.ceil(calls.length / 3);
       let text: string;
@@ -275,5 +276,21 @@ describe("runLoop fail-fast", () => {
 
     await expect(runLoop(ctx, spec({}, "   "))).rejects.toThrow(/goal/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("runLoop orchestrator model", () => {
+  test("AUTHOR + CRITIC carry roles.orchestratorModel; EXECUTE does not", async () => {
+    const { ctx, calls } = makeCtx([verdictReply({ done: true, progress: 100 })]);
+    await runLoop(ctx, {
+      objective: { goal: "g" },
+      roles: { orchestratorModel: "claude-opus" },
+      bounds: { maxIterations: 2 },
+    });
+    // One iteration: author, execute, critic.
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.model).toBe("claude-opus");
+    expect(calls[1]?.model).toBeUndefined();
+    expect(calls[2]?.model).toBe("claude-opus");
   });
 });

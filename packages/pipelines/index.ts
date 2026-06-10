@@ -61,6 +61,43 @@ import {
   softwareEngineerTaskInput,
 } from "./software-engineer/index.ts";
 
+// User-authored pipelines (specs/pipeline-editor.md): the doc model, the shared
+// interpreter, and the registration sweep the daemon + CLI build on.
+export {
+  deriveCapabilities,
+  interpolateResults,
+  isValidCustomPipelineId,
+  MAX_STAGES,
+  MAX_TASKS_PER_STAGE,
+  type ParsePipelineDocResult,
+  type PipelineDoc,
+  type PipelineDocStage,
+  type PipelineDocStep,
+  type PipelineStep,
+  type PromptStep,
+  parsePipelineDoc,
+} from "./custom/doc.ts";
+export {
+  CUSTOM_TASK_PREFIX,
+  type CustomPipelineDeps,
+  createCustomPipelineHandler,
+  customTaskId,
+  type RunSiblingFn,
+} from "./custom/handler.ts";
+export {
+  buildImprovePrompt,
+  type ImproveModelRow,
+  type ImproveProposal,
+  parseImproveProposal,
+  type StepSuggestion,
+} from "./custom/improve.ts";
+export {
+  type CustomPipelineSource,
+  type RegisterCustomPipelineResult,
+  registerCustomPipeline,
+  registerCustomPipelines,
+  unregisterCustomPipeline,
+} from "./custom/register.ts";
 export { ORCHESTRATION_CONTRACTS, type OrchestrationContract } from "./router/contracts.ts";
 export type { RuntimeContextSnapshot } from "./router/handler.ts";
 export {
@@ -278,6 +315,8 @@ export interface RegisterPipelinesOptions {
   readonly getRuntimeContext?: () => RuntimeContextSnapshot;
   /** Benchmark-driven model pick for plan tasks (see RouterHandlerOptions.pickModel). */
   readonly pickModel?: (difficulty: PlanDifficulty) => string | undefined;
+  /** Orchestrator-brain model for the router's own calls (see RouterHandlerOptions). */
+  readonly pickOrchestratorModel?: () => string | undefined;
   /** Sibling-run launcher for spawnsOwnChildren plan tasks (see RouterHandlerOptions.runSibling). */
   readonly runSibling?: (
     handlerId: string,
@@ -303,6 +342,7 @@ function resolveHandler(
     (options.getDefaultParams !== undefined ||
       options.getRuntimeContext !== undefined ||
       options.pickModel !== undefined ||
+      options.pickOrchestratorModel !== undefined ||
       options.runSibling !== undefined)
   ) {
     return makeRouterHandler({
@@ -313,6 +353,9 @@ function resolveHandler(
         ? { getRuntimeContext: options.getRuntimeContext }
         : {}),
       ...(options.pickModel !== undefined ? { pickModel: options.pickModel } : {}),
+      ...(options.pickOrchestratorModel !== undefined
+        ? { pickOrchestratorModel: options.pickOrchestratorModel }
+        : {}),
       ...(options.runSibling !== undefined ? { runSibling: options.runSibling } : {}),
     });
   }

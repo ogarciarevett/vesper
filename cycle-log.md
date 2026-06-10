@@ -1450,3 +1450,55 @@ FOLLOW-ONS: nested/dependency plan modes (shape is ready); native stream formats
 gemini/opencode; Codex-style Progress checklist + Environment header as a dedicated run view;
 in-UI run abort; orchestration contracts for future pipelines (career/secretary/trader);
 benchmark sources beyond DeepSWE when Omar trusts one; per-task budget caps in plans.
+
+## Pipeline editor (specs/pipeline-editor.md) — user-authored pipelines, CLI-first SHIPPED
+
+**What shipped.** Pipelines became user DATA: migration 013 (`custom_pipelines`, archive-only
+delete) + store CRUD; the fail-closed PipelineDoc v1 parser (stages sequential x tasks parallel;
+exactly TWO step kinds — `prompt` with skills/command/cli+model, `pipeline` bound to
+ORCHESTRATION_CONTRACTS; capabilities DERIVED, never picked); one shared interpreter handler
+registered per doc as `custom:<id>` (handler id = task id keeps per-task grants per-pipeline);
+orchestrator-by-default (mastermind re-authors each stage's prompts from prior results on the
+benchmark frontier pick); `/api/pipelines/custom*` routes (save/archive behind the approval code);
+`vesper pipeline list|show|save|run|improve|rm|export` as the FIRST consumer; "Improve with AI"
+(proposal-only whole-doc audit: prompt rewrites + cli+model routing from the benchmark snapshot +
+warnings); the rebuilt Pipelines section (staged-rail editor, markdown Write/Preview via a
+hand-rolled renderer, live capability summarizer + save-time plain-language cards, per-step AI
+suggestion, disabled Cross-share); the chat-home pipeline launcher; orchestratorModel threading in
+router/swe-lead/loop. 1410 tests / 0 fail; Biome clean; no new dependency.
+
+**Deltas & lessons.**
+- *Grants are keyed by handler_id, not task id.* The first interpreter design (one shared handler id
+  for every custom task) would have made every custom pipeline share ONE capability grant — the last
+  save would silently widen/narrow all others. Registering a closure PER pipeline (`custom:<id>` as
+  both handler id and task id) fixed it with zero scheduler changes. Pattern: when a new task family
+  joins the scheduler, check what the grant key actually is before sharing a handler id.
+- *CLI-first paid off immediately* (Omar's rule). The save/approval/run/improve loop was proven
+  headless (approval code read from the daemon log, piped into the CLI's stdin) BEFORE any UI
+  existed; the editor then consumed routes that were already known-good. The UI debug surface was
+  zero — every defect found was a core/route defect, caught by tests.
+- *The orchestrator pick came free.* Because slice A/D of orchestrator-home landed
+  `CompleteOptions.model` + `selectModel`, "orchestrator on the frontier pick, workers cheap" was
+  threading an option, not building a system. The live run showed the mastermind re-authoring on
+  `gpt` (benchmark pick) while the draft step ran on the default CLI.
+- *Anti-openclaw rule held*: the interpreter is ~300 lines and the ONLY execution code added; every
+  other behavior (guardrails, grants, io events, replay, run tree) was inherited by registering
+  through the existing scheduler. The doc schema is the contract; v1 refuses everything it does not
+  understand (fail-closed, every error reported).
+- *docs/ui.md had rotted* (still described the retired pixel-art world) — rewritten. Doc drift
+  check is worth adding to the SHIP checklist.
+
+**UI gate.** Impeccable audit + critique ran on the changed surfaces (browser-verified live):
+0 P0; the six P1s (unstyled description input, silent Back data loss, missing aria-labels,
+non-dialog save modal, two contrast failures, sub-900px sidebar overlap) were fixed and
+RE-VERIFIED 6/6 PASS with zero console errors. Cheap P2s landed too (New conversation button —
+the launcher was unreachable once history existed; plain-language-first launcher cards;
+aria-pressed skill chips; named list buttons). Remaining P2/P3 follow-ups: collapse the
+always-expanded skill chips behind a disclosure; tab semantics for Write/Preview; confirm/undo on
+stage removal; reachable explanation for the disabled Cross-share; replace side-stripe accents +
+hardcoded colors with tokens; focus restoration after rail re-render; heading structure;
+plain-language pairing for capability chips in the list view; touch-target sizes.
+
+**Follow-ups captured** (also in `.ai/context.md` Next): cron triggers for custom pipelines;
+version-history browse/restore; new step kinds (fs/fetch/notify) each with its own capability
+story; cross-share integration; branching/conditions; nested plan modes.

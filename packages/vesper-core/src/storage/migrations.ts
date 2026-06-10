@@ -222,4 +222,23 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_model_benchmarks_source ON model_benchmarks(source, fetched_at);
     `,
   },
+  // User-authored pipelines (specs/pipeline-editor.md): the editor's saved documents.
+  // `doc_json` is the versioned PipelineDoc; structural validation lives in the doc
+  // parser, not here. Delete is a status flip to 'archived' (Hard rule 4 — a row is
+  // never destroyed), and re-saving an archived id restores it.
+  {
+    id: "013_custom_pipelines",
+    sql: `
+      CREATE TABLE IF NOT EXISTS custom_pipelines (
+        id         TEXT    PRIMARY KEY NOT NULL,
+        ts_created INTEGER NOT NULL,
+        ts_updated INTEGER NOT NULL,
+        revision   INTEGER NOT NULL,
+        status     TEXT    NOT NULL CHECK (status IN ('active','archived')),
+        name       TEXT    NOT NULL,
+        doc_json   TEXT    NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_custom_pipelines_status ON custom_pipelines(status, ts_updated);
+    `,
+  },
 ];

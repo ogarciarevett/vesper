@@ -34,8 +34,8 @@ const RAIL_CSS = `
   .amodel { font-size: 11px; color: var(--ink-soft); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .aio { font-size: 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(0,0,0,0.25); }
   .aio summary { cursor: pointer; padding: 5px 9px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); list-style: none; display: flex; gap: 8px; align-items: baseline; }
-  .aio summary::before { content: "\25B8"; color: var(--ink-faint); }
-  .aio[open] summary::before { content: "\25BE"; }
+  .aio summary::before { content: "\\25B8"; color: var(--ink-faint); }
+  .aio[open] summary::before { content: "\\25BE"; }
   .aio.err summary { color: var(--danger); }
   .aio pre { margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; border-top: 1px solid var(--border); }
   .aio.prompt pre { color: var(--ink-soft); }

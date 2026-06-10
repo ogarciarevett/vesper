@@ -12,8 +12,11 @@ import type {
   ChatTurnRole,
   ChatTurnRow,
   CreateSessionInput,
+  CustomPipelineRow,
+  CustomPipelineStatus,
   EventRow,
   FinishRunInput,
+  ListCustomPipelinesOptions,
   ListEventsOptions,
   ListRagVectorsOptions,
   ListRunEventsOptions,
@@ -35,6 +38,7 @@ import type {
   StartRunInput,
   Store,
   TaskGrant,
+  UpsertCustomPipelineInput,
   UpsertTaskGrantInput,
   UpsertTemplateInput,
 } from "./types.ts";
@@ -132,6 +136,17 @@ interface RawPipelineTemplateRow {
   prompt: unknown;
   default_params: unknown;
   updated_at: unknown;
+}
+
+/** Raw shape returned for the `custom_pipelines` table. */
+interface RawCustomPipelineRow {
+  id: unknown;
+  ts_created: unknown;
+  ts_updated: unknown;
+  revision: unknown;
+  status: unknown;
+  name: unknown;
+  doc_json: unknown;
 }
 
 /** Raw shape returned for the `rag_documents` vector-scan projection. */
@@ -374,6 +389,24 @@ function toPipelineTemplateRow(raw: RawPipelineTemplateRow): PipelineTemplateRow
     prompt: assertString(raw.prompt, "prompt"),
     defaultParams: parsePayload(raw.default_params, "default_params"),
     updatedAt: assertNumber(raw.updated_at, "updated_at"),
+  };
+}
+
+/** Narrow a raw status column to {@link CustomPipelineStatus} (the CHECK constraint's domain). */
+function assertCustomPipelineStatus(value: unknown): CustomPipelineStatus {
+  if (value === "active" || value === "archived") return value;
+  throw new StorageError("query_failed", `unexpected custom pipeline status "${String(value)}"`);
+}
+
+function toCustomPipelineRow(raw: RawCustomPipelineRow): CustomPipelineRow {
+  return {
+    id: assertString(raw.id, "id"),
+    tsCreated: assertNumber(raw.ts_created, "ts_created"),
+    tsUpdated: assertNumber(raw.ts_updated, "ts_updated"),
+    revision: assertNumber(raw.revision, "revision"),
+    status: assertCustomPipelineStatus(raw.status),
+    name: assertString(raw.name, "name"),
+    doc: parsePayload(raw.doc_json, "doc_json"),
   };
 }
 
@@ -1005,6 +1038,74 @@ export class SqliteStore implements Store {
         .run(input.handlerId, input.prompt, defaultParamsJson, updatedAt);
     } catch (cause) {
       throw new StorageError("query_failed", "failed to upsert pipeline template", { cause });
+    }
+  }
+
+  upsertCustomPipeline(input: UpsertCustomPipelineInput): void {
+    const now = Date.now();
+    const docJson = JSON.stringify(input.doc);
+    try {
+      this.#db
+        .query<void, [string, number, number, string, string]>(
+          `INSERT INTO custom_pipelines (id, ts_created, ts_updated, revision, status, name, doc_json)
+           VALUES (?, ?, ?, 1, 'active', ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             ts_updated = excluded.ts_updated,
+             revision   = custom_pipelines.revision + 1,
+             status     = 'active',
+             name       = excluded.name,
+             doc_json   = excluded.doc_json`,
+        )
+        .run(input.id, now, now, input.name, docJson);
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to upsert custom pipeline", { cause });
+    }
+  }
+
+  getCustomPipeline(id: string): CustomPipelineRow | null {
+    try {
+      const row = this.#db
+        .query<RawCustomPipelineRow, [string]>(
+          `SELECT id, ts_created, ts_updated, revision, status, name, doc_json
+           FROM custom_pipelines WHERE id = ?`,
+        )
+        .get(id);
+      return row !== null ? toCustomPipelineRow(row) : null;
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to read custom pipeline", { cause });
+    }
+  }
+
+  listCustomPipelines(options: ListCustomPipelinesOptions = {}): CustomPipelineRow[] {
+    try {
+      const where = options.status !== undefined ? " WHERE status = ?" : "";
+      const params: string[] = options.status !== undefined ? [options.status] : [];
+      // `rowid DESC` breaks ts ties by insertion order so two saves in the same
+      // millisecond still list newest-updated first deterministically.
+      const rows = this.#db
+        .query<RawCustomPipelineRow, string[]>(
+          `SELECT id, ts_created, ts_updated, revision, status, name, doc_json
+           FROM custom_pipelines${where} ORDER BY ts_updated DESC, rowid DESC`,
+        )
+        .all(...params);
+      return rows.map(toCustomPipelineRow);
+    } catch (cause) {
+      if (cause instanceof StorageError) throw cause;
+      throw new StorageError("query_failed", "failed to list custom pipelines", { cause });
+    }
+  }
+
+  archiveCustomPipeline(id: string): boolean {
+    try {
+      const result = this.#db
+        .query<void, [number, string]>(
+          "UPDATE custom_pipelines SET status = 'archived', ts_updated = ? WHERE id = ?",
+        )
+        .run(Date.now(), id);
+      return Number(result.changes) > 0;
+    } catch (cause) {
+      throw new StorageError("query_failed", "failed to archive custom pipeline", { cause });
     }
   }
 

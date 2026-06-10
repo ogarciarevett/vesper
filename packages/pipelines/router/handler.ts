@@ -215,6 +215,14 @@ export interface RouterHandlerOptions {
    */
   readonly pickModel?: (difficulty: PlanDifficulty) => string | undefined;
   /**
+   * Model for the router's OWN brain calls (classify / answer / plan author /
+   * step revision) — the orchestrator-by-default pattern (specs/pipeline-editor.md).
+   * A `params.orchestratorModel` on the run wins; host-injected resolution is
+   * template default > benchmark frontier pick > config default. Absent -> the
+   * configured CLI default (prior behavior).
+   */
+  readonly pickOrchestratorModel?: () => string | undefined;
+  /**
    * Launch a `spawnsOwnChildren` plan task as a sibling TOP-LEVEL run (display
    * lineage via parentRunId; the run keeps its task's own declared capabilities
    * and may spawn its own children — the depth-1 answer). Host-injected
@@ -257,6 +265,15 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
 
   return async (ctx) => {
     const message = readMessage(ctx.params);
+    // The router IS the orchestrator — its own brain calls run on the
+    // orchestrator model (run param > host pick > none = configured default).
+    const orchestratorModel =
+      (typeof ctx.params.orchestratorModel === "string" &&
+      ctx.params.orchestratorModel.trim().length > 0
+        ? ctx.params.orchestratorModel.trim()
+        : undefined) ?? options.pickOrchestratorModel?.();
+    const brainOpts =
+      orchestratorModel !== undefined ? { model: orchestratorModel } : ({} as const);
 
     if (message.trim().length === 0) {
       ctx.emitProgress({ kind: "step", message: "empty message — asking for clarification" });
@@ -268,7 +285,7 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
     }
 
     ctx.emitProgress({ kind: "step", message: "classifying request" });
-    const result = await ctx.complete(buildClassifyPrompt(message, labels));
+    const result = await ctx.complete(buildClassifyPrompt(message, labels), { ...brainOpts });
     const token =
       result.text
         .trim()
@@ -302,6 +319,7 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
       // 30s process default (slice A made the override reach the adapter).
       const reply = await ctx.complete(buildAnswerPrompt(message, snapshot), {
         timeoutMs: 120_000,
+        ...brainOpts,
         onText: (delta) => {
           pending += delta;
           flush(false);
@@ -323,6 +341,7 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
       ctx.emitProgress({ kind: "step", message: "planning the work" });
       const planReply = await ctx.complete(buildPlanPrompt(message, contracts), {
         timeoutMs: 120_000,
+        ...brainOpts,
       });
       const plan = parseOrchestrationPlan(planReply.text, contracts);
       if (plan === null) {
@@ -421,7 +440,10 @@ export function makeRouterHandler(options: RouterHandlerOptions = {}): TaskHandl
             message: `re-authoring step ${index + 1} prompts from prior results`,
           });
           const revisionReply = await ctx
-            .complete(buildStepRevisionPrompt(message, tasks, prior), { timeoutMs: 120_000 })
+            .complete(buildStepRevisionPrompt(message, tasks, prior), {
+              timeoutMs: 120_000,
+              ...brainOpts,
+            })
             .catch(() => null);
           const revised = revisionReply === null ? null : parseStepRevision(revisionReply.text);
           if (revised !== null) {

@@ -61,8 +61,14 @@ export async function runLoop(
   const now = deps.now ?? Date.now;
   const startedAt = now();
 
-  const completeFor = async (prompt: string, cli: string | undefined) =>
-    ctx.complete(prompt, cli !== undefined ? { cli } : undefined);
+  const completeFor = async (prompt: string, cli: string | undefined, model?: string) =>
+    ctx.complete(prompt, {
+      ...(cli !== undefined ? { cli } : {}),
+      ...(model !== undefined ? { model } : {}),
+    });
+  // The mastermind roles (AUTHOR + CRITIC) run on the orchestrator model when one
+  // is set; EXECUTE keeps the run/default routing (the worker is the cheap half).
+  const orchestratorModel = spec.roles?.orchestratorModel;
 
   const iterations: LoopIteration[] = [];
   let bestProgress = 0;
@@ -75,6 +81,7 @@ export async function runLoop(
     const authored = await completeFor(
       authorPrompt(spec.objective, iterations),
       spec.roles?.authorCli,
+      orchestratorModel,
     );
     const authoredPrompt = authored.text.trim();
     ctx.emitProgress({
@@ -100,6 +107,7 @@ export async function runLoop(
     const judged = await completeFor(
       criticPrompt(spec.objective, authoredPrompt, executionSummary),
       spec.roles?.criticCli,
+      orchestratorModel,
     );
     const verdict = parseVerdict(judged.text, bestProgress);
     ctx.emitProgress({

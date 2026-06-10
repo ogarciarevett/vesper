@@ -17,9 +17,12 @@ import {
 } from "@vesper/core";
 import {
   ChangeDecisionCoordinator,
+  type CustomPipelineDeps,
   grantedCapabilities,
+  ORCHESTRATION_CONTRACTS,
   PIPELINES,
   pipelineSummaries,
+  registerCustomPipelines,
   registerPipelines,
 } from "@vesper/pipelines";
 import { presenceDetectorFor, startUiServer } from "@vesper/ui";
@@ -31,6 +34,7 @@ import { buildChannelRegistry, makeChannelSink } from "../connections-wiring.ts"
 import { removePidFile, resolveDaemonState, writePidFile } from "../daemon-lifecycle.ts";
 import type { Command } from "../dispatch.ts";
 import { makeMemoryProvider } from "../embeddings.ts";
+import { improveModelRows, makeCustomPipelinesSurface } from "../make-custom-pipelines.ts";
 import { makeNotifyFn } from "../make-notify.ts";
 import { makeSoftwareEngineerSurface } from "../make-software-engineer.ts";
 import { loadOptionalChannels } from "../optional-channels.ts";
@@ -118,6 +122,23 @@ export const daemonRunCommand: Command = {
           },
           difficulty,
         )?.canonicalId,
+      // Orchestrator-by-default: the router's own brain calls run on the
+      // template's pinned model, else the benchmark frontier pick, else the
+      // configured default model (undefined = the CLI's own default).
+      pickOrchestratorModel: () => {
+        const pinned = uiStore.getTemplate("router")?.defaultParams?.orchestratorModel;
+        if (typeof pinned === "string" && pinned.trim().length > 0) return pinned.trim();
+        return (
+          selectModel(
+            uiStore.getModelBenchmarks(BENCHMARK_SOURCE),
+            {
+              ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
+              catalog: effectiveCatalog(config),
+            },
+            "hard",
+          )?.canonicalId ?? config.models?.default
+        );
+      },
       // Launch spawnsOwnChildren plan tasks (software-engineer) as sibling
       // top-level runs grouped under the router run (display lineage only).
       runSibling: async (handlerId, options) =>
@@ -141,6 +162,57 @@ export const daemonRunCommand: Command = {
           enabled: t.enabled,
         })),
       }),
+    });
+
+    // User-authored pipelines (specs/pipeline-editor.md): build the shared
+    // interpreter deps, register every saved active doc as a `custom:<id>` manual
+    // task, and expose the validate/save/archive/improve surface to the UI routes
+    // (and through them to `vesper pipeline` — one code path, structural parity).
+    // The skill library + memory provider are constructed below; the deps
+    // late-bind them through getters read only at run time.
+    let skillLibraryRef: SkillLibrary | undefined;
+    let memoryRef: Awaited<ReturnType<typeof makeMemoryProvider>> | undefined;
+    const modelsConfigForPicks = {
+      ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
+      catalog: effectiveCatalog(config),
+    };
+    const customDeps: CustomPipelineDeps = {
+      getDoc: (id) => {
+        const row = uiStore.getCustomPipeline(id);
+        return row !== null && row.status === "active" ? row.doc : null;
+      },
+      contracts: ORCHESTRATION_CONTRACTS,
+      getSkillBody: async (name) => (await skillLibraryRef?.get(name))?.body ?? null,
+      getDefaultParams: (handlerId) => uiStore.getTemplate(handlerId)?.defaultParams ?? {},
+      pickOrchestratorModel: () =>
+        selectModel(uiStore.getModelBenchmarks(BENCHMARK_SOURCE), modelsConfigForPicks, "hard")
+          ?.canonicalId ?? config.models?.default,
+      runSibling: async (handlerId, options) =>
+        scheduler.run(handlerId, {
+          params: options.params,
+          parentRunId: options.parentRunId,
+          ...(options.model !== undefined ? { model: options.model } : {}),
+        }),
+      searchMemory: async (query, k) =>
+        (await memoryRef?.search(query, k).catch(() => []))?.map((h) => h.text) ?? [],
+    };
+    const customResults = registerCustomPipelines(
+      scheduler,
+      registry,
+      uiStore.listCustomPipelines({ status: "active" }).map((r) => ({ id: r.id, doc: r.doc })),
+      customDeps,
+    );
+    for (const result of customResults.filter((r) => !r.ok)) {
+      line(yellow(`  custom pipeline "${result.id}" skipped: ${result.errors.join("; ")}`));
+    }
+    const customPipelines = makeCustomPipelinesSurface({
+      store: uiStore,
+      scheduler,
+      registry,
+      deps: customDeps,
+      complete,
+      modelRows: () =>
+        improveModelRows(effectiveCatalog(config), uiStore.getModelBenchmarks(BENCHMARK_SOURCE)),
     });
 
     // Host the Vesper World UI in-process (one runtime): the UI reads this
@@ -200,9 +272,11 @@ export const daemonRunCommand: Command = {
     // repo's committed artifacts) + the per-developer skill-train state; absent dirs ->
     // an empty list (e.g. a daemon launched outside the repo).
     const skillLibrary = new SkillLibrary({ skillsDir: ".ai/skills", trainDir: skillTrainDir() });
+    skillLibraryRef = skillLibrary;
     // Semantic memory (RAG): status + search backed by the configured bring-your-own
     // embedder. With none configured it degrades to available:false (no crash, no probe).
     const memory = await makeMemoryProvider(config, vault, uiStore);
+    memoryRef = memory;
     const ui = await startUiServer({
       scheduler,
       store: uiStore,
@@ -236,6 +310,7 @@ export const daemonRunCommand: Command = {
       },
       skills: skillLibrary,
       memory,
+      customPipelines,
       modelsCatalog: {
         ...(config.models?.default !== undefined ? { default: config.models.default } : {}),
         catalog: effectiveCatalog(config),

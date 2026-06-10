@@ -79,7 +79,7 @@ export class GitError extends Error {
 export function makeGitRunner(run: ProcessRunner): GitRunner {
   return async (cwd, args, opts) => {
     const result = await run("git", ["-C", cwd, ...args], {
-      timeoutMs: opts?.timeoutMs,
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   };

@@ -99,6 +99,12 @@ function approvalTimeoutMs(ctx: PipelineContext, deps: CycleDeps): number {
 
 export async function runCycle(ctx: PipelineContext, deps: CycleDeps): Promise<CycleResult> {
   const gitTimeoutMs = deps.gitTimeoutMs;
+  // The lead's OWN thinking steps (SPEC/PLAN/REVIEW) run on the orchestrator
+  // model when one is set (specs/pipeline-editor.md); the BUILD fan-out keeps
+  // its per-task routing — the workers are the cheap half.
+  const orchestratorModel = asString(ctx.params, "orchestratorModel");
+  const leadComplete = (prompt: string) =>
+    ctx.complete(prompt, orchestratorModel !== undefined ? { model: orchestratorModel } : {});
   const audit = (step: string, status: string, extra?: Record<string, unknown>): void => {
     ctx.emitProgress({ kind: "step", message: `${step}: ${status}` });
     deps.appendEvent({
@@ -135,7 +141,7 @@ export async function runCycle(ctx: PipelineContext, deps: CycleDeps): Promise<C
   audit("worktree", "created", { worktree: wt.path, branch: wt.branch });
 
   // --- SPEC ----------------------------------------------------------------
-  const specReply = await ctx.complete(specPrompt(seed));
+  const specReply = await leadComplete(specPrompt(seed));
   const specParsed = parseSpec(specReply.text);
   if (!specParsed.ok) {
     await safeRemove(deps, wt);
@@ -146,7 +152,7 @@ export async function runCycle(ctx: PipelineContext, deps: CycleDeps): Promise<C
   audit("spec", "ok", { title: spec.title });
 
   // --- PLAN ----------------------------------------------------------------
-  const planReply = await ctx.complete(planPrompt(spec));
+  const planReply = await leadComplete(planPrompt(spec));
   const planParsed = parsePlan(planReply.text);
   if (!planParsed.ok) {
     await safeRemove(deps, wt);
@@ -212,7 +218,7 @@ export async function runCycle(ctx: PipelineContext, deps: CycleDeps): Promise<C
   });
 
   // --- REVIEW (advisory) ---------------------------------------------------
-  const reviewReply = await ctx.complete(reviewPrompt(spec, rawDiff));
+  const reviewReply = await leadComplete(reviewPrompt(spec, rawDiff));
   audit("review", "ok", { report: reviewReply.text.slice(0, 2000) });
 
   // --- human gate ----------------------------------------------------------

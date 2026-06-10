@@ -16,6 +16,8 @@ const CHAT_CSS = `
   .chat-top h1 { font-size: 17px; font-weight: 700; margin: 0; }
   .chat-top .chat-mark { width: 18px; height: 18px; color: var(--accent); display: grid; place-items: center; }
   .chat-top .chat-mark svg { width: 18px; height: 18px; }
+  .chat-top .chat-new { margin-left: auto; font: inherit; font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); cursor: pointer; }
+  .chat-top .chat-new:hover { border-color: var(--accent); }
   .chat-thread { flex: 1; overflow-y: auto; padding: 22px 24px; display: flex; flex-direction: column; gap: 12px; }
   .chat-empty { margin: auto; text-align: center; color: var(--ink-soft); max-width: 440px; }
   .chat-empty .ce-mark { color: var(--accent); width: 38px; height: 38px; margin: 0 auto 12px; }
@@ -37,6 +39,11 @@ const CHAT_CSS = `
   .chat-send:disabled { opacity: 0.5; cursor: default; }
   .chat-rail { width: 336px; flex: none; border-left: 1px solid var(--border); background: var(--sidebar-bg); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); padding: 18px 16px; }
   @media (max-width: 920px) { .chat-rail { display: none; } }
+  .chat-suggest { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .chat-suggest button { font: inherit; font-size: 13px; padding: 9px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); cursor: pointer; text-align: left; max-width: 230px; }
+  .chat-suggest button:hover { border-color: var(--accent); }
+  .chat-suggest button .cs-id { font-weight: 700; display: block; }
+  .chat-suggest button .cs-sub { color: var(--ink-soft); font-size: 11.5px; display: block; margin-top: 2px; }
 `;
 
 const MARK =
@@ -76,8 +83,9 @@ class ChatSection {
     this.#thread.setAttribute("role", "log");
     this.#thread.setAttribute("aria-live", "polite");
     this.#empty = div("chat-empty");
-    this.#empty.innerHTML = `<div class="ce-mark">${MARK}</div><h2>What would you like done?</h2><p>Type a message. Vesper picks the right helper, sets it to work, and you can watch it happen on the right.</p>`;
+    this.#empty.innerHTML = `<div class="ce-mark">${MARK}</div><h2>What would you like done?</h2><p>Type a message — or pick a pipeline to start. Vesper sets it to work and you can watch it happen on the right.</p>`;
     this.#thread.append(this.#empty);
+    void this.#renderLauncher();
 
     this.#text = document.createElement("textarea");
     this.#text.rows = 1;
@@ -94,6 +102,12 @@ class ChatSection {
 
     const top = div("chat-top");
     top.innerHTML = `<span class="chat-mark">${MARK}</span><h1>Chat with Vesper</h1>`;
+    const fresh = document.createElement("button");
+    fresh.type = "button";
+    fresh.className = "chat-new";
+    fresh.textContent = "New conversation";
+    fresh.addEventListener("click", () => this.#newConversation());
+    top.append(fresh);
 
     const main = div("chat-main");
     main.append(top, this.#thread, form);
@@ -131,6 +145,80 @@ class ChatSection {
   #autosize(): void {
     this.#text.style.height = "auto";
     this.#text.style.height = `${this.#text.scrollHeight}px`;
+  }
+
+  /** Start a fresh thread: the empty state (and its pipeline launcher) comes back. */
+  #newConversation(): void {
+    if (this.#sessionId !== null) {
+      this.#ctx.wsSend({ type: "unsubscribe", sessionId: this.#sessionId });
+    }
+    this.#sessionId = null;
+    this.#lastTs = 0;
+    this.#seen.clear();
+    this.#clearStream();
+    this.#thread.replaceChildren(this.#empty);
+    this.#empty.style.display = "";
+    this.#text.focus();
+  }
+
+  /**
+   * The empty-state pipeline launcher (specs/pipeline-editor.md, home fix): every
+   * runnable pipeline as a card. Clicking pre-fills the composer with a starter
+   * wish — the router (the orchestrator) takes it from there, so there is no
+   * second run path and no params dead-end for a brand-new user.
+   */
+  async #renderLauncher(): Promise<void> {
+    interface Suggestion {
+      readonly id: string;
+      readonly label: string;
+      readonly sub: string;
+      readonly starter: string;
+    }
+    const suggestions: Suggestion[] = [];
+    try {
+      const custom =
+        await this.#ctx.api.getJson<Array<{ id: string; name: string }>>("/api/pipelines/custom");
+      for (const row of custom) {
+        suggestions.push({
+          id: row.id,
+          label: row.name,
+          sub: "your pipeline",
+          starter: `Run my "${row.name}" pipeline`,
+        });
+      }
+    } catch {
+      // The launcher is a nicety — the composer still works without it.
+    }
+    const builtinStarters: ReadonlyArray<readonly [string, string, string]> = [
+      ["selftest", "Check that Vesper is working", "Run a self-test to check everything works"],
+      ["loop", "Work toward a goal by itself", "Use the loop pipeline to "],
+      [
+        "software-engineer",
+        "Code a change in one of my repos",
+        "Use the software-engineer pipeline on the repo at ",
+      ],
+      ["skill-train", "Train one of my skills", "Train the skill named "],
+    ];
+    for (const [id, label, starter] of builtinStarters) {
+      suggestions.push({ id, label, sub: id, starter });
+    }
+
+    const wrap = div("chat-suggest");
+    for (const suggestion of suggestions.slice(0, 8)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.innerHTML = `<span class="cs-id"></span><span class="cs-sub"></span>`;
+      (btn.firstChild as HTMLElement).textContent = suggestion.label;
+      (btn.lastChild as HTMLElement).textContent = suggestion.sub;
+      btn.addEventListener("click", () => {
+        this.#text.value = suggestion.starter;
+        this.#autosize();
+        this.#text.focus();
+        this.#text.setSelectionRange(this.#text.value.length, this.#text.value.length);
+      });
+      wrap.append(btn);
+    }
+    this.#empty.append(wrap);
   }
 
   #onLive(msg: LiveMessage): void {

@@ -65,10 +65,12 @@ export function buildLoopSpec(params: Readonly<Record<string, unknown>>): LoopSp
   const authorCli = strParam(params, "authorCli");
   const executeCli = strParam(params, "executeCli");
   const criticCli = strParam(params, "criticCli");
+  const orchestratorModel = strParam(params, "orchestratorModel");
   const roles: LoopRoles = {
     ...(authorCli !== undefined ? { authorCli } : {}),
     ...(executeCli !== undefined ? { executeCli } : {}),
     ...(criticCli !== undefined ? { criticCli } : {}),
+    ...(orchestratorModel !== undefined ? { orchestratorModel } : {}),
   };
 
   return {

@@ -320,6 +320,41 @@ export interface ModelBenchmarkRow extends ModelBenchmarkInput {
   readonly fetchedAt: number;
 }
 
+/** Lifecycle of a {@link CustomPipelineRow} — archive is the only "delete" (Hard rule 4). */
+export type CustomPipelineStatus = "active" | "archived";
+
+/**
+ * A row from the `custom_pipelines` table — one user-authored pipeline document
+ * (specs/pipeline-editor.md). The store round-trips `doc` opaquely; structural
+ * validation is the PipelineDoc parser's job.
+ */
+export interface CustomPipelineRow {
+  readonly id: string;
+  /** Unix timestamp in milliseconds the row was first saved. */
+  readonly tsCreated: number;
+  /** Unix timestamp in milliseconds of the last save/archive. */
+  readonly tsUpdated: number;
+  /** Save counter, starting at 1; bumped on every upsert. */
+  readonly revision: number;
+  readonly status: CustomPipelineStatus;
+  readonly name: string;
+  /** The deserialized pipeline document. */
+  readonly doc: Record<string, unknown>;
+}
+
+/** Input for {@link Store.upsertCustomPipeline}. */
+export interface UpsertCustomPipelineInput {
+  readonly id: string;
+  readonly name: string;
+  /** The pipeline document; serialized to JSON on write. */
+  readonly doc: Record<string, unknown>;
+}
+
+/** Optional filters for {@link Store.listCustomPipelines}. */
+export interface ListCustomPipelinesOptions {
+  readonly status?: CustomPipelineStatus;
+}
+
 /** Scope for {@link Store.pruneRagDocuments} — at least one field should be set. */
 export interface PruneRagDocumentsOptions {
   readonly embedderId?: string;
@@ -437,6 +472,25 @@ export interface Store {
 
   /** Insert or update a pipeline's editable template (prompt + default params). */
   upsertTemplate(input: UpsertTemplateInput): void;
+
+  /**
+   * Insert or update a user-authored pipeline document. Inserts start at
+   * `revision` 1; updates bump the revision + `tsUpdated` and force the status
+   * back to `active` (saving an archived pipeline restores it).
+   */
+  upsertCustomPipeline(input: UpsertCustomPipelineInput): void;
+
+  /** Return one custom pipeline by id, or null when it does not exist. */
+  getCustomPipeline(id: string): CustomPipelineRow | null;
+
+  /** List custom pipelines newest-updated first, optionally filtered by status. */
+  listCustomPipelines(options?: ListCustomPipelinesOptions): CustomPipelineRow[];
+
+  /**
+   * Flip a custom pipeline to `archived` (the only delete — Hard rule 4) and bump
+   * `tsUpdated`. Returns false when the id does not exist. The row is never removed.
+   */
+  archiveCustomPipeline(id: string): boolean;
 
   /**
    * Number of indexed RAG documents (`rag_documents` rows). 0 until the embedding model
